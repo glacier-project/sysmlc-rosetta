@@ -150,7 +150,7 @@ class RosettaBuilder:
             preamble.append("from types import SimpleNamespace")
         preamble += _enum_classes(self._needs)
         preamble += _payload_classes(self._needs)
-        return LfProgram(reactor=reactor, preamble=tuple(preamble))
+        return LfProgram(reactors=(reactor,), preamble=tuple(preamble))
 
     # -- attributes -> parameters and state variables --
 

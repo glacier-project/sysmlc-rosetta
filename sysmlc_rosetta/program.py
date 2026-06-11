@@ -35,6 +35,22 @@ class LogicalAction:
 
 
 @dataclass(frozen=True)
+class Instantiation:
+    """A contained reactor instance: ``c_x = new Machine_x()``."""
+
+    name: str
+    reactor: str
+
+
+@dataclass(frozen=True)
+class Connection:
+    """One connection statement; endpoints are rendered LF port references."""
+
+    source: str
+    target: str
+
+
+@dataclass(frozen=True)
 class Reaction:
     """One LF reaction: trigger names, effect names, Python body lines.
 
@@ -50,18 +66,29 @@ class Reaction:
 
 @dataclass(frozen=True)
 class Mode:
-    """One LF mode: the translation of a SysML leaf state."""
+    """One LF mode: the translation of a SysML state.
+
+    A leaf state's mode carries only reactions/timers/actions; a composite
+    (or parallel) state's mode additionally instantiates the child reactor(s)
+    and connects forwarded inputs down.
+    """
 
     name: str
     initial: bool = False
     timers: tuple[Timer, ...] = ()
     actions: tuple[LogicalAction, ...] = ()
+    instantiations: tuple[Instantiation, ...] = ()
+    connections: tuple[Connection, ...] = ()
     reactions: tuple[Reaction, ...] = ()
 
 
 @dataclass(frozen=True)
 class Reactor:
-    """The machine reactor: a flat SysML state definition, translated."""
+    """One reactor class: the machine itself or a composite-scope child.
+
+    Reactor-level ``instantiations``/``connections`` are used by a parallel
+    root machine, whose region instances live outside any mode.
+    """
 
     name: str
     parameters: tuple[Parameter, ...] = ()
@@ -69,17 +96,26 @@ class Reactor:
     outputs: tuple[str, ...] = ()
     state_vars: tuple[StateVar, ...] = ()
     actions: tuple[LogicalAction, ...] = ()
+    instantiations: tuple[Instantiation, ...] = ()
+    connections: tuple[Connection, ...] = ()
     reactions: tuple[Reaction, ...] = ()
     modes: tuple[Mode, ...] = ()
 
 
 @dataclass(frozen=True)
 class LfProgram:
-    """A Lingua Franca program: one machine reactor plus a trivial main.
+    """A Lingua Franca program: reactor classes plus a trivial main.
 
+    ``reactors`` holds child reactor classes first and the machine reactor
+    last (lfc wants definitions before use); ``main`` instantiates the last.
     ``preamble`` holds Python preamble lines (imports/helpers); empty means
     no preamble block is emitted.
     """
 
-    reactor: Reactor
+    reactors: tuple[Reactor, ...]
     preamble: tuple[str, ...] = ()
+
+    @property
+    def reactor(self) -> Reactor:
+        """The machine reactor (always last; children precede it)."""
+        return self.reactors[-1]

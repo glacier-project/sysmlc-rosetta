@@ -1,6 +1,8 @@
 import pytest
 
 from sysmlc.backends.rosetta.program import (
+    Connection,
+    Instantiation,
     LfProgram,
     LogicalAction,
     Mode,
@@ -11,6 +13,11 @@ from sysmlc.backends.rosetta.program import (
     Timer,
 )
 from sysmlc.backends.rosetta.serialize import render_duration, to_lf
+
+
+def make_reactors(**kwargs) -> tuple[Reactor, ...]:
+    """Wrap a single machine reactor for ``LfProgram.reactors``."""
+    return (Reactor(**kwargs),)
 
 
 @pytest.mark.parametrize(
@@ -31,7 +38,7 @@ def test_render_duration_picks_largest_exact_unit(seconds, expected) -> None:
 
 def test_to_lf_renders_full_program():
     program = LfProgram(
-        reactor=Reactor(
+        reactors=make_reactors(
             name="Machine",
             inputs=("Tick",),
             outputs=("current_state",),
@@ -114,7 +121,7 @@ def test_to_lf_renders_full_program():
 
 def test_reactor_parameters_render_in_signature() -> None:
     program = LfProgram(
-        reactor=Reactor(
+        reactors=make_reactors(
             name="M",
             parameters=(
                 Parameter("setpoint", "21.0"),
@@ -131,3 +138,61 @@ def test_reactor_parameters_render_in_signature() -> None:
     )
     text = to_lf(program)
     assert "reactor M(setpoint = {= 21.0 =}, hysteresis = {= 0.5 =}) {" in text
+
+
+def _announce(state: str) -> Reaction:
+    return Reaction(
+        ("reset", "startup"),
+        ("current_state",),
+        (f'current_state.set("{state}")',),
+    )
+
+
+def test_multiple_reactors_render_in_order_with_main_last() -> None:
+    child = Reactor(
+        name="Machine_running",
+        outputs=("completed", "current_state"),
+        modes=(Mode(name="warming", initial=True, reactions=(_announce("warming"),)),),
+    )
+    machine = Reactor(
+        name="Machine",
+        inputs=("Tick",),
+        outputs=("current_state",),
+        modes=(
+            Mode(name="idle", initial=True, reactions=(_announce("idle"),)),
+            Mode(
+                name="running",
+                instantiations=(Instantiation("c_running", "Machine_running"),),
+                connections=(Connection("Tick", "c_running.Tick"),),
+                reactions=(_announce("running"),),
+            ),
+        ),
+    )
+    text = to_lf(LfProgram(reactors=(child, machine)))
+    child_pos = text.index("reactor Machine_running {")
+    machine_pos = text.index("reactor Machine {")
+    main_pos = text.index("main reactor {")
+    assert child_pos < machine_pos < main_pos
+    assert "m = new Machine()" in text
+    assert "    c_running = new Machine_running()\n" in text
+    assert "    Tick -> c_running.Tick\n" in text
+
+
+def test_reactor_scope_instantiations_render() -> None:
+    # A parallel root machine instantiates its regions at reactor scope.
+    region = Reactor(
+        name="M_lights",
+        inputs=("Flip",),
+        outputs=("completed", "current_state"),
+        modes=(Mode(name="off", initial=True, reactions=(_announce("off"),)),),
+    )
+    machine = Reactor(
+        name="M",
+        inputs=("Flip",),
+        outputs=("current_state",),
+        instantiations=(Instantiation("c_lights", "M_lights"),),
+        connections=(Connection("Flip", "c_lights.Flip"),),
+    )
+    text = to_lf(LfProgram(reactors=(region, machine)))
+    assert "  c_lights = new M_lights()\n" in text
+    assert "  Flip -> c_lights.Flip\n" in text

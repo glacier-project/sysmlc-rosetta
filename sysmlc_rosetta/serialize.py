@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sysmlc.backends.rosetta.program import LfProgram, Mode, Reaction
+    from sysmlc.backends.rosetta.program import (
+        LfProgram,
+        Mode,
+        Reaction,
+        Reactor,
+    )
 
 _INDENT = "  "
 _UNITS: tuple[tuple[str, int], ...] = (
@@ -28,13 +33,27 @@ def render_duration(seconds: float) -> str:
 
 
 def to_lf(program: LfProgram) -> str:
-    """Serialize an ``LfProgram`` to Lingua Franca source text."""
-    reactor = program.reactor
+    """Serialize an ``LfProgram`` to Lingua Franca source text.
+
+    Child reactor classes render before the machine reactor (lfc requires
+    definition before use); the trivial ``main`` instantiates the machine
+    (the last reactor).
+    """
     lines: list[str] = ["target Python", ""]
     if program.preamble:
         lines.append("preamble {=")
         lines.extend(f"{_INDENT}{line}" for line in program.preamble)
         lines.extend(("=}", ""))
+    for reactor in program.reactors:
+        lines.extend(_reactor_lines(reactor))
+        lines.append("")
+    lines.append("main reactor {")
+    lines.append(f"{_INDENT}m = new {program.reactor.name}()")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _reactor_lines(reactor: Reactor) -> list[str]:
     # Parameter defaults and state initializers are wrapped in {= ... =}
     # unconditionally: lfc parses bare initializers as LF values and rejects
     # any non-literal Python (e.g. SimpleNamespace(...), LightColor.red).
@@ -46,7 +65,7 @@ def to_lf(program: LfProgram) -> str:
         if params
         else f"reactor {reactor.name}"
     )
-    lines.append(f"{header} {{")
+    lines = [f"{header} {{"]
     lines.extend(f"{_INDENT}input {name}" for name in reactor.inputs)
     lines.extend(f"{_INDENT}output {name}" for name in reactor.outputs)
     lines.extend(
@@ -56,14 +75,20 @@ def to_lf(program: LfProgram) -> str:
     lines.extend(
         f"{_INDENT}logical action {action.name}" for action in reactor.actions
     )
+    lines.extend(
+        f"{_INDENT}{inst.name} = new {inst.reactor}()"
+        for inst in reactor.instantiations
+    )
+    lines.extend(
+        f"{_INDENT}{conn.source} -> {conn.target}"
+        for conn in reactor.connections
+    )
     for reaction in reactor.reactions:
         lines.extend(_reaction_lines(reaction, depth=1))
     for mode in reactor.modes:
         lines.extend(_mode_lines(mode))
-    lines.extend(("}", "", "main reactor {"))
-    lines.append(f"{_INDENT}m = new {reactor.name}()")
     lines.append("}")
-    return "\n".join(lines) + "\n"
+    return lines
 
 
 def _mode_lines(mode: Mode) -> list[str]:
@@ -75,6 +100,14 @@ def _mode_lines(mode: Mode) -> list[str]:
     )
     lines.extend(
         f"{_INDENT * 2}logical action {action.name}" for action in mode.actions
+    )
+    lines.extend(
+        f"{_INDENT * 2}{inst.name} = new {inst.reactor}()"
+        for inst in mode.instantiations
+    )
+    lines.extend(
+        f"{_INDENT * 2}{conn.source} -> {conn.target}"
+        for conn in mode.connections
     )
     for reaction in mode.reactions:
         lines.extend(_reaction_lines(reaction, depth=2))
