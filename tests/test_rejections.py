@@ -42,21 +42,15 @@ def _root(name: str = "Machine", initial: str = "idle") -> StateFact:
     )
 
 
-def test_nested_composite_is_rejected() -> None:
+def test_deep_entry_is_rejected() -> None:
+    # `transition first idle then running.hot` enters a composite from
+    # outside; hierarchy itself is supported since slice 6.
     model = load_model(SM_EXAMPLES_DIR / "sm08-nested-composite")
-    with pytest.raises(UnsupportedConstructError, match="hierarchical"):
-        build_program(model, "SM08::MachineNested")
+    with pytest.raises(UnsupportedConstructError, match="deep entry"):
+        build_program(model, "SM08::MachineCrossIn")
 
 
-def test_parallel_is_rejected() -> None:
-    # SM09's parallel regions arrive as non-leaf children, so the model
-    # path trips the hierarchy rejection before result() runs.
-    model = load_model(SM_EXAMPLES_DIR / "sm09-parallel")
-    with pytest.raises(UnsupportedConstructError, match="hierarchical"):
-        build_program(model, "SM09::MachineParallel")
-
-
-def test_parallel_root_is_rejected() -> None:
+def test_leaf_parallel_region_is_rejected() -> None:
     builder = RosettaBuilder("Machine")
     builder.add_state(
         StateFact(
@@ -69,8 +63,18 @@ def test_parallel_root_is_rejected() -> None:
             exit_action=None,
         )
     )
-    with pytest.raises(UnsupportedConstructError, match="parallel root"):
+    builder.add_state(_leaf("lights"))
+    with pytest.raises(UnsupportedConstructError, match="region"):
         builder.result()
+
+
+def test_cross_scope_send_is_rejected() -> None:
+    # A substate's entry sends Ping, but Ping is accepted by a group
+    # interrupt handled in the root scope: the event would have to cross
+    # reactor boundaries, which rosetta does not route yet.
+    model = load_model(FIXTURES_DIR / "cross-scope-send")
+    with pytest.raises(UnsupportedConstructError, match="cross-scope"):
+        build_program(model, "CrossScopeSend::Machine")
 
 
 def test_payload_writeback_is_rejected() -> None:

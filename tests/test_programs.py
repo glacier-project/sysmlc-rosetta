@@ -262,3 +262,148 @@ def test_after_with_guard_is_supported() -> None:
     assert timer.offset == "5 sec"
     timer_reaction = idle.reactions[1]
     assert timer_reaction.body[0] == "if self.ready:"
+
+
+# -- sm08: hierarchy becomes nested reactors --
+
+
+def test_sm08_nested_builds_child_reactor() -> None:
+    program = _build("sm08-nested-composite", "SM08::MachineNested")
+    assert [r.name for r in program.reactors] == [
+        "MachineNested_running",
+        "MachineNested",
+    ]
+    child = program.reactors[0]
+    assert child.outputs == ("completed", "current_state")
+    assert [m.name for m in child.modes] == ["warming", "hot"]
+    assert child.modes[0].initial
+
+
+def test_sm08_composite_mode_instantiates_and_reemits() -> None:
+    program = _build("sm08-nested-composite", "SM08::MachineNested")
+    running = _mode(program, "running")
+    (inst,) = running.instantiations
+    assert (inst.name, inst.reactor) == ("c_running", "MachineNested_running")
+    (reemit,) = [
+        r
+        for r in running.reactions
+        if r.triggers == ("c_running.current_state",)
+    ]
+    assert reemit.body == (
+        'current_state.set("running." + c_running.current_state.value)',
+    )
+
+
+def test_sm08_deep_nesting_builds_grandchild_reactor() -> None:
+    program = _build("sm08-nested-composite", "SM08::MachineDeep")
+    assert [r.name for r in program.reactors] == [
+        "MachineDeep_running_warming",
+        "MachineDeep_running",
+        "MachineDeep",
+    ]
+    middle = program.reactors[1]
+    (warming,) = [m for m in middle.modes if m.name == "warming"]
+    (reemit,) = [
+        r
+        for r in warming.reactions
+        if r.triggers == ("c_warming.current_state",)
+    ]
+    assert reemit.body == (
+        'current_state.set("warming." + c_warming.current_state.value)',
+    )
+
+
+def test_sm08_sibling_names_reused_across_scopes_build() -> None:
+    program = _build("sm08-nested-composite", "SM08::MachineNameCollision")
+    assert [r.name for r in program.reactors] == [
+        "MachineNameCollision_groupA",
+        "MachineNameCollision_groupB",
+        "MachineNameCollision",
+    ]
+
+
+def test_sm08_completion_out_of_composite_fires_on_completed() -> None:
+    # `transition first groupA then groupB` is a completion transition: it
+    # must trigger on the child's completed port, never fold into entry.
+    program = _build("sm08-nested-composite", "SM08::MachineNameCollision")
+    group_a = _mode(program, "groupA")
+    entry = group_a.reactions[0]
+    assert all("groupB.set()" not in line for line in entry.body)
+    (completion,) = [
+        r for r in group_a.reactions if r.triggers == ("c_groupA.completed",)
+    ]
+    assert completion.effects == ("reset(groupB)",)
+    assert completion.body == ("groupB.set()",)
+
+
+def test_sm08_deep_exit_raises_dedicated_child_port() -> None:
+    program = _build("sm08-nested-composite", "SM08::MachineCrossOut")
+    child = program.reactors[0]
+    assert child.outputs == ("completed", "current_state", "exit_0")
+    (hot,) = [m for m in child.modes if m.name == "hot"]
+    entry = hot.reactions[0]
+    assert "exit_0.set(True)" in entry.body
+    assert "exit_0" in entry.effects
+    running = _mode(program, "running")
+    (exit_reaction,) = [
+        r for r in running.reactions if r.triggers == ("c_running.exit_0",)
+    ]
+    assert exit_reaction.effects == ("reset(stopped)",)
+    assert exit_reaction.body == ("stopped.set()",)
+
+
+# -- sm09: parallel becomes sibling region reactors --
+
+
+def test_sm09_parallel_root_instantiates_regions_at_reactor_scope() -> None:
+    program = _build("sm09-parallel", "SM09::MachineParallel")
+    assert [r.name for r in program.reactors] == [
+        "MachineParallel_lights",
+        "MachineParallel_sound",
+        "MachineParallel",
+    ]
+    machine = program.reactor
+    assert machine.modes == ()
+    assert [i.name for i in machine.instantiations] == ["c_lights", "c_sound"]
+    (reemit,) = [
+        r
+        for r in machine.reactions
+        if r.triggers == ("c_lights.current_state",)
+    ]
+    assert reemit.body == (
+        'current_state.set("lights." + c_lights.current_state.value)',
+    )
+
+
+def test_sm09_parallel_root_join_requests_stop() -> None:
+    program = _build("sm09-parallel", "SM09::MachineParallel")
+    machine = program.reactor
+    (join,) = [
+        r
+        for r in machine.reactions
+        if r.triggers == ("c_lights.completed", "c_sound.completed")
+    ]
+    assert "request_stop()" in join.body[-1]
+    assert {v.name for v in machine.state_vars} == {
+        "lights_done",
+        "sound_done",
+    }
+
+
+def test_sm09_nested_parallel_mode_holds_region_instances() -> None:
+    program = _build("sm09-parallel", "SM09::MachineNestedParallel")
+    assert [r.name for r in program.reactors] == [
+        "MachineNestedParallel_dual_lights",
+        "MachineNestedParallel_dual_sound",
+        "MachineNestedParallel",
+    ]
+    dual = _mode(program, "dual")
+    assert [i.name for i in dual.instantiations] == ["c_lights", "c_sound"]
+    entry = dual.reactions[0]
+    assert "self.count = 1" in entry.body  # `entry assign count := 1`
+    (reemit,) = [
+        r for r in dual.reactions if r.triggers == ("c_sound.current_state",)
+    ]
+    assert reemit.body == (
+        'current_state.set("dual.sound." + c_sound.current_state.value)',
+    )

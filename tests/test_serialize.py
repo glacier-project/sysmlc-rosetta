@@ -152,7 +152,13 @@ def test_multiple_reactors_render_in_order_with_main_last() -> None:
     child = Reactor(
         name="Machine_running",
         outputs=("completed", "current_state"),
-        modes=(Mode(name="warming", initial=True, reactions=(_announce("warming"),)),),
+        modes=(
+            Mode(
+                name="warming",
+                initial=True,
+                reactions=(_announce("warming"),),
+            ),
+        ),
     )
     machine = Reactor(
         name="Machine",

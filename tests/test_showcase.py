@@ -161,3 +161,36 @@ def test_pendulum_parameters() -> None:
     program = _build("furuta-pendulum", "FurutaPendulum::PendulumController")
     names = [p.name for p in program.reactor.parameters]
     assert names == ["catchAngle", "dropAngle"]
+
+
+# -- microwave: hierarchy + parallel (slice 6) --
+
+
+def test_microwave_builds_nested_reactor_family() -> None:
+    program = _build("microwave", "Microwave::Microwave")
+    assert [r.name for r in program.reactors] == [
+        "Microwave_cooking_heating_heater",
+        "Microwave_cooking_heating_turntable",
+        "Microwave_cooking",
+        "Microwave",
+    ]
+
+
+def test_microwave_forwards_only_inner_signals() -> None:
+    # StartCmd/DoorOpen are handled at the root; only the pause pair is
+    # accepted inside `cooking` and forwarded down.
+    program = _build("microwave", "Microwave::Microwave")
+    cooking = _mode(program, "cooking")
+    assert [(c.source, c.target) for c in cooking.connections] == [
+        ("PauseCmd", "c_cooking.PauseCmd"),
+        ("ResumeCmd", "c_cooking.ResumeCmd"),
+    ]
+
+
+def test_microwave_join_flags_track_region_completion() -> None:
+    program = _build("microwave", "Microwave::Microwave")
+    cooking_reactor = program.reactors[2]
+    assert {v.name for v in cooking_reactor.state_vars} == {
+        "heating_heater_done",
+        "heating_turntable_done",
+    }

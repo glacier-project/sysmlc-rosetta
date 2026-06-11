@@ -274,6 +274,114 @@ def test_showcase_vending_machine(tmp_path: Path) -> None:
     assert states == ["idle", "idle", "paid", "idle"]
 
 
+def test_sm08_nested_composite_runs(tmp_path: Path) -> None:
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm08-nested-composite",
+        "SM08::MachineNested",
+        timeout="1 sec",
+    )
+    assert states == ["idle", "running.warming", "running.hot"]
+
+
+def test_sm08_deep_exit_runs(tmp_path: Path) -> None:
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm08-nested-composite",
+        "SM08::MachineCrossOut",
+        timeout="1 sec",
+    )
+    assert states == ["idle", "running.warming", "running.hot", "stopped"]
+
+
+def test_sm09_parallel_root_runs(tmp_path: Path) -> None:
+    # Both regions announce at the same tags; within a tag the LAST
+    # declared region's announcement wins (deterministic overwrite), so
+    # only `sound` is visible while the regions advance in lock-step.
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm09-parallel",
+        "SM09::MachineParallel",
+        timeout="1 sec",
+    )
+    assert states == ["sound.silent", "sound.beeping"]
+
+
+def test_sm09_nested_parallel_runs(tmp_path: Path) -> None:
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm09-parallel",
+        "SM09::MachineNestedParallel",
+        timeout="1 sec",
+    )
+    assert states == ["idle", "dual.sound.silent", "dual.sound.beeping"]
+
+
+def test_showcase_microwave_completes(tmp_path: Path) -> None:
+    # Heater finishes at 0.4 s, turntable at 0.6 s; the join completes
+    # `cooking`, whose completion transition returns to idle.
+    drivers = (
+        "  timer go(100 msec)\n"
+        "  reaction(go) -> m.StartCmd {=\n"
+        "    m.StartCmd.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "microwave",
+        "Microwave::Microwave",
+        timeout="2 sec",
+        drivers=drivers,
+    )
+    assert states == [
+        "idle",
+        "cooking.heating.turntable.rotating",
+        "cooking.heating.heater.done",
+        "cooking.heating.turntable.done",
+        "cooking.done",
+        "idle",
+    ]
+
+
+def test_showcase_microwave_pause_and_door_interrupt(tmp_path: Path) -> None:
+    # Resume RESETS the parallel regions (composite re-entry restarts the
+    # heater's 400 ms), and the door interrupt aborts cooking before the
+    # restarted turntable's 600 ms elapse.
+    drivers = (
+        "  timer go(100 msec)\n"
+        "  reaction(go) -> m.StartCmd {=\n"
+        "    m.StartCmd.set(True)\n"
+        "  =}\n"
+        "  timer pause(300 msec)\n"
+        "  reaction(pause) -> m.PauseCmd {=\n"
+        "    m.PauseCmd.set(True)\n"
+        "  =}\n"
+        "  timer resume(600 msec)\n"
+        "  reaction(resume) -> m.ResumeCmd {=\n"
+        "    m.ResumeCmd.set(True)\n"
+        "  =}\n"
+        "  timer door(1100 msec)\n"
+        "  reaction(door) -> m.DoorOpen {=\n"
+        "    m.DoorOpen.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "microwave",
+        "Microwave::Microwave",
+        timeout="2 sec",
+        drivers=drivers,
+    )
+    assert states == [
+        "idle",
+        "cooking.heating.turntable.rotating",
+        "cooking.paused",
+        "cooking.heating.turntable.rotating",
+        "cooking.heating.heater.done",
+        "idle",
+    ]
+
+
 def test_showcase_furuta_pendulum(tmp_path: Path) -> None:
     # Decreasing |theta| swings up, catches, then stabilizes; a late spike
     # past dropAngle knocks it back to swing-up. SimpleNamespace stands in
