@@ -69,7 +69,7 @@ def compile_harness(
     name = qn.split("::")[-1]
     model = load_model(model_dir)
     if values:
-        model = configure_model(model, model_dir, qn, values)
+        model = configure_model(model, qn, values)
     src = tmp_path / "src"
     src.mkdir()
     (src / f"{name}.lf").write_text(to_lf(build_program(model, qn)))

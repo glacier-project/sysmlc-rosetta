@@ -167,11 +167,12 @@ state lands with the Tier-3 parts/ports family).
 
 Initial values are **configurable at build time** with `--values FILE`
 (any backend): a hierarchical YAML whose nesting mirrors qualified names.
-Overrides are applied by editing the model sources in a temporary copy and
-reloading, so the language re-validates them (a fixed `=` binding cannot
-be overridden; `default`/`:=` can), composites are redefined per-usage,
-and quantity strings (`"90 [s]"`) are inserted verbatim after a unit-kind
-check. See `docs/rosetta-values-constraints-design.md`.
+Overrides are applied in place on the loaded model through syside's
+editing API and the model is re-run through sema+validation (a fixed `=`
+binding cannot be overridden; `default`/`:=` can), composite fields are
+overridden per-usage without touching the type's defaults, and quantity
+strings (`"90 [s]"`) are converted into the model's declared unit within
+the same unit kind. See `docs/rosetta-values-constraints-design.md`.
 
 ## 6. Constraints (testbench checks)
 
