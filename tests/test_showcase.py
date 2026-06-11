@@ -194,3 +194,35 @@ def test_microwave_join_flags_track_region_completion() -> None:
         "heating_heater_done",
         "heating_turntable_done",
     }
+
+
+# -- thermostat: asserted constraints become runtime checks --
+
+
+def test_thermostat_constraints_check_at_startup() -> None:
+    program = _build("thermostat", "Thermostat::Thermostat")
+    (startup_checks,) = [
+        r for r in program.reactor.reactions if r.triggers == ("startup",)
+    ]
+    first, second = startup_checks.body
+    assert first.startswith(
+        "assert self.temperature >= 5.0 and self.temperature <= 40.0"
+    )
+    assert first.endswith('"SysML constraint tempBand violated"')
+    assert second == (
+        "assert self.setpoint > 5.0, "
+        '"SysML constraint setpointPositive violated"'
+    )
+
+
+def test_thermostat_constraints_follow_assignments() -> None:
+    program = _build("thermostat", "Thermostat::Thermostat")
+    heating = _mode(program, "heating")
+    timer_reaction = heating.reactions[1]
+    assert "self.temperature = self.temperature + 0.8" in timer_reaction.body
+    assert timer_reaction.body[-1].endswith(
+        '"SysML constraint setpointPositive violated"'
+    )
+    # The entry reaction announces but assigns nothing: no checks there.
+    entry = heating.reactions[0]
+    assert not any(line.startswith("assert ") for line in entry.body)

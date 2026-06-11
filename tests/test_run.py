@@ -22,12 +22,15 @@ import pytest
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
+from sysmlc.values import configure_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
 from tests.backends.showcase import SHOWCASE_DIR
 from tests.backends.sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from sysmlc.values import ValueNode
 
 pytestmark = [
     pytest.mark.lf,
@@ -53,17 +56,20 @@ main reactor {{
 """
 
 
-def run_machine(
+def compile_harness(
     tmp_path: Path,
     model_dir: Path,
     qn: str,
     *,
     timeout: str = "2 sec",
     drivers: str = "",
-) -> list[str]:
-    """Generate, compile, and run one machine; return the state sequence."""
+    values: dict[str, ValueNode] | None = None,
+) -> Path:
+    """Generate and lfc-compile one machine; return the harness binary."""
     name = qn.split("::")[-1]
     model = load_model(model_dir)
+    if values:
+        model = configure_model(model, model_dir, qn, values)
     src = tmp_path / "src"
     src.mkdir()
     (src / f"{name}.lf").write_text(to_lf(build_program(model, qn)))
@@ -80,8 +86,29 @@ def run_machine(
     assert compile_result.returncode == 0, compile_result.stderr.decode(
         errors="replace"
     )
+    return tmp_path / "bin" / "Harness"
+
+
+def run_machine(
+    tmp_path: Path,
+    model_dir: Path,
+    qn: str,
+    *,
+    timeout: str = "2 sec",
+    drivers: str = "",
+    values: dict[str, ValueNode] | None = None,
+) -> list[str]:
+    """Generate, compile, and run one machine; return the state sequence."""
+    binary = compile_harness(
+        tmp_path,
+        model_dir,
+        qn,
+        timeout=timeout,
+        drivers=drivers,
+        values=values,
+    )
     result = subprocess.run(
-        [str(tmp_path / "bin" / "Harness")],
+        [str(binary)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -237,6 +264,40 @@ def test_showcase_thermostat(tmp_path: Path) -> None:
     assert "idle" in states
     idx = states.index("idle")
     assert "heating" in states[idx:]
+
+
+def test_showcase_thermostat_override_changes_behavior(
+    tmp_path: Path,
+) -> None:
+    # setpoint 23 + hysteresis 1: heating needs 8 ticks to reach 24.0
+    # (5 ticks by default) — the values override visibly changes behavior.
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "thermostat",
+        "Thermostat::Thermostat",
+        timeout="12 sec",
+        values={"setpoint": 23.0, "hysteresis": 1.0},
+    )
+    first_idle = states.index("idle")
+    assert states[:first_idle].count("heating") == 9
+
+
+def test_showcase_thermostat_violated_constraint_aborts(
+    tmp_path: Path,
+) -> None:
+    # The negative testbench: a violating override trips the startup
+    # check, so the run aborts with a nonzero exit naming the constraint.
+    binary = compile_harness(
+        tmp_path,
+        SHOWCASE_DIR / "thermostat",
+        "Thermostat::Thermostat",
+        values={"setpoint": -10.0},
+    )
+    result = subprocess.run(
+        [str(binary)], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode != 0
+    assert "setpointPositive" in result.stderr
 
 
 def test_showcase_vending_machine(tmp_path: Path) -> None:

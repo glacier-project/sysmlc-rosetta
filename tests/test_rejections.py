@@ -68,6 +68,14 @@ def test_leaf_parallel_region_is_rejected() -> None:
         builder.result()
 
 
+def test_scoped_constraint_is_rejected() -> None:
+    # Substate reactors cannot see the machine's attributes, so a
+    # state-scoped asserted constraint has nothing meaningful to check.
+    model = load_model(FIXTURES_DIR / "scoped-constraint")
+    with pytest.raises(UnsupportedConstructError, match="root-scope"):
+        build_program(model, "ScopedConstraint::Machine")
+
+
 def test_cross_scope_send_is_rejected() -> None:
     # A substate's entry sends Ping, but Ping is accepted by a group
     # interrupt handled in the root scope: the event would have to cross

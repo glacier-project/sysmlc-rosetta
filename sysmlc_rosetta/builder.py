@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import syside
 
 from sysmlc.backends.rosetta.codegen import LfPythonCodeGen, PreambleNeeds
@@ -26,6 +28,7 @@ from sysmlc.semantics.statemachine.facts import (
     AttributeValue,
     CompletionTarget,
     CompositeValue,
+    ConstraintFact,
     StateFact,
     StateKind,
     TransitionFact,
@@ -89,6 +92,7 @@ class RosettaBuilder:
             name: The reactor name (the state definition's name).
         """
         self._name = name
+        self._constraints: list[ConstraintFact] = []
         self._needs = PreambleNeeds()
         self._init_codegen = LfPythonCodeGen(
             frozenset(), needs=self._needs, self_prefix=False
@@ -123,6 +127,20 @@ class RosettaBuilder:
                 "only."
             )
         self._attributes.append(binding)
+
+    def bind_constraint(self, fact: ConstraintFact) -> None:
+        """Buffer a root-scope asserted constraint (scoped ones rejected).
+
+        Substate reactors cannot see the machine's attributes, so a
+        constraint scoped to a state has nothing meaningful to check there.
+        """
+        if fact.scope:
+            raise UnsupportedConstructError(
+                f"constraint {fact.name or '<anonymous>'!r} is scoped to "
+                f"state {fact.scope!r}; rosetta checks root-scope "
+                "constraints only."
+            )
+        self._constraints.append(fact)
 
     def add_state(self, state: StateFact) -> None:
         """Buffer a state fact; the whole tree is consumed in result()."""
@@ -162,7 +180,7 @@ class RosettaBuilder:
             raise UnsupportedConstructError(
                 "the state definition declares no substates."
             )
-        self._reactors.append(machine)
+        self._reactors.append(self._with_constraint_checks(machine))
         preamble: list[str] = []
         if self._needs.uses_math:
             preamble.append("import math")
@@ -173,6 +191,41 @@ class RosettaBuilder:
         return LfProgram(
             reactors=tuple(self._reactors), preamble=tuple(preamble)
         )
+
+    def _with_constraint_checks(self, machine: Reactor) -> Reactor:
+        """Weave asserted-constraint checks into the machine reactor.
+
+        Each root-scope ``assert constraint`` renders as a Python ``assert``
+        placed (1) in a dedicated startup reaction — so a bad initial (or
+        overridden) value aborts immediately — and (2) at the end of every
+        reaction body that assigns to a bound attribute.
+        """
+        checks: list[str] = []
+        for index, fact in enumerate(self._constraints):
+            label = fact.name or f"constraint{index}"
+            rendered = self._codegen.render_expression(fact.expression)
+            checks.append(
+                f'assert {rendered}, "SysML constraint {label} violated"'
+            )
+        if not checks:
+            return machine
+        markers = tuple(f"self.{name} = " for name in self._attribute_names)
+
+        def patched(reaction: Reaction) -> Reaction:
+            mutates = any(
+                marker in line for line in reaction.body for marker in markers
+            )
+            if not mutates:
+                return reaction
+            return replace(reaction, body=(*reaction.body, *checks))
+
+        reactions = tuple(patched(r) for r in machine.reactions)
+        reactions += (Reaction(("startup",), (), tuple(checks)),)
+        modes = tuple(
+            replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
+            for mode in machine.modes
+        )
+        return replace(machine, reactions=reactions, modes=modes)
 
     # -- fact classification (runs before assembly) --
 
