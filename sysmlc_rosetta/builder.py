@@ -83,17 +83,32 @@ class RosettaBuilder:
     re-raise. Capability rejections (deep entry, cross-scope sends,
     ``at``/``when``, non-inline ``do`` bodies, unstable self-loops, name
     collisions) also live here.
+
+    In ``peer_accepts`` mode (the named signals are accepted by a peer
+    machine), a matching send becomes an LF output port that the sending
+    scope's reactor raises and enclosing scopes re-emit upward; the bare
+    default (``peer_accepts=frozenset()``) leaves every code path untouched.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        peer_accepts: frozenset[str] = frozenset(),
+        needs: PreambleNeeds | None = None,
+    ) -> None:
         """Initialize the builder.
 
         Args:
             name: The reactor name (the state definition's name).
+            peer_accepts: Signals a peer machine accepts; a send of one of
+                these becomes an LF output port instead of a self-event.
+            needs: A shared preamble registry, or ``None`` for a fresh one.
         """
         self._name = name
+        self._peer_accepts = peer_accepts
         self._constraints: list[ConstraintFact] = []
-        self._needs = PreambleNeeds()
+        self._needs = needs if needs is not None else PreambleNeeds()
         self._init_codegen = LfPythonCodeGen(
             frozenset(), needs=self._needs, self_prefix=False
         )
@@ -110,6 +125,13 @@ class RosettaBuilder:
         self._accepted: dict[str, dict[str, None]] = {}
         self._handled: dict[str, set[str]] = {}
         self._sent_by_scope: dict[str, dict[str, None]] = {}
+        # Peer-mode state (empty unless peer_accepts is non-empty):
+        # scope -> signals that scope's reactor must output (its own
+        # peer-accepted sends plus those of its descendants).
+        self._exported: dict[str, dict[str, None]] = {}
+        self._omitted_inputs: frozenset[str] = frozenset()
+        self._port_sigs: frozenset[str] = frozenset()
+        self._self_sigs: frozenset[str] = frozenset()
         # Populated during assembly:
         self._exit_ports: dict[str, dict[str, str]] = {}
         self._needs_done: set[str] = set()
@@ -162,15 +184,14 @@ class RosettaBuilder:
         self._attribute_names = frozenset(
             binding.name for binding in self._attributes
         )
-        self._codegen = LfPythonCodeGen(
-            self._attribute_names,
-            needs=self._needs,
-        )
         for fact in self._facts.values():
             self._children.setdefault(_scope_of(fact.name), []).append(fact)
         self._classify_transitions()
         self._collect_signals()
         self._collect_sends()
+        # The port/self signal sets must exist (populated by _collect_sends)
+        # before any peer-aware code generator is created.
+        self._codegen = self._make_codegen(self._attribute_names)
         if root.kind is StateKind.PARALLEL:
             machine = self._parallel_root_reactor(root)
         elif root.kind is StateKind.COMPOSITE:
@@ -321,6 +342,23 @@ class RosettaBuilder:
                             "different composite scopes; cross-scope events "
                             "are not supported by rosetta."
                         )
+        # Peer-accepted sends become output ports: record which scopes must
+        # export each (the sending scope and every ancestor up to the root).
+        for scope, sent in self._sent_by_scope.items():
+            for sig in sent:
+                if sig not in self._peer_accepts:
+                    continue
+                for enclosing in _enclosing(scope):
+                    self._exported.setdefault(enclosing, {}).setdefault(
+                        sig, None
+                    )
+        self._port_sigs = frozenset(self._exported.get("", {}))
+        self._omitted_inputs = self._port_sigs
+        self._self_sigs = frozenset(
+            sig
+            for sig in self._port_sigs
+            if any(sig in handled for handled in self._handled.values())
+        )
 
     # -- attributes -> parameters and state variables --
 
@@ -375,6 +413,20 @@ class RosettaBuilder:
     def _reactor_name(self, scope: str) -> str:
         return f"{self._name}_{scope.replace('::', '_')}"
 
+    def _make_codegen(
+        self,
+        attribute_names: frozenset[str],
+        local_names: frozenset[str] = frozenset(),
+    ) -> LfPythonCodeGen:
+        """Build a peer-aware code generator sharing the preamble registry."""
+        return LfPythonCodeGen(
+            attribute_names,
+            needs=self._needs,
+            port_signals=self._port_sigs,
+            self_signals=self._self_sigs,
+            local_names=local_names,
+        )
+
     def _scope_codegen(self, scope: str) -> LfPythonCodeGen:
         """The expression codegen for a scope's reaction bodies.
 
@@ -384,7 +436,7 @@ class RosettaBuilder:
         """
         if scope == "":
             return self._codegen
-        return LfPythonCodeGen(frozenset(), needs=self._needs)
+        return self._make_codegen(frozenset())
 
     def _scope_attribute_names(self, scope: str) -> frozenset[str]:
         return self._attribute_names if scope == "" else frozenset()
@@ -400,7 +452,11 @@ class RosettaBuilder:
         """
         kids = self._children.get(scope, [])
         sent = list(self._sent_by_scope.get(scope, {}))
-        inputs = list(self._accepted.get(scope, {}))
+        inputs = [
+            sig
+            for sig in self._accepted.get(scope, {})
+            if sig not in self._omitted_inputs
+        ]
         gen = self._scope_codegen(scope)
         self._check_names(scope, kids, inputs, sent)
         extra_state: list[StateVar] = []
@@ -410,24 +466,32 @@ class RosettaBuilder:
         ]
         if scope in self._needs_done:
             modes.append(self._done_mode(is_root))
+        ported = tuple(self._exported.get(scope, {}))
         if is_root:
             parameters, state_vars = self._attribute_split()
-            outputs: tuple[str, ...] = (OUTPUT_PORT,)
-            reactions = self._root_reactions(container, sent)
+            outputs: tuple[str, ...] = (OUTPUT_PORT, *ported)
+            reactions = self._root_reactions(
+                container, sent, self._scope_ports("")
+            )
             name = self._name
         else:
             parameters, state_vars = [], []
             exit_ports = tuple(self._exit_ports.get(scope, {}).values())
-            outputs = (COMPLETED_PORT, OUTPUT_PORT, *exit_ports)
+            outputs = (COMPLETED_PORT, OUTPUT_PORT, *exit_ports, *ported)
             reactions = []
             name = self._reactor_name(scope)
+        sent_self = [
+            sig
+            for sig in sent
+            if sig not in self._port_sigs or sig in self._self_sigs
+        ]
         return Reactor(
             name=name,
             parameters=tuple(parameters),
             inputs=tuple(inputs),
             outputs=outputs,
             state_vars=tuple(state_vars) + tuple(extra_state),
-            actions=tuple(LogicalAction(f"{sig}_act") for sig in sent),
+            actions=tuple(LogicalAction(f"{sig}_act") for sig in sent_self),
             reactions=tuple(reactions),
             modes=tuple(modes),
         )
@@ -440,11 +504,17 @@ class RosettaBuilder:
         """
         regions = self._regions(root)
         sent = list(self._sent_by_scope.get("", {}))
-        inputs = list(self._accepted.get("", {}))
+        inputs = [
+            sig
+            for sig in self._accepted.get("", {})
+            if sig not in self._omitted_inputs
+        ]
         self._check_names("", regions, inputs, sent)
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
-        reactions: list[Reaction] = list(self._root_reactions(root, sent))
+        reactions: list[Reaction] = list(
+            self._root_reactions(root, sent, self._scope_ports(""))
+        )
         flags: list[str] = []
         for region in regions:
             r_simple = _simple(region.name)
@@ -461,8 +531,13 @@ class RosettaBuilder:
             connections += [
                 Connection(sig, f"{inst}.{sig}")
                 for sig in self._accepted.get(region.name, {})
+                if sig not in self._omitted_inputs
             ]
             reactions.append(self._reemit(inst, r_simple, prefix=""))
+            reactions += [
+                self._port_reemit(inst, sig)
+                for sig in self._exported.get(region.name, {})
+            ]
             flags.append(f"{r_simple}_done")
         join_body: list[str] = []
         for region, flag in zip(regions, flags, strict=True):
@@ -482,13 +557,19 @@ class RosettaBuilder:
         )
         parameters, state_vars = self._attribute_split()
         state_vars += [StateVar(flag, "False") for flag in flags]
+        ported = tuple(self._exported.get("", {}))
+        sent_self = [
+            sig
+            for sig in sent
+            if sig not in self._port_sigs or sig in self._self_sigs
+        ]
         return Reactor(
             name=self._name,
             parameters=tuple(parameters),
             inputs=tuple(inputs),
-            outputs=(OUTPUT_PORT,),
+            outputs=(OUTPUT_PORT, *ported),
             state_vars=tuple(state_vars),
-            actions=tuple(LogicalAction(f"{sig}_act") for sig in sent),
+            actions=tuple(LogicalAction(f"{sig}_act") for sig in sent_self),
             instantiations=tuple(instantiations),
             connections=tuple(connections),
             reactions=tuple(reactions),
@@ -533,6 +614,7 @@ class RosettaBuilder:
             OUTPUT_PORT,
             COMPLETED_PORT,
             *inputs,
+            *self._exported.get(scope, {}),
             *(f"{sig}_act" for sig in sent),
             *(f"c_{_simple(kid.name)}" for kid in kids),
         }
@@ -625,13 +707,23 @@ class RosettaBuilder:
                 )
                 entry_effects.append(trigger_name)
             reactions.append(
-                self._reaction((trigger_name,), targets, tuple(body), sent)
+                self._reaction(
+                    (trigger_name,),
+                    targets,
+                    tuple(body),
+                    sent,
+                    self._scope_ports(scope),
+                )
             )
 
         for signal, group in signal_groups.items():
-            triggers = (
-                (signal, f"{signal}_act") if signal in sent else (signal,)
-            )
+            triggers: tuple[str, ...]
+            if signal in self._omitted_inputs:
+                triggers = (f"{signal}_act",)
+            elif signal in sent:
+                triggers = (signal, f"{signal}_act")
+            else:
+                triggers = (signal,)
             payload_names = {
                 t.trigger.payload_name
                 for t in group
@@ -646,22 +738,30 @@ class RosettaBuilder:
             group_gen = gen
             if payload_names:
                 (payload_name,) = payload_names
-                value = (
-                    f"({signal}.value if {signal}.is_present "
-                    f"else {signal}_act.value)"
-                    if signal in sent
-                    else f"{signal}.value"
-                )
+                if signal in self._omitted_inputs:
+                    value = f"{signal}_act.value"
+                elif signal in sent:
+                    value = (
+                        f"({signal}.value if {signal}.is_present "
+                        f"else {signal}_act.value)"
+                    )
+                else:
+                    value = f"{signal}.value"
                 prelude = [f"{payload_name} = {value}"]
-                group_gen = LfPythonCodeGen(
+                group_gen = self._make_codegen(
                     self._scope_attribute_names(scope),
-                    needs=self._needs,
                     local_names=frozenset({payload_name}),
                 )
             group_exit = self._statements(fact.exit_action, group_gen)
             body, targets = self._dispatch(group, group_exit, scope, group_gen)
             reactions.append(
-                self._reaction(triggers, targets, tuple(prelude + body), sent)
+                self._reaction(
+                    triggers,
+                    targets,
+                    tuple(prelude + body),
+                    sent,
+                    self._scope_ports(scope),
+                )
             )
 
         instantiations: list[Instantiation] = []
@@ -686,8 +786,13 @@ class RosettaBuilder:
             connections += [
                 Connection(sig, f"{inst}.{sig}")
                 for sig in self._accepted.get(fact.name, {})
+                if sig not in self._omitted_inputs
             ]
             reactions.append(self._reemit(inst, simple, prefix=f"{simple}."))
+            reactions += [
+                self._port_reemit(inst, sig)
+                for sig in self._exported.get(fact.name, {})
+            ]
             reactions += self._exit_resolutions(
                 inst, fact.name, exit_stmts, scope, sent
             )
@@ -703,6 +808,7 @@ class RosettaBuilder:
                         targets,
                         tuple(body),
                         sent,
+                        self._scope_ports(scope),
                     )
                 )
         else:  # StateKind.PARALLEL
@@ -719,10 +825,15 @@ class RosettaBuilder:
                 connections += [
                     Connection(sig, f"{inst}.{sig}")
                     for sig in self._accepted.get(region.name, {})
+                    if sig not in self._omitted_inputs
                 ]
                 reactions.append(
                     self._reemit(inst, r_simple, prefix=f"{simple}.{r_simple}.")
                 )
+                reactions += [
+                    self._port_reemit(inst, sig)
+                    for sig in self._exported.get(region.name, {})
+                ]
                 reactions += self._exit_resolutions(
                     inst, region.name, exit_stmts, scope, sent
                 )
@@ -760,6 +871,7 @@ class RosettaBuilder:
                         targets,
                         tuple(join_body),
                         sent,
+                        self._scope_ports(scope),
                     )
                 )
 
@@ -768,6 +880,7 @@ class RosettaBuilder:
             tuple(entry_effects),
             tuple(entry_body),
             sent,
+            self._scope_ports(scope),
         )
         return Mode(
             name=simple,
@@ -794,6 +907,12 @@ class RosettaBuilder:
             (f'{OUTPUT_PORT}.set("{prefix}" + {inst}.{OUTPUT_PORT}.value)',),
         )
 
+    def _port_reemit(self, inst: str, sig: str) -> Reaction:
+        """Forward a child's ported signal out of this scope's reactor."""
+        return Reaction(
+            (f"{inst}.{sig}",), (sig,), (f"{sig}.set({inst}.{sig}.value)",)
+        )
+
     def _exit_resolutions(
         self,
         inst: str,
@@ -818,6 +937,7 @@ class RosettaBuilder:
                     (effect,),
                     (*exit_stmts, set_line),
                     sent,
+                    self._scope_ports(scope),
                 )
             )
         return out
@@ -838,18 +958,28 @@ class RosettaBuilder:
         port = ports.setdefault(target, f"exit_{len(ports)}")
         return port, f"{port}.set(True)"
 
+    def _scope_ports(self, scope: str) -> tuple[str, ...]:
+        """Peer-accepted signals a scope sends (so its sends set ports)."""
+        return tuple(
+            sig
+            for sig in self._sent_by_scope.get(scope, {})
+            if sig in self._peer_accepts
+        )
+
     def _reaction(
         self,
         triggers: tuple[str, ...],
         effects: tuple[str, ...],
         body: tuple[str, ...],
         sent: list[str],
+        ports: tuple[str, ...] = (),
     ) -> Reaction:
-        """Build a reaction, declaring scheduled send actions as effects.
+        """Build a reaction, declaring scheduled actions and set ports.
 
         lfc's Python target passes only the names listed in the effects
         clause into the reaction function, so every reactor-level logical
-        action the body schedules must be declared as an effect.
+        action the body schedules and every output port the body sets must
+        be declared as an effect.
         """
         # Substring scan over our own codegen output; a signal name that is
         # a suffix of another ("Tick"/"RetryTick") may add a spurious effect,
@@ -859,7 +989,10 @@ class RosettaBuilder:
             for sig in sent
             if any(f"{sig}_act.schedule" in line for line in body)
         )
-        all_effects = tuple(dict.fromkeys((*effects, *scheduled)))
+        set_ports = (
+            sig for sig in ports if any(f"{sig}.set(" in line for line in body)
+        )
+        all_effects = tuple(dict.fromkeys((*effects, *scheduled, *set_ports)))
         return Reaction(triggers, all_effects, body)
 
     def _dispatch(
@@ -915,7 +1048,7 @@ class RosettaBuilder:
         return Mode(name=DONE_MODE, reactions=(entry,))
 
     def _root_reactions(
-        self, root: StateFact, sent: list[str]
+        self, root: StateFact, sent: list[str], ports: tuple[str, ...] = ()
     ) -> list[Reaction]:
         gen = self._codegen
         body = self._statements(root.entry_action, gen)
@@ -924,11 +1057,13 @@ class RosettaBuilder:
             body += self._statements(root.do_action, gen)
         out: list[Reaction] = []
         if body:
-            out.append(self._reaction(("startup",), (), tuple(body), sent))
+            out.append(
+                self._reaction(("startup",), (), tuple(body), sent, ports)
+            )
         exit_body = self._statements(root.exit_action, gen)
         if exit_body:
             out.append(
-                self._reaction(("shutdown",), (), tuple(exit_body), sent)
+                self._reaction(("shutdown",), (), tuple(exit_body), sent, ports)
             )
         return out
 
@@ -938,8 +1073,9 @@ class RosettaBuilder:
         codegen: LfPythonCodeGen,
     ) -> list[str]:
         return [
-            codegen.render_action(candidate)
+            line
             for candidate in actions.inline_actions(action)
+            for line in codegen.render_action(candidate).split("\n")
         ]
 
 

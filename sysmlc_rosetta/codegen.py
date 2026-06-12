@@ -177,6 +177,12 @@ class LfPythonCodeGen(PythonCodeGen):
             that renders outside of any reaction method.
         local_names: Names that are in scope as plain locals (e.g. accept
             payload parameters) and must not receive a ``self.`` prefix.
+        port_signals: Sent signals that a peer machine accepts, so the send
+            sets an LF output port instead of (or alongside) scheduling a
+            self-event.
+        self_signals: Port signals (subset of ``port_signals``) that this
+            machine also accepts itself, so the send both sets the port and
+            schedules the self-event.
     """
 
     def __init__(
@@ -187,12 +193,16 @@ class LfPythonCodeGen(PythonCodeGen):
         needs: PreambleNeeds | None = None,
         self_prefix: bool = True,
         local_names: frozenset[str] = frozenset(),
+        port_signals: frozenset[str] = frozenset(),
+        self_signals: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(context)
         self._attribute_names = attribute_names
         self._needs = needs if needs is not None else PreambleNeeds()
         self._self_prefix = self_prefix
         self._local_names = local_names
+        self._port_signals = port_signals
+        self._self_signals = self_signals
 
     @override
     def _emit_feature_reference(
@@ -259,19 +269,32 @@ class LfPythonCodeGen(PythonCodeGen):
 
     @override
     def render_send(self, send: syside.SendActionUsage) -> str:
-        """Translate a send into scheduling the signal's logical action.
+        """Translate a send into a port set, a self-event, or both.
 
-        Emits ``<Event>_act.schedule(0[, <Event>(<field>=<expr>, ...)])``; the
-        zero delay makes the event visible at the next microstep, like an
-        internally raised event.  When the payload carries arguments a
-        constructor call is emitted (matching the ``@dataclass`` generated in
-        the preamble); the no-argument form omits the second argument entirely.
+        Three forms are emitted, selected by the signal sets:
+
+        - **Default** (signal not in ``port_signals``): schedule the
+          signal's logical action, ``<Event>_act.schedule(0[, <Event>(...)])``;
+          the zero delay makes the event visible at the next microstep, like
+          an internally raised event.
+        - **Port-only** (signal in ``port_signals`` but not
+          ``self_signals``): a peer accepts the signal and this machine does
+          not, so set the LF output port, ``<Event>.set(<payload or True>)``.
+        - **Overlap** (signal in both sets): set the port *and* schedule the
+          self-event, since the signal is both ported to a peer and accepted
+          locally.
+
+        When the payload carries arguments a constructor call is emitted
+        (matching the ``@dataclass`` generated in the preamble); the
+        no-argument form sets the port to ``True`` and omits the schedule's
+        second argument entirely.
 
         Args:
             send: The ``send new <Type>(<args>)`` action to translate.
 
         Returns:
-            Python source for the ``schedule(...)`` call.
+            Python source for the resulting statement(s); the overlap form is
+            two lines separated by a newline.
 
         Raises:
             ValueError: If the payload is not a ``new <Type>(...)``
@@ -279,13 +302,22 @@ class LfPythonCodeGen(PythonCodeGen):
                 has no corresponding named attribute.
         """
         event_name, pairs = payload_signature(send)
-        if not pairs:
-            return f"{event_name}_act.schedule(0)"
         args = ", ".join(
             f"{name}={self.render_expression(argument)}"
             for name, argument in pairs
         )
-        return f"{event_name}_act.schedule(0, {event_name}({args}))"
+        payload = f"{event_name}({args})" if pairs else None
+        schedule = (
+            f"{event_name}_act.schedule(0, {payload})"
+            if payload
+            else f"{event_name}_act.schedule(0)"
+        )
+        if event_name not in self._port_signals:
+            return schedule
+        set_line = f"{event_name}.set({payload if payload else 'True'})"
+        if event_name in self._self_signals:
+            return f"{set_line}\n{schedule}"
+        return set_line
 
     @override
     def _emit(self, expr: syside.Expression, parent_precedence: int = 0) -> str:
