@@ -176,3 +176,4 @@ def test_rig_pair_serializes_to_lf() -> None:
     assert "reactor PlantRig {" in text
     assert "main reactor {" in text
     assert text.index("reactor Plant ") < text.index("reactor PlantRig")
+    assert "m = new PlantRig()" in text

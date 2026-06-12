@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 
 import syside
 
@@ -48,6 +49,10 @@ def build_rig_program(model: syside.Model, rig_qn: str) -> LfProgram:
             f"signal(s) {sorted(both)!r} are sent by both machines; "
             "bidirectional same-name signals are not supported"
         )
+    # These interface-scan sets are BY CONSTRUCTION the same facts the
+    # builder consumes: both run the same StateMachineDriver over the same
+    # model, so the builder's ported outputs are exactly sent ∩ peer.accepted.
+    # The warning therefore agrees with the actual wiring produced below.
     for usage, face, peer in (
         (usage_a, face_a, face_b),
         (usage_b, face_b, face_a),
@@ -78,7 +83,8 @@ def build_rig_program(model: syside.Model, rig_qn: str) -> LfProgram:
     rig_name = _simple(rig_qn)
     names = [r.name for r in (*prog_a.reactors, *prog_b.reactors)]
     names.append(rig_name)
-    duplicates = {name for name in names if names.count(name) > 1}
+    counts = Counter(names)
+    duplicates = {name for name, n in counts.items() if n > 1}
     if duplicates:
         raise UnsupportedConstructError(
             f"reactor name(s) {sorted(duplicates)!r} collide across the "
@@ -128,6 +134,9 @@ def _cross(
     for sig in source.outputs:
         if sig == OUTPUT_PORT:
             continue
-        assert sig in target.inputs, sig
+        assert sig in target.inputs, (
+            f"{sig!r} missing from {target.name!r} inputs; "
+            "interface scan and builder disagree"
+        )
         out.append(Connection(f"{source_inst}.{sig}", f"{target_inst}.{sig}"))
     return out
