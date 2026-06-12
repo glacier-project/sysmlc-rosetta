@@ -6,8 +6,10 @@ import pytest
 import syside
 
 from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
+from sysmlc.backends.rosetta.composition import build_rig_program
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
+from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import machine_interface
 from sysmlc.sysml.loading import load_model
@@ -129,3 +131,48 @@ def test_overlap_send_emits_both_forms() -> None:
     text = to_lf(program)
     assert "Tick.set(True)" in text
     assert "Tick_act.schedule(0)" in text  # local accept still served
+
+
+def test_rig_program_composes_bench_reactor() -> None:
+    model = load_model(FIXTURES_DIR / "rig-pair")
+    program = build_rig_program(model, "RigPair::PlantRig")
+    bench = program.reactor
+    assert bench.name == "PlantRig"
+    assert [i.name for i in bench.instantiations] == ["plant", "tb"]
+    assert [i.reactor for i in bench.instantiations] == [
+        "Plant",
+        "PlantTest",
+    ]
+    connections = {(c.source, c.target) for c in bench.connections}
+    assert ("plant.Done", "tb.Done") in connections
+    assert ("tb.Go", "plant.Go") in connections
+    assert ("plant.current_state", "plant_current_state") in connections
+    assert ("tb.current_state", "tb_current_state") in connections
+    assert set(bench.outputs) == {
+        "plant_current_state",
+        "tb_current_state",
+    }
+    # Machine families both present, bench last.
+    names = [r.name for r in program.reactors]
+    assert names[-1] == "PlantRig"
+    assert "Plant" in names and "PlantTest" in names
+
+
+def test_rig_with_same_def_twice_is_rejected() -> None:
+    model = load_model(FIXTURES_DIR / "rig-invalid")
+    with pytest.raises(UnsupportedConstructError, match="twice"):
+        build_rig_program(model, "RigInvalid::Twice")
+
+
+def test_signal_sent_by_both_machines_is_rejected() -> None:
+    model = load_model(FIXTURES_DIR / "rig-invalid")
+    with pytest.raises(UnsupportedConstructError, match="both machines"):
+        build_rig_program(model, "RigInvalid::BothSend")
+
+
+def test_rig_pair_serializes_to_lf() -> None:
+    model = load_model(FIXTURES_DIR / "rig-pair")
+    text = to_lf(build_rig_program(model, "RigPair::PlantRig"))
+    assert "reactor PlantRig {" in text
+    assert "main reactor {" in text
+    assert text.index("reactor Plant ") < text.index("reactor PlantRig")
