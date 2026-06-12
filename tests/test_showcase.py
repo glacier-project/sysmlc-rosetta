@@ -226,3 +226,108 @@ def test_thermostat_constraints_follow_assignments() -> None:
     # The entry reaction announces but assigns nothing: no checks there.
     entry = heating.reactions[0]
     assert not any(line.startswith("assert ") for line in entry.body)
+
+
+# -- flagship case studies: milling workcell and batch reactor --
+
+
+def test_milling_workcell_builds_nested_reactor_family() -> None:
+    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    assert [r.name for r in program.reactors] == [
+        "MillingWorkcell_homing",
+        "MillingWorkcell_producing_machining_spindle",
+        "MillingWorkcell_producing_machining_coolant",
+        "MillingWorkcell_producing_machining_monitor",
+        "MillingWorkcell_producing",
+        "MillingWorkcell",
+    ]
+    assert [p.name for p in program.reactor.parameters] == [
+        "batchSize",
+        "toolWearLimit",
+        "wearPerPiece",
+        "maxRetries",
+    ]
+
+
+def test_milling_workcell_deep_exit_propagates_two_scopes() -> None:
+    # monitor.tripped exits to the ROOT's faultRecovery: the region raises
+    # exit_0, the producing reactor re-raises it, the root resolves it.
+    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    monitor = program.reactors[3]
+    assert "exit_0" in monitor.outputs
+    producing = program.reactors[4]
+    assert "exit_0" in producing.outputs
+    (machining,) = [m for m in producing.modes if m.name == "machining"]
+    (reraise,) = [
+        r for r in machining.reactions if r.triggers == ("c_monitor.exit_0",)
+    ]
+    assert reraise.effects == ("exit_0",)
+    root_producing = _mode(program, "producing")
+    (resolve,) = [
+        r
+        for r in root_producing.reactions
+        if r.triggers == ("c_producing.exit_0",)
+    ]
+    assert resolve.effects == ("reset(faultRecovery)",)
+
+
+def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
+    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    producing = _mode(program, "producing")
+    (completion,) = [
+        r
+        for r in producing.reactions
+        if r.triggers == ("c_producing.completed",)
+    ]
+    body = "\n".join(completion.body)
+    assert "if self.produced + 1 < self.batchSize:" in body
+    assert "BatchReport_act.schedule" in body
+    assert "SysML constraint wearWithinLimit violated" in body
+
+
+def test_batch_reactor_parallel_regions_and_payload_guard() -> None:
+    program = _build("batch-reactor", "BatchReactor::BatchReactor")
+    assert [r.name for r in program.reactors] == [
+        "BatchReactor_reacting_agitation",
+        "BatchReactor_reacting_ventWatch",
+        "BatchReactor",
+    ]
+    vent_watch = program.reactors[1]
+    (watching,) = [m for m in vent_watch.modes if m.name == "watching"]
+    (guard_reaction,) = [
+        r for r in watching.reactions if "PressureReading" in r.triggers
+    ]
+    assert guard_reaction.body[0] == "reading = PressureReading.value"
+    assert guard_reaction.body[1] == "if reading.bar >= 9.0:"
+
+
+def test_batch_reactor_saturating_dynamics_use_whitelist() -> None:
+    program = _build("batch-reactor", "BatchReactor::BatchReactor")
+    filling = _mode(program, "filling")
+    timer_reaction = filling.reactions[1]
+    assert (
+        "self.level = min(self.level + self.inflowRate, self.tankCapacity)"
+        in timer_reaction.body
+    )
+
+
+def test_showcase_values_examples_configure_and_build() -> None:
+    # Every shipped values.yaml must configure its model and build.
+    import pytest
+
+    from sysmlc.values import configure_model, load_values, select_values
+
+    examples = [
+        ("thermostat", "Thermostat::Thermostat"),
+        ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
+        ("batch-reactor", "BatchReactor::BatchReactor"),
+    ]
+    for example, qn in examples:
+        values_file = SHOWCASE_DIR / example / "values.yaml"
+        if not values_file.exists():
+            pytest.fail(f"missing values.yaml for {example}")
+        model = load_model(SHOWCASE_DIR / example)
+        overrides = select_values(load_values(values_file), qn)
+        assert overrides, f"values.yaml for {example} selects nothing"
+        program = build_program(configure_model(model, qn, overrides), qn)
+        assert program.reactor.name == qn.split("::")[-1]

@@ -468,3 +468,188 @@ def test_showcase_furuta_pendulum(tmp_path: Path) -> None:
         drivers=drivers,
     )
     assert states == ["swingUp", "catching", "stabilizing", "swingUp"]
+
+
+_WORKCELL_PIECE = [
+    "producing.loadPart",
+    "producing.machining.monitor.watching",
+    "producing.machining.coolant.flowing",
+    "producing.machining.spindle.cutting",
+    "producing.machining.coolant.done",
+    "producing.machining.spindle.done",
+    "producing.machining.monitor.done",
+    "producing.unloadPart",
+    "producing.done",
+]
+
+_WORKCELL_POWER_UP = [
+    "cold",
+    "homing.axisX",
+    "homing.axisY",
+    "homing.axisZ",
+    "homing.done",
+    "ready",
+]
+
+
+def test_showcase_milling_workcell_batch(tmp_path: Path) -> None:
+    # Power-up homing, a 2-piece batch (values override), shutdown: every
+    # piece runs load -> parallel machining (join) -> unload -> completion.
+    drivers = (
+        "  timer power(100 msec)\n"
+        "  reaction(power) -> m.PowerOn {=\n"
+        "    m.PowerOn.set(True)\n"
+        "  =}\n"
+        "  timer start(1200 msec)\n"
+        "  reaction(start) -> m.StartBatch {=\n"
+        "    m.StartBatch.set(True)\n"
+        "  =}\n"
+        "  timer off(7 sec)\n"
+        "  reaction(off) -> m.Shutdown {=\n"
+        "    m.Shutdown.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "milling-workcell",
+        "MillingWorkcell::MillingWorkcell",
+        timeout="10 sec",
+        drivers=drivers,
+        values={"batchSize": 2},
+    )
+    assert states == [
+        *_WORKCELL_POWER_UP,
+        *_WORKCELL_PIECE,
+        *_WORKCELL_PIECE,
+        "ready",
+        "done",
+    ]
+
+
+def test_showcase_milling_workcell_fault_retry(tmp_path: Path) -> None:
+    # A strong vibration reading trips the monitor mid-cut: the region
+    # deep-exits TWO scopes into faultRecovery, triage retries, and the
+    # piece completes on the second attempt.
+    drivers = (
+        "  timer power(100 msec)\n"
+        "  reaction(power) -> m.PowerOn {=\n"
+        "    m.PowerOn.set(True)\n"
+        "  =}\n"
+        "  timer start(1200 msec)\n"
+        "  reaction(start) -> m.StartBatch {=\n"
+        "    m.StartBatch.set(True)\n"
+        "  =}\n"
+        "  timer spike(2200 msec)\n"
+        "  reaction(spike) -> m.VibrationSpike {=\n"
+        '    m.VibrationSpike.set(sys.modules["types"]'
+        ".SimpleNamespace(level=5))\n"
+        "  =}\n"
+        "  timer off(8 sec)\n"
+        "  reaction(off) -> m.Shutdown {=\n"
+        "    m.Shutdown.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "milling-workcell",
+        "MillingWorkcell::MillingWorkcell",
+        timeout="10 sec",
+        drivers=drivers,
+        values={"batchSize": 1},
+    )
+    assert states == [
+        *_WORKCELL_POWER_UP,
+        "producing.loadPart",
+        "producing.machining.monitor.watching",
+        "producing.machining.coolant.flowing",
+        "producing.machining.spindle.cutting",
+        "producing.machining.monitor.tripped",
+        "faultRecovery",
+        "triage",
+        *_WORKCELL_PIECE,
+        "ready",
+        "done",
+    ]
+
+
+_REACTOR_VALUES = {
+    "batchTarget": 1,
+    "inflowRate": 60.0,
+    "heatRate": 65.0,
+    "coolRate": 60.0,
+    "drainRate": 60.0,
+}
+
+
+def test_showcase_batch_reactor_recipe(tmp_path: Path) -> None:
+    # One sped-up batch: closed-loop fill/heat, the parallel reaction
+    # stage joining agitation and the watchdog window, cool, drain, stop.
+    drivers = (
+        "  timer go(200 msec)\n"
+        "  reaction(go) -> m.StartRecipe {=\n"
+        "    m.StartRecipe.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "batch-reactor",
+        "BatchReactor::BatchReactor",
+        timeout="20 sec",
+        drivers=drivers,
+        values=_REACTOR_VALUES,
+    )
+    assert states == [
+        "idle",
+        "filling",
+        "filling",
+        "heating",
+        "heating",
+        "reacting.ventWatch.watching",
+        "reacting.agitation.settling",
+        "reacting.agitation.done",
+        "reacting.ventWatch.done",
+        "cooling",
+        "cooling",
+        "draining",
+        "draining",
+        "done",
+    ]
+
+
+def test_showcase_batch_reactor_overpressure(tmp_path: Path) -> None:
+    # A 9.5 bar reading trips the watchdog: deep exit into emergency
+    # venting, then the recipe degrades gracefully to cooling/draining.
+    drivers = (
+        "  timer go(200 msec)\n"
+        "  reaction(go) -> m.StartRecipe {=\n"
+        "    m.StartRecipe.set(True)\n"
+        "  =}\n"
+        "  timer surge(3 sec)\n"
+        "  reaction(surge) -> m.PressureReading {=\n"
+        '    m.PressureReading.set(sys.modules["types"]'
+        ".SimpleNamespace(bar=9.5))\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "batch-reactor",
+        "BatchReactor::BatchReactor",
+        timeout="20 sec",
+        drivers=drivers,
+        values=_REACTOR_VALUES,
+    )
+    assert states == [
+        "idle",
+        "filling",
+        "filling",
+        "heating",
+        "heating",
+        "reacting.ventWatch.watching",
+        "reacting.ventWatch.overpressure",
+        "venting",
+        "cooling",
+        "cooling",
+        "draining",
+        "draining",
+        "done",
+    ]
