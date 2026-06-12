@@ -24,11 +24,12 @@ _FUNCTIONS: Final[dict[str, tuple[str, bool]]] = {
 
 
 class PreambleNeeds:
-    """Collects everything the generated LF preamble must declare.
+    """Collects and renders everything the generated LF preamble declares.
 
     The builder owns one instance and shares it with every code generator;
-    rendering registers enum defs, payload item defs, and ``math`` usage as
-    they are encountered.
+    rendering registers enum defs, payload item defs, and ``math`` /
+    ``SimpleNamespace`` usage as they are encountered, and
+    :meth:`preamble_lines` assembles the preamble source lines from them.
     """
 
     def __init__(self) -> None:
@@ -132,8 +133,9 @@ class PreambleNeeds:
     def preamble_lines(self) -> list[str]:
         """Assemble the LF preamble: imports, enum classes, payloads.
 
-        Line order is pinned by golden tests: math import, SimpleNamespace
-        import, enum classes, payload dataclasses.
+        Imports precede the class blocks that rely on them.  Line order is
+        pinned by golden tests: math import, SimpleNamespace import, enum
+        classes, payload dataclasses.
         """
         lines: list[str] = []
         if self.uses_math:
