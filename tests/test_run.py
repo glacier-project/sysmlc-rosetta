@@ -529,9 +529,10 @@ def test_microwave_rig_verdict(tmp_path: Path) -> None:
         timeout="10 sec",
     )
     assert process.returncode == 0, process.stderr
-    # cooking.heating is overwritten by sub-state announcements at the same
-    # tag; the substring check matches cooking.heating.turntable.rotating etc.
-    assert "cooking.heating" in " ".join(states["plant"])
+    # cooking.heating.turntable.rotating is the deepest-path announcement at
+    # the composite entry tag (heater and turntable both enter, but turntable
+    # is declared last so its announcement overwrites heater's at the same tag).
+    assert "cooking.heating.turntable.rotating" in states["plant"]
     assert states["plant"][-1] == "idle"
     assert states["tb"][-1] == "done"
 
