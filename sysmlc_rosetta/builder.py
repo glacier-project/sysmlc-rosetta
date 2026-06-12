@@ -129,9 +129,16 @@ class RosettaBuilder:
         # scope -> signals that scope's reactor must output (its own
         # peer-accepted sends plus those of its descendants).
         self._exported: dict[str, dict[str, None]] = {}
-        self._omitted_inputs: frozenset[str] = frozenset()
+        # _port_sigs: machine-level sends that become output ports
+        #   (root exports).
         self._port_sigs: frozenset[str] = frozenset()
+        # _self_sigs: ported sigs ALSO accepted locally → render both
+        #   a port set and a self-event.
         self._self_sigs: frozenset[str] = frozenset()
+        # _omitted_inputs: signals dropped from input ports; deliberately
+        #   identity-equal to _port_sigs today (named separately because
+        #   use sites read "interface rule" vs "codegen rule").
+        self._omitted_inputs: frozenset[str] = frozenset()
         # Populated during assembly:
         self._exit_ports: dict[str, dict[str, str]] = {}
         self._needs_done: set[str] = set()
@@ -353,6 +360,7 @@ class RosettaBuilder:
                         sig, None
                     )
         self._port_sigs = frozenset(self._exported.get("", {}))
+        # Intentional alias; see __init__ docstring for the field.
         self._omitted_inputs = self._port_sigs
         self._self_sigs = frozenset(
             sig
@@ -983,7 +991,8 @@ class RosettaBuilder:
         """
         # Substring scan over our own codegen output; a signal name that is
         # a suffix of another ("Tick"/"RetryTick") may add a spurious effect,
-        # which LF treats as benign (the action is simply never triggered).
+        # which LF treats as benign (the action is never triggered / the
+        # port is never set).
         scheduled = (
             f"{sig}_act"
             for sig in sent
