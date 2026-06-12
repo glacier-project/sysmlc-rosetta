@@ -13,6 +13,10 @@ For each model directory under ``models/showcase/``:
    runs finish instantly regardless of model timing — and ``lfc`` compiles
    it. (The observer also gives the project a distinct main-reactor name;
    compiling ``<Name>.lf`` directly would clash with its own trivial main.)
+   When the build produces a **rig bench** reactor (outputs named
+   ``<usage>_current_state``), the observer subscribes to each stream and
+   labels every announcement ``STATE <usage>: <value>`` instead of the
+   bare ``STATE: <value>`` used by single-machine builds.
 3. **Run**: the binary executes and the observed state sequence is
    reported.
 
@@ -30,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -52,6 +57,23 @@ main reactor {{
   =}}
 }}
 """
+
+RIG_APP_TEMPLATE = """target Python {{
+  fast: true,
+  timeout: {timeout}
+}}
+
+import {reactor} from "{reactor}.lf"
+
+main reactor {{
+  m = new {reactor}()
+{observers}
+}}
+"""
+
+RIG_OBSERVER = """  reaction(m.{port}) {{=
+    print(f"STATE {label}: {{m.{port}.value}}")
+  =}}"""
 
 # Demo stimuli per model (mirroring tests/backends/rosetta/test_run.py).
 # Payloads are duck-typed SimpleNamespace stand-ins; sys is the
@@ -208,10 +230,26 @@ def _run_model(
     (machine,) = [f for f in src.glob("*.lf") if not f.stem.endswith("App")]
     reactor = machine.stem
     app = src / f"{reactor}App.lf"
-    drivers = DRIVERS.get(name, "") if use_drivers else ""
-    app.write_text(
-        APP_TEMPLATE.format(reactor=reactor, timeout=timeout, drivers=drivers)
+    streams = re.findall(
+        r"^\s*output (\w+)_current_state$", machine.read_text(), re.M
     )
+    if streams:
+        observers = "\n".join(
+            RIG_OBSERVER.format(port=f"{label}_current_state", label=label)
+            for label in streams
+        )
+        app.write_text(
+            RIG_APP_TEMPLATE.format(
+                reactor=reactor, timeout=timeout, observers=observers
+            )
+        )
+    else:
+        drivers = DRIVERS.get(name, "") if use_drivers else ""
+        app.write_text(
+            APP_TEMPLATE.format(
+                reactor=reactor, timeout=timeout, drivers=drivers
+            )
+        )
     compiled = subprocess.run(
         ["lfc", str(app)], capture_output=True, text=True, timeout=600
     )
@@ -226,8 +264,11 @@ def _run_model(
     )
     states = [
         line.removeprefix("STATE: ")
-        for line in ran.stdout.splitlines()
         if line.startswith("STATE: ")
+        else f"{line.removeprefix('STATE ').split(': ', 1)[0]}: "
+        + line.split(": ", 1)[1]
+        for line in ran.stdout.splitlines()
+        if line.startswith("STATE")
     ]
     if ran.returncode != 0:
         return Result(name, "run", False, states, ran.stderr.strip()[-200:])
