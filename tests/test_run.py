@@ -299,7 +299,29 @@ def test_showcase_traffic_light(tmp_path: Path) -> None:
         timeout="6 sec",
         drivers=drivers,
     )
-    assert states == ["showRed", "showGreen", "showYellow"]
+    # walkRequest is a transient latch that announces immediately before
+    # transitioning to showYellow; it appears when PedestrianRequest is
+    # accepted (see traffic_light.sysml for the LF modal microstep rationale).
+    assert states == ["showRed", "showGreen", "walkRequest", "showYellow"]
+
+
+def test_traffic_light_rig_verdict(tmp_path: Path) -> None:
+    # TrafficLightRig: testbench waits 5 s, then sends PedestrianRequest from
+    # the walkWait entry action (one microstep after the mode is active, so
+    # reaction(WalkOn) fires in walkWait, not waitGreen). Plant enters the
+    # transient walkRequest state, announces WalkOn, then showYellow. Verdict
+    # passes (exit 0).
+    process, states = run_rig(
+        tmp_path,
+        SHOWCASE_DIR / "traffic-light",
+        "TrafficLight::TrafficLightRig",
+        timeout="20 sec",
+    )
+    assert process.returncode == 0, process.stderr
+    # walkRequest is the unique landmark: it is only entered when a
+    # PedestrianRequest is accepted while showGreen is active.
+    assert "walkRequest" in states["plant"]
+    assert states["tb"][-1] == "done"
 
 
 def test_showcase_stopwatch(tmp_path: Path) -> None:

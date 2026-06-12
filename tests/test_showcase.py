@@ -43,9 +43,15 @@ def test_traffic_light_enum_literals_in_bodies_and_init() -> None:
 
 def test_traffic_light_structure() -> None:
     program = _build("traffic-light", "TrafficLight::TrafficLight")
+    # walkRequest is a transient latch entered when PedestrianRequest is
+    # accepted; its eventless completion transition sends WalkOn via commPort
+    # at the next microstep, ensuring the testbench is settled in walkWait
+    # before WalkOn arrives (LF modal mode transitions take effect one
+    # microstep after the triggering reaction).
     assert [m.name for m in program.reactor.modes] == [
         "showRed",
         "showGreen",
+        "walkRequest",
         "showYellow",
     ]
     assert program.reactor.inputs == ("PedestrianRequest",)
