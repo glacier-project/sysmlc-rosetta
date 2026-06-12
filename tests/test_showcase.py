@@ -321,6 +321,8 @@ def test_showcase_values_examples_configure_and_build() -> None:
         ("thermostat", "Thermostat::Thermostat"),
         ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
         ("batch-reactor", "BatchReactor::BatchReactor"),
+        ("charging-station", "ChargingStation::ChargingStation"),
+        ("level-crossing", "LevelCrossing::LevelCrossing"),
     ]
     for example, qn in examples:
         values_file = SHOWCASE_DIR / example / "values.yaml"
@@ -331,3 +333,75 @@ def test_showcase_values_examples_configure_and_build() -> None:
         assert overrides, f"values.yaml for {example} selects nothing"
         program = build_program(configure_model(model, qn, overrides), qn)
         assert program.reactor.name == qn.split("::")[-1]
+
+
+# -- charging station and level crossing --
+
+
+def test_charging_station_priority_guards_derate_first() -> None:
+    # Declaration order is firing priority: in `bulk`, thermal derating
+    # preempts the energy threshold.
+    program = _build("charging-station", "ChargingStation::ChargingStation")
+    assert [r.name for r in program.reactors] == [
+        "ChargingStation_handshake",
+        "ChargingStation",
+    ]
+    bulk = _mode(program, "bulk")
+    entry = bulk.reactions[0]
+    body = list(entry.body)
+    cooling_at = body.index("if self.temperature >= self.tempLimit:")
+    topoff_at = body.index(
+        "elif self.sessionEnergy >= self.targetEnergy * 0.9:"
+    )
+    assert cooling_at < topoff_at
+
+
+def test_charging_station_auth_dispatch_and_timeout() -> None:
+    program = _build("charging-station", "ChargingStation::ChargingStation")
+    authorizing = _mode(program, "authorizing")
+    (auth,) = [r for r in authorizing.reactions if "AuthResult" in r.triggers]
+    assert auth.body[0] == "r = AuthResult.value"
+    assert auth.body[1] == "if r.code == 1:"
+    # The timeout is an attribute-duration logical action scheduled on
+    # entry.
+    (action,) = authorizing.actions
+    assert action.name == "after_authorizing_act"
+
+
+def test_level_crossing_reactor_family_and_fault_paths() -> None:
+    program = _build("level-crossing", "LevelCrossing::LevelCrossing")
+    assert [r.name for r in program.reactors] == [
+        "LevelCrossing_securing",
+        "LevelCrossing_closed_bellCycle",
+        "LevelCrossing_closed_passage",
+        "LevelCrossing_opening",
+        "LevelCrossing",
+    ]
+    securing = program.reactors[0]
+    assert "exit_0" in securing.outputs
+    root_securing = _mode(program, "securing")
+    (resolve,) = [
+        r
+        for r in root_securing.reactions
+        if r.triggers == ("c_securing.exit_0",)
+    ]
+    assert resolve.effects == ("reset(failSafe)",)
+
+
+def test_level_crossing_join_mixes_timer_and_signal_regions() -> None:
+    # The closed state's join waits for a time-driven region (bellCycle)
+    # AND a signal-driven one (passage).
+    program = _build("level-crossing", "LevelCrossing::LevelCrossing")
+    passage = program.reactors[2]
+    (waiting,) = [m for m in passage.modes if m.name == "waiting"]
+    (passed,) = [r for r in waiting.reactions if "TrainPassed" in r.triggers]
+    assert passed.effects == ("reset(done)",)
+    closed = _mode(program, "closed")
+    (join,) = [
+        r
+        for r in closed.reactions
+        if r.triggers == ("c_bellCycle.completed", "c_passage.completed")
+    ]
+    assert "if self.closed_bellCycle_done and self.closed_passage_done:" in (
+        join.body
+    )

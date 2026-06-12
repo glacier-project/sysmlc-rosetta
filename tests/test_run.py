@@ -653,3 +653,194 @@ def test_showcase_batch_reactor_overpressure(tmp_path: Path) -> None:
         "draining",
         "done",
     ]
+
+
+_STATION_HANDSHAKE = [
+    "idle",
+    "handshake.checkCable",
+    "handshake.lockConnector",
+    "handshake.done",
+    "authorizing",
+]
+
+
+def test_showcase_charging_station_session(tmp_path: Path) -> None:
+    # Denied then granted authorization, a three-phase charge with a
+    # thermal-derating detour (priority guards), early finish, idle.
+    drivers = (
+        "  timer plug(200 msec)\n"
+        "  reaction(plug) -> m.PlugIn {=\n"
+        "    m.PlugIn.set(True)\n"
+        "  =}\n"
+        "  timer deny(1200 msec)\n"
+        "  reaction(deny) -> m.AuthResult {=\n"
+        '    m.AuthResult.set(sys.modules["types"]'
+        ".SimpleNamespace(code=7))\n"
+        "  =}\n"
+        "  timer grant(1600 msec)\n"
+        "  reaction(grant) -> m.AuthResult {=\n"
+        '    m.AuthResult.set(sys.modules["types"]'
+        ".SimpleNamespace(code=1))\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "charging-station",
+        "ChargingStation::ChargingStation",
+        timeout="12 sec",
+        drivers=drivers,
+        values={"tempLimit": 45.0, "coolThreshold": 40.0},
+    )
+    assert states == [
+        *_STATION_HANDSHAKE,
+        "authRetry",
+        "authorizing",
+        "rampUp",
+        "rampUp",
+        "rampUp",
+        "bulk",
+        "bulk",
+        "bulk",
+        "cooling",
+        "cooling",
+        "bulk",
+        "topOff",
+        "finishing",
+        "idle",
+    ]
+
+
+def test_showcase_charging_station_auth_exhaustion(tmp_path: Path) -> None:
+    # A denial, a timeout, and a second denial burn the retry budget; the
+    # station latches `faulted` until an operator reset.
+    drivers = (
+        "  timer plug(200 msec)\n"
+        "  reaction(plug) -> m.PlugIn {=\n"
+        "    m.PlugIn.set(True)\n"
+        "  =}\n"
+        "  timer deny1(1200 msec)\n"
+        "  reaction(deny1) -> m.AuthResult {=\n"
+        '    m.AuthResult.set(sys.modules["types"]'
+        ".SimpleNamespace(code=7))\n"
+        "  =}\n"
+        "  timer deny2(4 sec)\n"
+        "  reaction(deny2) -> m.AuthResult {=\n"
+        '    m.AuthResult.set(sys.modules["types"]'
+        ".SimpleNamespace(code=9))\n"
+        "  =}\n"
+        "  timer fix(5 sec)\n"
+        "  reaction(fix) -> m.Reset {=\n"
+        "    m.Reset.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "charging-station",
+        "ChargingStation::ChargingStation",
+        timeout="6 sec",
+        drivers=drivers,
+    )
+    assert states == [
+        *_STATION_HANDSHAKE,
+        "authRetry",
+        "authorizing",
+        "authRetry",
+        "authorizing",
+        "authRetry",
+        "faulted",
+        "idle",
+    ]
+
+
+_CROSSING_SECURING = [
+    "securing.warnLights",
+    "securing.bell",
+    "securing.barrierDown",
+]
+
+
+def test_showcase_level_crossing_passage(tmp_path: Path) -> None:
+    # The closed state's join releases the crossing only when the bell
+    # cycle has finished AND the train has passed.
+    drivers = (
+        "  timer approach(300 msec)\n"
+        "  reaction(approach) -> m.TrainApproaching {=\n"
+        "    m.TrainApproaching.set(True)\n"
+        "  =}\n"
+        "  timer passed(4 sec)\n"
+        "  reaction(passed) -> m.TrainPassed {=\n"
+        "    m.TrainPassed.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "level-crossing",
+        "LevelCrossing::LevelCrossing",
+        timeout="7 sec",
+        drivers=drivers,
+    )
+    assert states == [
+        "open",
+        *_CROSSING_SECURING,
+        "securing.done",
+        "closed.passage.waiting",
+        "closed.bellCycle.quiet",
+        "closed.bellCycle.done",
+        "closed.passage.done",
+        "opening.barrierUp",
+        "opening.lightsOff",
+        "opening.done",
+        "open",
+    ]
+
+
+def test_showcase_level_crossing_fault_paths(tmp_path: Path) -> None:
+    # A severe fault while lowering deep-exits the securing sequence; a
+    # later fault while closed is a group interrupt — both latch the
+    # fail-safe until reset, and the crossing never reopens on its own.
+    drivers = (
+        "  timer t1(300 msec)\n"
+        "  reaction(t1) -> m.TrainApproaching {=\n"
+        "    m.TrainApproaching.set(True)\n"
+        "  =}\n"
+        "  timer f1(1300 msec)\n"
+        "  reaction(f1) -> m.BarrierFault {=\n"
+        '    m.BarrierFault.set(sys.modules["types"]'
+        ".SimpleNamespace(severity=3))\n"
+        "  =}\n"
+        "  timer r1(2500 msec)\n"
+        "  reaction(r1) -> m.Reset {=\n"
+        "    m.Reset.set(True)\n"
+        "  =}\n"
+        "  timer t2(3 sec)\n"
+        "  reaction(t2) -> m.TrainApproaching {=\n"
+        "    m.TrainApproaching.set(True)\n"
+        "  =}\n"
+        "  timer f2(5300 msec)\n"
+        "  reaction(f2) -> m.BarrierFault {=\n"
+        '    m.BarrierFault.set(sys.modules["types"]'
+        ".SimpleNamespace(severity=1))\n"
+        "  =}\n"
+        "  timer r2(6500 msec)\n"
+        "  reaction(r2) -> m.Reset {=\n"
+        "    m.Reset.set(True)\n"
+        "  =}"
+    )
+    states = run_machine(
+        tmp_path,
+        SHOWCASE_DIR / "level-crossing",
+        "LevelCrossing::LevelCrossing",
+        timeout="8 sec",
+        drivers=drivers,
+    )
+    assert states == [
+        "open",
+        *_CROSSING_SECURING,
+        "failSafe",
+        "open",
+        *_CROSSING_SECURING,
+        "securing.done",
+        "closed.passage.waiting",
+        "failSafe",
+        "open",
+    ]
