@@ -71,6 +71,7 @@ main reactor {{
 }}
 """
 
+# Per-stream reaction snippet joined with "\n"; indentation is load-bearing.
 RIG_OBSERVER = """  reaction(m.{port}) {{=
     print(f"STATE {label}: {{m.{port}.value}}")
   =}}"""
@@ -165,6 +166,18 @@ DRIVERS: dict[str, str] = {
 }
 
 
+def _parse_state_line(line: str) -> str:
+    """Normalize a STATE stdout line to its reported value.
+
+    Single-machine observers print ``STATE: <value>``; rig observers
+    print ``STATE <usage>: <value>``. The former yields ``<value>``,
+    the latter ``<usage>: <value>``.
+    """
+    if line.startswith("STATE: "):
+        return line.removeprefix("STATE: ")
+    return line.removeprefix("STATE ")
+
+
 @dataclass
 class Result:
     """Outcome of one model's build/compile/run pipeline."""
@@ -233,7 +246,7 @@ def _run_model(
     streams = re.findall(
         r"^\s*output (\w+)_current_state$", machine.read_text(), re.M
     )
-    if streams:
+    if streams:  # rig models drive themselves; DRIVERS are not injected
         observers = "\n".join(
             RIG_OBSERVER.format(port=f"{label}_current_state", label=label)
             for label in streams
@@ -263,10 +276,7 @@ def _run_model(
         [str(binary)], capture_output=True, text=True, timeout=300
     )
     states = [
-        line.removeprefix("STATE: ")
-        if line.startswith("STATE: ")
-        else f"{line.removeprefix('STATE ').split(': ', 1)[0]}: "
-        + line.split(": ", 1)[1]
+        _parse_state_line(line)
         for line in ran.stdout.splitlines()
         if line.startswith("STATE")
     ]
