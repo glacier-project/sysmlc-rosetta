@@ -113,6 +113,7 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   exit-all-then-effect ordering.)
 - **Deep entry** (`idle` → `running.hot` from outside) — **rejected**:
   entering an LF mode always activates contained reactors' initial modes.
+  Scheduled to graduate via a synthesized entry dispatch (§10).
 - An eventless self-loop with no event, timer, or effect is rejected as
   unstable.
 
@@ -126,7 +127,8 @@ child reactor, and the parent's mode forwards them down
 
 - **Payload access**: `accept r : Reading` binds the payload first
   (`r = Reading.value`), so guards and effects can read `r.value`.
-  Payloads are duck-typed; payload **writes** are rejected (Tier-3).
+  Payloads are duck-typed; payload **writes** are rejected today
+  (scheduled to graduate with copy-on-accept semantics — §10).
 - **`accept after 4 [s]`** (literal) → a mode-local timer
   (`timer t_showRed(4 sec)`); names are state-qualified because lfc
   flattens mode-local declarations per reactor. An `after` self-loop
@@ -135,26 +137,27 @@ child reactor, and the parent's mode forwards them down
   action scheduled on entry with the attribute's value (seconds → ns).
 - **`after` + `if`** is supported (the guard is evaluated when the timer
   fires) — a capability the quake backend must reject.
-- **`accept at` / `accept when`** → rejected (not yet mapped).
+- **`accept at` / `accept when`** → rejected today; both are scheduled
+  to graduate (§10).
 
 **`send new Sig(...) via port`** schedules a reactor-level logical action
 `Sig_act` at the current tag (a self-event). If the machine also accepts
 `Sig`, accepting reactions trigger on `(Sig, Sig_act)` and read whichever
 is present, so external and internal events are indistinguishable. A
 signal sent in one composite scope but accepted in another is **rejected**
-(cross-scope event routing belongs to the parts/ports increment). The
+today (scheduled to graduate with the testbench increment — §10). The
 `via` port is captured but not yet part of event identity.
 
 ## 5. Attributes
 
 Declared on the state def (root scope only — state-scoped attributes are
-rejected):
+rejected today; scope-local support is scheduled, §10):
 
 | Declaration | LF |
 |---|---|
 | `in attribute setpoint : Real default 21.0` | reactor **parameter** `setpoint = {= 21.0 =}` (override at `new`) |
 | `attribute temperature : Real := 18.0` (also `inout`) | **state variable** `state temperature = {= 18.0 =}` |
-| `out attribute …` | rejected (needs output ports — Tier 3) |
+| `out attribute …` | rejected (scheduled — testbench increment, §10) |
 | composite attribute (`pt : Point`) | `SimpleNamespace(x=…)` initializer; usage-local `:>>` redefinitions win over the type's defaults |
 | quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`) |
 
@@ -186,7 +189,8 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are rejected
-(their scope has no attributes to check). The thermostat and
+(their scope has no attributes to check; scheduled to graduate with
+scope-local attributes — §10). The thermostat and
 vending-machine showcases carry asserted invariants; the negative run test
 proves a violating `--values` override aborts at startup.
 
@@ -230,19 +234,38 @@ is visible — pin sequences accordingly in tests.
 
 ## 10. Rejection summary
 
+All rejections raise `UnsupportedConstructError` loudly — rosetta never
+silently drops a construct. As of the 2026-06-12 review the rejections
+fall into two groups: constructs **scheduled to graduate** (mapping
+semantics agreed with the maintainer; still rejected until their
+increment lands) and constructs that **stay rejected** by design.
+
+### Scheduled to graduate (semantics agreed 2026-06-12)
+
+Planned order: testbench increment → small bundle → state-scoped
+attributes → `accept when` → deep entry → Tier 3.
+
+| Construct | Agreed mapping | Increment |
+|---|---|---|
+| cross-scope sends | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (the testbench's cross-machine routing pointed inward) | testbench |
+| `out attribute` | output port, set on every assignment; doubles as plant observation for testbenches | testbench |
+| `accept at` | absolute logical time from startup (timer / scheduled action) | testbench |
+| leaf regions | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works) | small bundle |
+| transitions sourced at a region | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, ALL regions' exit actions run in declaration order, then the parallel state's exit, then the effect, then the switch. The parallel-state-sourced group interrupt adopts the same exit-all convention, making the two spellings equivalent. Substate exits inside regions still do not run (they live in child reactors) | small bundle |
+| payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist | small bundle |
+| state-scoped attributes / constraints | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility stays Tier-3 | own increment |
+| `accept when` | change events via the constraint-weave pattern: a self-event scheduled after every attribute-assigning reaction plus an entry-time check, evaluated in the source mode; root-scope attributes first | own increment |
+| deep entry into a substate from outside | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order is preserved. Needs an lfc experiment phase first (tag timing of port-set-plus-mode-switch; suppressing the initial mode's transient entry) | own increment (last) |
+
+### Stays rejected
+
 | Construct | Why |
 |---|---|
-| deep entry into a substate from outside | LF modes activate initial submodes only |
-| state-scoped attributes / constraints | substate reactors see no machine state |
-| `out attribute` | needs directed ports (Tier 3) |
-| payload write-back (`assign r.value := …`) | Tier-3 ports family |
 | `in ref` equipment references | Tier-3: equipment becomes a connected reactor |
-| cross-scope sends | Tier-3 event routing |
-| `accept at` / `accept when` | not yet mapped (`at` is LF-feasible) |
+| nested-parallel regions (a region that is itself `parallel`) | wrap it in a composite state |
 | long-running / non-inline `do` bodies | only inline one-shot bodies fuse into entry |
-| leaf or parallel regions; transitions sourced at a region | regions must be composite; author interrupts on the parallel state |
-| unstable eventless self-loops | would never stabilize |
-| state names colliding with generated names (`done`, `current_state`, `completed`, ports) | rename the state |
-
-All rejections raise `UnsupportedConstructError` loudly — rosetta never
-silently drops a construct.
+| unstable eventless self-loops | would never stabilize — a model error |
+| state names colliding with generated names (`done`, `current_state`, `completed`, ports) | rename the state; plain generated names keep the LF readable |
+| mixed payload names for one signal | use one name — a model error |
+| duplicate enum / item simple names | rename one — preamble classes are keyed by simple name |
+| `in` attribute without a default | LF reactor parameters require one |
