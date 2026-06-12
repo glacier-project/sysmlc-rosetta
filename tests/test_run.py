@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sysmlc.backends.rosetta.builder import build_program
+from sysmlc.backends.rosetta.composition import build_rig_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from sysmlc.values import configure_model
@@ -119,6 +120,81 @@ def run_machine(
         for line in result.stdout.splitlines()
         if line.startswith("STATE: ")
     ]
+
+
+RIG_HARNESS = """target Python {{
+  fast: true,
+  timeout: {timeout}
+}}
+
+import {reactor} from "{machine}.lf"
+
+main reactor {{
+  m = new {reactor}()
+{observers}
+}}
+"""
+
+OBSERVER = """  reaction(m.{port}) {{=
+    print(f"STATE {label}: {{m.{port}.value}}")
+  =}}"""
+
+
+def run_rig(
+    tmp_path: Path,
+    model_dir: Path,
+    rig_qn: str,
+    *,
+    timeout: str = "5 sec",
+    values: dict[str, dict[str, ValueNode]] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, list[str]]]:
+    """Build, compile, and run a rig; return (process, states per stream).
+
+    ``values`` maps a machine's qualified name to its overrides.
+    """
+    name = rig_qn.split("::")[-1]
+    model = load_model(model_dir)
+    if values:
+        for machine_qn, overrides in values.items():
+            model = configure_model(model, machine_qn, overrides)
+    program = build_rig_program(model, rig_qn)
+    streams = [
+        port.removesuffix("_current_state") for port in program.reactor.outputs
+    ]
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / f"{name}.lf").write_text(to_lf(program))
+    observers = "\n".join(
+        OBSERVER.format(port=f"{label}_current_state", label=label)
+        for label in streams
+    )
+    (src / "Harness.lf").write_text(
+        RIG_HARNESS.format(
+            reactor=name,
+            machine=name,
+            timeout=timeout,
+            observers=observers,
+        )
+    )
+    compile_result = subprocess.run(
+        ["lfc", str(src / "Harness.lf")], capture_output=True, timeout=600
+    )
+    assert compile_result.returncode == 0, compile_result.stderr.decode(
+        errors="replace"
+    )
+    process = subprocess.run(
+        [str(tmp_path / "bin" / "Harness")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    states: dict[str, list[str]] = {label: [] for label in streams}
+    for line in process.stdout.splitlines():
+        for label in streams:
+            prefix = f"STATE {label}: "
+            if line.startswith(prefix):
+                states[label].append(line.removeprefix(prefix))
+    return process, states
 
 
 def test_sm01_eventless_chain(tmp_path: Path) -> None:
@@ -844,3 +920,35 @@ def test_showcase_level_crossing_fault_paths(tmp_path: Path) -> None:
         "failSafe",
         "open",
     ]
+
+
+def test_rig_pair_passing_verdict(tmp_path: Path) -> None:
+    process, states = run_rig(
+        tmp_path, FIXTURES_DIR / "rig-pair", "RigPair::PlantRig"
+    )
+    assert process.returncode == 0, process.stderr
+    # composite entry: the sub-state announcement overwrites "working" at the
+    # same tag, so the first visible plant state after idle is "working.grind"
+    assert states["plant"][0] == "idle"
+    assert "working.grind" in states["plant"]
+    assert states["tb"][-1] == "done"  # Done observed -> pass
+
+
+def test_rig_pair_failing_verdict_aborts(tmp_path: Path) -> None:
+    process, _states = run_rig(
+        tmp_path,
+        FIXTURES_DIR / "rig-pair",
+        "RigPair::PlantRig",
+        values={"RigPair::PlantTest": {"verdict": 1}},
+    )
+    assert process.returncode != 0
+    assert "testPassed" in process.stderr
+
+
+def test_rig_overlap_serves_local_and_peer(tmp_path: Path) -> None:
+    process, states = run_rig(
+        tmp_path, FIXTURES_DIR / "rig-overlap", "RigOverlap::PulserRig"
+    )
+    assert process.returncode == 0, process.stderr
+    assert "finished" in states["plant"]  # local self-event delivered
+    assert "sawTick" in states["tb"]  # peer port delivered
