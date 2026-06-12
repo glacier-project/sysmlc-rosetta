@@ -234,6 +234,8 @@ def _run_model(
     name = model_dir.name
     src = build_root / name / "src"
     src.mkdir(parents=True, exist_ok=True)
+    for _stale in src.glob("*.lf"):  # clean between runs (rig rename safety)
+        _stale.unlink()
 
     ok, detail = _build(model_dir, src, use_values)
     if not ok:

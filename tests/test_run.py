@@ -519,6 +519,23 @@ def test_showcase_microwave_pause_and_door_interrupt(tmp_path: Path) -> None:
     ]
 
 
+def test_microwave_rig_verdict(tmp_path: Path) -> None:
+    # MicrowaveRig: testbench sends StartCmd at 0.1 s, waits for Finished
+    # (announced when `cooking` completion fires after ~0.6 s), verdict passes.
+    process, states = run_rig(
+        tmp_path,
+        SHOWCASE_DIR / "microwave",
+        "Microwave::MicrowaveRig",
+        timeout="10 sec",
+    )
+    assert process.returncode == 0, process.stderr
+    # cooking.heating is overwritten by sub-state announcements at the same
+    # tag; the substring check matches cooking.heating.turntable.rotating etc.
+    assert "cooking.heating" in " ".join(states["plant"])
+    assert states["plant"][-1] == "idle"
+    assert states["tb"][-1] == "done"
+
+
 def test_showcase_furuta_pendulum(tmp_path: Path) -> None:
     # Decreasing |theta| swings up, catches, then stabilizes; a late spike
     # past dropAngle knocks it back to swing-up. SimpleNamespace stands in
