@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sysmlc.backends.rosetta.builder import build_program
+from sysmlc.backends.rosetta.builder import OUTPUT_PORT, build_program
 from sysmlc.backends.rosetta.composition import build_rig_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
@@ -159,7 +159,7 @@ def run_rig(
             model = configure_model(model, machine_qn, overrides)
     program = build_rig_program(model, rig_qn)
     streams = [
-        port.removesuffix("_current_state") for port in program.reactor.outputs
+        port.removesuffix(f"_{OUTPUT_PORT}") for port in program.reactor.outputs
     ]
     src = tmp_path / "src"
     src.mkdir()
@@ -931,6 +931,7 @@ def test_rig_pair_passing_verdict(tmp_path: Path) -> None:
     # same tag, so the first visible plant state after idle is "working.grind"
     assert states["plant"][0] == "idle"
     assert "working.grind" in states["plant"]
+    assert states["tb"], "tb produced no announcements"
     assert states["tb"][-1] == "done"  # Done observed -> pass
 
 
