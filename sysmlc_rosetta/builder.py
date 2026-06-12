@@ -104,7 +104,6 @@ class RosettaBuilder:
         self._root: StateFact | None = None
         self._facts: dict[str, StateFact] = {}
         self._transitions: list[TransitionFact] = []
-        self._needs_namespace = False
         # Populated by result() before assembly:
         self._children: dict[str, list[StateFact]] = {}
         self._scope_transitions: dict[str, list[TransitionFact]] = {}
@@ -181,15 +180,9 @@ class RosettaBuilder:
                 "the state definition declares no substates."
             )
         self._reactors.append(self._with_constraint_checks(machine))
-        preamble: list[str] = []
-        if self._needs.uses_math:
-            preamble.append("import math")
-        if self._needs_namespace:
-            preamble.append("from types import SimpleNamespace")
-        preamble += _enum_classes(self._needs)
-        preamble += _payload_classes(self._needs)
         return LfProgram(
-            reactors=tuple(self._reactors), preamble=tuple(preamble)
+            reactors=tuple(self._reactors),
+            preamble=tuple(self._needs.preamble_lines()),
         )
 
     def _with_constraint_checks(self, machine: Reactor) -> Reactor:
@@ -364,7 +357,7 @@ class RosettaBuilder:
         if value is None:
             return None
         if isinstance(value, CompositeValue):
-            self._needs_namespace = True
+            self._needs.uses_namespace = True
             fields = ", ".join(
                 f"{name}={self._render_value(field)}"
                 for name, field in value.fields
@@ -948,57 +941,6 @@ class RosettaBuilder:
             codegen.render_action(candidate)
             for candidate in actions.inline_actions(action)
         ]
-
-
-def _enum_classes(needs: PreambleNeeds) -> list[str]:
-    """Render registered enum defs as Python Enum classes, sorted by name.
-
-    Args:
-        needs: The preamble registry populated during code generation.
-
-    Returns:
-        Lines of Python source: an ``from enum import Enum`` header (when
-        any enums are registered) followed by one class block per enum.
-    """
-    lines: list[str] = []
-    for name in sorted(needs.enum_defs):
-        lines.append(f"class {name}(Enum):")
-        for literal in needs.enum_defs[name].owned_members.collect():
-            if not isinstance(literal, syside.EnumerationUsage):
-                continue  # an enum def may own non-literal members
-            assert literal.name is not None
-            lines.append(f'    {literal.name} = "{literal.name}"')
-    if lines:
-        lines.insert(0, "from enum import Enum")
-    return lines
-
-
-def _payload_classes(needs: PreambleNeeds) -> list[str]:
-    """Render registered (sent) item defs as payload dataclasses.
-
-    Args:
-        needs: The preamble registry populated during code generation.
-
-    Returns:
-        Lines of Python source: a ``from dataclasses import dataclass``
-        header (when any items are registered) followed by one
-        ``@dataclass`` class block per item def, sorted by name.
-    """
-    lines: list[str] = []
-    for name in sorted(needs.item_defs):
-        attrs = needs.item_defs[name].owned_attributes.collect()
-        lines.append("@dataclass")
-        lines.append(f"class {name}:")
-        if not attrs:
-            lines.append("    pass")
-        for attr in attrs:
-            assert attr.name is not None
-            # Fields are intentionally untyped (payloads are duck-typed;
-            # SysML scalar types are not mapped to Python types yet).
-            lines.append(f"    {attr.name}: object = None")
-    if lines:
-        lines.insert(0, "from dataclasses import dataclass")
-    return lines
 
 
 def build_program(model: syside.Model, state_def_qn: str) -> LfProgram:

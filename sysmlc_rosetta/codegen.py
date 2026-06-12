@@ -35,6 +35,7 @@ class PreambleNeeds:
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
         self.item_defs: dict[str, syside.Definition] = {}
         self.uses_math = False
+        self.uses_namespace = False
 
     def register_enum(self, literal: syside.EnumerationUsage) -> str:
         """Register the literal's enum def; return ``Def.literal`` source.
@@ -84,6 +85,64 @@ class PreambleNeeds:
                 node=item,
             )
         self.item_defs[item.name] = item
+
+    def _enum_class_lines(self) -> list[str]:
+        """Render registered enum defs as Python Enum classes, sorted by name.
+
+        Returns:
+            Lines of Python source: an ``from enum import Enum`` header (when
+            any enums are registered) followed by one class block per enum.
+        """
+        lines: list[str] = []
+        for name in sorted(self.enum_defs):
+            lines.append(f"class {name}(Enum):")
+            for literal in self.enum_defs[name].owned_members.collect():
+                if not isinstance(literal, syside.EnumerationUsage):
+                    continue  # an enum def may own non-literal members
+                assert literal.name is not None
+                lines.append(f'    {literal.name} = "{literal.name}"')
+        if lines:
+            lines.insert(0, "from enum import Enum")
+        return lines
+
+    def _payload_class_lines(self) -> list[str]:
+        """Render registered (sent) item defs as payload dataclasses.
+
+        Returns:
+            Lines of Python source: a ``from dataclasses import dataclass``
+            header (when any items are registered) followed by one
+            ``@dataclass`` class block per item def, sorted by name.
+        """
+        lines: list[str] = []
+        for name in sorted(self.item_defs):
+            attrs = self.item_defs[name].owned_attributes.collect()
+            lines.append("@dataclass")
+            lines.append(f"class {name}:")
+            if not attrs:
+                lines.append("    pass")
+            for attr in attrs:
+                assert attr.name is not None
+                # Fields are intentionally untyped (payloads are duck-typed;
+                # SysML scalar types are not mapped to Python types yet).
+                lines.append(f"    {attr.name}: object = None")
+        if lines:
+            lines.insert(0, "from dataclasses import dataclass")
+        return lines
+
+    def preamble_lines(self) -> list[str]:
+        """Assemble the LF preamble: imports, enum classes, payloads.
+
+        Line order is pinned by golden tests: math import, SimpleNamespace
+        import, enum classes, payload dataclasses.
+        """
+        lines: list[str] = []
+        if self.uses_math:
+            lines.append("import math")
+        if self.uses_namespace:
+            lines.append("from types import SimpleNamespace")
+        lines += self._enum_class_lines()
+        lines += self._payload_class_lines()
+        return lines
 
 
 class LfPythonCodeGen(PythonCodeGen):
