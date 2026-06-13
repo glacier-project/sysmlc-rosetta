@@ -133,6 +133,35 @@ def test_overlap_send_emits_both_forms() -> None:
     assert "Tick_act.schedule(0)" in text  # local accept still served
 
 
+def test_overlap_payload_send_dodges_port_shadowing() -> None:
+    # When the ported signal carries a payload, the reaction parameter named
+    # after the port shadows the preamble dataclass, so the constructor must
+    # be reached via globals(). The overlap form renders BOTH lines; both
+    # must use the globals() reach (set line + schedule line).
+    program = build_rig_program(
+        load_model(FIXTURES_DIR / "rig-payload"),
+        "RigPayload::CounterRig",
+    )
+    plant = next(r for r in program.reactors if r.name == "Counter")
+    text = to_lf(program)
+    assert "Report" in plant.outputs
+    assert 'Report.set(globals()["Report"](n=7))' in text
+    assert 'Report_act.schedule(0, globals()["Report"](n=7))' in text
+
+
+def test_bare_payload_send_keeps_plain_constructor() -> None:
+    # The non-ported path is unaffected: the parameter there is `Report_act`,
+    # not `Report`, so no shadowing occurs and the plain constructor stays
+    # byte-identical (port_signals empty).
+    text = to_lf(
+        build_program(
+            load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter"
+        )
+    )
+    assert "Report_act.schedule(0, Report(n=7))" in text
+    assert "globals()" not in text
+
+
 def test_rig_program_composes_bench_reactor() -> None:
     model = load_model(FIXTURES_DIR / "rig-pair")
     program = build_rig_program(model, "RigPair::PlantRig")

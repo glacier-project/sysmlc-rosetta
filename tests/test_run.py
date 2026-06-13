@@ -1012,3 +1012,15 @@ def test_rig_overlap_serves_local_and_peer(tmp_path: Path) -> None:
     assert process.returncode == 0, process.stderr
     assert "finished" in states["plant"]  # local self-event delivered
     assert "sawTick" in states["tb"]  # peer port delivered
+
+
+def test_rig_payload_serves_local_and_peer(tmp_path: Path) -> None:
+    # A ported send carrying a payload: the reaction parameter shadows the
+    # preamble dataclass, so the constructor must be reached via globals().
+    # Without the fix both the set and the schedule line raise TypeError.
+    process, states = run_rig(
+        tmp_path, FIXTURES_DIR / "rig-payload", "RigPayload::CounterRig"
+    )
+    assert process.returncode == 0, process.stderr
+    assert "finished" in states["plant"]  # local overlap delivery worked
+    assert states["tb"][-1] == "done"  # peer payload delivery worked

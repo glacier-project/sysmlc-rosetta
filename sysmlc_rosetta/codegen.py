@@ -289,6 +289,15 @@ class LfPythonCodeGen(PythonCodeGen):
         no-argument form sets the port to ``True`` and omits the schedule's
         second argument entirely.
 
+        Inside an LF reaction a ported signal's output port appears as a
+        parameter named ``<Event>``, which shadows the module-level preamble
+        dataclass of the same name.  Calling ``<Event>(...)`` there hits the
+        port capsule, not the class, raising ``TypeError`` at runtime.  So on
+        the ported paths (port-only and overlap) the payload constructor is
+        reached via ``globals()["<Event>"](...)``.  The default path is
+        unaffected (its parameter is ``<Event>_act``) and keeps the plain
+        constructor, preserving byte-identity for bare builds.
+
         Args:
             send: The ``send new <Type>(<args>)`` action to translate.
 
@@ -314,9 +323,19 @@ class LfPythonCodeGen(PythonCodeGen):
         )
         if event_name not in self._port_signals:
             return schedule
-        set_line = f"{event_name}.set({payload if payload else 'True'})"
+        # On ported paths `{event_name}` is the reaction's port parameter,
+        # shadowing the preamble class; reach the class through globals().
+        ported_payload = f'globals()["{event_name}"]({args})' if pairs else None
+        set_line = (
+            f"{event_name}.set({ported_payload if ported_payload else 'True'})"
+        )
         if event_name in self._self_signals:
-            return f"{set_line}\n{schedule}"
+            ported_schedule = (
+                f"{event_name}_act.schedule(0, {ported_payload})"
+                if ported_payload
+                else schedule
+            )
+            return f"{set_line}\n{ported_schedule}"
         return set_line
 
     @override
