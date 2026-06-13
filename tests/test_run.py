@@ -890,11 +890,13 @@ def test_batch_reactor_rig_verdict(tmp_path: Path) -> None:
     # BatchReactorRig: testbench sends StartRecipe at 0.2 s, waits for
     # BatchDone (announced when draining reaches level<=0 and batches+1
     # meets batchTarget). With sped-up _REACTOR_VALUES (batchTarget=1,
-    # rates=60/65/60/60) the full fill/heat/react/cool/drain cycle
-    # completes in ~5.7 s logical; the 30 s fail window is generous.
+    # rates=60/65/60/60) and the model default sampleTime=1.0 s, the
+    # full fill/heat/react/cool/drain cycle completes in ~7.2 s logical
+    # (0.2 stimulus + 1.0 fill + 1.0 heat + 3.0 react + 1.0 cool +
+    # 1.0 drain); the 30 s fail window is generous.
     #
     # No `announcing` latch needed: BatchDone is sent on a GUARDED
-    # eventless entry reaction in the draining mode, not in the same
+    # eventless completion transition exiting `draining`, not in the same
     # reaction that consumed StartRecipe, so lfc 0.11 sees no
     # read-input+write-output cycle.
     process, states = run_rig(
