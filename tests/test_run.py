@@ -886,6 +886,34 @@ def test_showcase_batch_reactor_overpressure(tmp_path: Path) -> None:
     ]
 
 
+def test_batch_reactor_rig_verdict(tmp_path: Path) -> None:
+    # BatchReactorRig: testbench sends StartRecipe at 0.2 s, waits for
+    # BatchDone (announced when draining reaches level<=0 and batches+1
+    # meets batchTarget). With sped-up _REACTOR_VALUES (batchTarget=1,
+    # rates=60/65/60/60) the full fill/heat/react/cool/drain cycle
+    # completes in ~5.7 s logical; the 30 s fail window is generous.
+    #
+    # No `announcing` latch needed: BatchDone is sent on a GUARDED
+    # eventless entry reaction in the draining mode, not in the same
+    # reaction that consumed StartRecipe, so lfc 0.11 sees no
+    # read-input+write-output cycle.
+    process, states = run_rig(
+        tmp_path,
+        SHOWCASE_DIR / "batch-reactor",
+        "BatchReactor::BatchReactorRig",
+        timeout="40 sec",
+        values={"BatchReactor::BatchReactor": _REACTOR_VALUES},
+    )
+    assert process.returncode == 0, process.stderr
+    # draining is the unique plant landmark proving a complete batch cycle:
+    # the reactor only reaches draining after fill→heat→react→cool, and
+    # BatchDone is sent the moment draining detects level<=0 and
+    # batches+1 >= batchTarget.
+    assert "draining" in states["plant"]
+    assert states["plant"][-1] == "done"
+    assert states["tb"][-1] == "done"
+
+
 _STATION_HANDSHAKE = [
     "idle",
     "handshake.checkCable",
