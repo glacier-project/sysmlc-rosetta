@@ -582,6 +582,13 @@ def test_showcase_furuta_pendulum(tmp_path: Path) -> None:
     # Decreasing |theta| swings up, catches, then stabilizes; a late spike
     # past dropAngle knocks it back to swing-up. SimpleNamespace stands in
     # for AngleReading (payloads are duck-typed across files).
+    #
+    # `announcing` is a transient latch entered when catching confirms the
+    # second sub-catchAngle reading; its completion transition sends Balanced
+    # via commPort and enters stabilizing (same pattern as traffic-light's
+    # `walkRequest`). It appears as a visible state announcement here because
+    # lfc emits a current_state announcement on every mode entry, even
+    # transient ones.
     drivers = (
         "  state thetas = {= [1.5, 0.9, 0.4, 0.3, 0.2, 0.1, 1.4] =}\n"
         "  state i = 0\n"
@@ -602,7 +609,35 @@ def test_showcase_furuta_pendulum(tmp_path: Path) -> None:
         timeout="1 sec",
         drivers=drivers,
     )
-    assert states == ["swingUp", "catching", "stabilizing", "swingUp"]
+    assert states == [
+        "swingUp",
+        "catching",
+        "announcing",
+        "stabilizing",
+        "swingUp",
+    ]
+
+
+def test_furuta_rig_verdict(tmp_path: Path) -> None:
+    # FurutaRig: testbench sends four AngleReading values that drive
+    # swingUp→catching (theta=0.4) then catching→announcing→stabilizing
+    # (theta=0.3). The `announcing` transient state sends Balanced via
+    # commPort one microstep after step4's timer fires, while balancedWait
+    # is already the active testbench state -- so the accept fires cleanly.
+    # Verdict passes (exit 0).
+    process, states = run_rig(
+        tmp_path,
+        SHOWCASE_DIR / "furuta-pendulum",
+        "FurutaPendulum::FurutaRig",
+        timeout="10 sec",
+    )
+    assert process.returncode == 0, process.stderr
+    # `announcing` is the unique plant landmark: it is only entered when
+    # catching receives a second consecutive sub-catchAngle reading, i.e.
+    # the controller has confirmed the pendulum is in the balanced region.
+    assert "announcing" in states["plant"]
+    assert states["plant"][-1] == "stabilizing"
+    assert states["tb"][-1] == "done"
 
 
 _WORKCELL_PIECE = [
