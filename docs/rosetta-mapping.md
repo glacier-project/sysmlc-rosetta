@@ -113,7 +113,7 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   exit-all-then-effect ordering.)
 - **Deep entry** (`idle` → `running.hot` from outside) — **rejected**:
   entering an LF mode always activates contained reactors' initial modes.
-  Scheduled to graduate via a synthesized entry dispatch (§10).
+  Scheduled to graduate via a synthesized entry dispatch (§11).
 - An eventless self-loop with no event, timer, or effect is rejected as
   unstable.
 
@@ -128,7 +128,7 @@ child reactor, and the parent's mode forwards them down
 - **Payload access**: `accept r : Reading` binds the payload first
   (`r = Reading.value`), so guards and effects can read `r.value`.
   Payloads are duck-typed; payload **writes** are rejected today
-  (scheduled to graduate with copy-on-accept semantics — §10).
+  (scheduled to graduate with copy-on-accept semantics — §11).
 - **`accept after 4 [s]`** (literal) → a mode-local timer
   (`timer t_showRed(4 sec)`); names are state-qualified because lfc
   flattens mode-local declarations per reactor. An `after` self-loop
@@ -138,26 +138,28 @@ child reactor, and the parent's mode forwards them down
 - **`after` + `if`** is supported (the guard is evaluated when the timer
   fires) — a capability the quake backend must reject.
 - **`accept at` / `accept when`** → rejected today; both are scheduled
-  to graduate (§10).
+  to graduate (§11).
 
 **`send new Sig(...) via port`** schedules a reactor-level logical action
 `Sig_act` at the current tag (a self-event). If the machine also accepts
 `Sig`, accepting reactions trigger on `(Sig, Sig_act)` and read whichever
 is present, so external and internal events are indistinguishable. A
 signal sent in one composite scope but accepted in another is **rejected**
-today (scheduled to graduate with the testbench increment — §10). The
-`via` port is captured but not yet part of event identity.
+today (scheduled to graduate with the follow-up bundle on top of the
+testbench rig's port machinery — §11). Cross-*machine* sends, in contrast,
+already route through ports in a rig build (§10). The `via` port is captured
+but not yet part of event identity.
 
 ## 5. Attributes
 
 Declared on the state def (root scope only — state-scoped attributes are
-rejected today; scope-local support is scheduled, §10):
+rejected today; scope-local support is scheduled, §11):
 
 | Declaration | LF |
 |---|---|
 | `in attribute setpoint : Real default 21.0` | reactor **parameter** `setpoint = {= 21.0 =}` (override at `new`) |
 | `attribute temperature : Real := 18.0` (also `inout`) | **state variable** `state temperature = {= 18.0 =}` |
-| `out attribute …` | rejected (scheduled — testbench increment, §10) |
+| `out attribute …` | rejected (scheduled — follow-up bundle, §11) |
 | composite attribute (`pt : Point`) | `SimpleNamespace(x=…)` initializer; usage-local `:>>` redefinitions win over the type's defaults |
 | quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`) |
 
@@ -190,7 +192,7 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are rejected
 (their scope has no attributes to check; scheduled to graduate with
-scope-local attributes — §10). The thermostat and
+scope-local attributes — §11). The thermostat and
 vending-machine showcases carry asserted invariants; the negative run test
 proves a violating `--values` override aborts at startup.
 
@@ -232,7 +234,129 @@ is visible — pin sequences accordingly in tests.
   Unlisted functions are rejected; extend `_FUNCTIONS` in
   `sysmlc/backends/rosetta/codegen.py` as examples demand.
 
-## 10. Rejection summary
+## 10. Testbench rigs (cross-machine composition)
+
+A model's test scenario can live in SysML as a second `state def` next to
+the plant, paired with it by a tiny `part def`. The rosetta backend then
+composes BOTH machines into one LF program — the testbench drives stimuli
+the plant accepts, observes the plant's sends, and decides a verdict, with
+no scripted harness.
+
+```sysml
+state def Microwave { … }              // plant — unchanged
+state def MicrowaveTest { … }          // stimuli + verdict
+part def MicrowaveRig {
+    exhibit state plant : Microwave;
+    exhibit state tb : MicrowaveTest;
+}
+```
+
+A **rig** is a `part def` whose body holds **exactly two** named
+`exhibit state` usages, each typed by a state def declared in the model,
+and nothing else (documentation aside). Anything else — fewer or more than
+two exhibits, an anonymous exhibit, a non-exhibit member — is rejected
+loudly (§11). The two machines are **symmetric**: there is no plant/tb role
+in the mechanics, only the two usage names, which become the LF instance
+names.
+
+**CLI.** No new flag. `-e P::MicrowaveRig` selects the composition;
+`-e P::Microwave` still builds the bare plant exactly as before. With no
+`-e`, a model declaring **exactly one rig** auto-selects it (several rigs →
+error listing them; no rig → the existing single-state-def rule). The
+capability is an optional backend hook (`build_composition`, the
+`bind_constraint` pattern): rosetta has it, quake/frostifier do not, so a
+rig build against them errors with "select a state definition". The build
+emits **one file** named after the rig (`MicrowaveRig.lf`) holding both
+machines' reactor families, the bench reactor, and the trivial main; the
+standing "compile through an importing app" limitation (§1) is unchanged.
+`--values` carries sections for both state defs in one YAML and is applied
+per exhibited machine as two `configure_model` passes.
+
+### Send → port classification
+
+A signal a machine sends is no longer always a self-event. Knowing what the
+*peer* accepts (gathered by a signal-interface scan over each machine), each
+sent signal classifies:
+
+| Sent signal is…             | Generated form                              |
+|-----------------------------|---------------------------------------------|
+| accepted locally only       | self-event `Sig_act.schedule(0, …)` (today) |
+| peer-accepted only          | `output Sig` port; send → `Sig.set(payload)`|
+| locally **and** peer-accepted | **both statements** (overlap case)        |
+| accepted by nobody          | void self-event — status quo                |
+
+Bare sends render `Sig.set(True)`; payload sends `Sig.set(Sig(…))`. Because
+the LF input/output port named `Sig` shadows the preamble payload dataclass
+of the same name, a **ported payload** send renders the constructor as
+`globals()["Event"](…)` (resolving the dataclass past the port parameter
+shadow) — see the fixed bug below.
+
+### Input ports and up-chaining
+
+LF forbids an input and an output sharing a name, so in a rig build a
+machine's **inputs = accepted signals − peer-sent signals**. The subtracted
+input could never be fed (a signal sent by *both* machines is rejected,
+§11); in the overlap case the local accept triggers on `Sig_act` alone.
+
+Peer-accepted sends relax the within-machine cross-scope rejection (§4)
+**outward only**: a send inside a nested composite gives the innermost
+reactor the `output Sig` port, and every enclosing reactor declares the same
+output and forwards the child's (`Sig.set(c.Sig.value)`) — the same
+up-chaining mechanism as `exit_<k>` and dotted `current_state`. Cross-scope
+sends *within* one machine stay rejected (§11; their graduation is a
+follow-up increment).
+
+### Bench wiring and verdicts
+
+The bench reactor, named after the rig, instantiates both machines under
+their usage names and wires same-named signal ports in **both directions**,
+plus forwards each machine's `current_state` out as `<usage>_current_state`:
+
+```lf
+reactor MicrowaveRig {
+  output plant_current_state
+  output tb_current_state
+  plant = new Microwave()
+  tb = new MicrowaveTest()
+  tb.StartCmd -> plant.StartCmd        // per matched signal, both directions
+  plant.Finished -> tb.Finished
+  plant.current_state -> plant_current_state
+  tb.current_state -> tb_current_state
+}
+```
+
+The bench is last in the program, so `program.reactor`, the `write()`
+basename, and `summary()` keep working; the trivial main instantiates it.
+
+**Verdicts need no roles.** An `assert constraint` violation in *either*
+machine aborts the run with exit 1 naming the constraint (an `AssertionError`
+in an LF Python reaction kills the program); either machine's root
+`then done` → `request_stop()` ends the run. The corpus idiom is a `fail`
+state assigning `verdict := 1` under
+`assert constraint testPassed { verdict == 0 }`, with `then done` on the
+happy path.
+
+### Authoring note: the transient latch
+
+lfc 0.11 rejects a causality cycle when an announcement reaction would both
+**read a routed input** and **write an output** at the same tag (a modal
+self-loop through the routed port). When a verdict needs such an
+announcement, defer the send: route through an eventless completion
+transition into a transient state whose `entry` does the `send`, so the
+output is set one microstep later, after the input reaction settled. The
+furuta-pendulum and milling-workcell testbenches use this latch; milling's
+testbench also omits the `Shutdown` stimulus for the same reason (shutdown
+stays covered by the standalone milling run tests).
+
+### Fixed bug: ported payload constructor
+
+A ported PAYLOAD send (`Sig.set(Sig(field=…))`) collides with the LF port
+parameter `Sig` that shadows the preamble's `@dataclass Sig`. The send
+therefore renders the constructor as `globals()["Sig"](field=…)`, reaching
+the module-level dataclass past the shadowing port; bare ported sends
+(`Sig.set(True)`) are unaffected.
+
+## 11. Rejection summary
 
 All rejections raise `UnsupportedConstructError` loudly — rosetta never
 silently drops a construct. As of the 2026-06-12 review the rejections
@@ -240,16 +364,25 @@ fall into two groups: constructs **scheduled to graduate** (mapping
 semantics agreed with the maintainer; still rejected until their
 increment lands) and constructs that **stay rejected** by design.
 
+The **testbench-rig increment** (§10) has since landed: it added
+cross-MACHINE routing (a signal one machine sends and the peer accepts
+becomes an LF output port and bench connection). It deliberately did NOT
+graduate the three constructs the 2026-06-12 review tagged "testbench" —
+intra-machine cross-scope sends, `out attribute`, and `accept at`. Those
+move to an immediate **follow-up bundle** built on the rig's port
+machinery; they remain rejected today.
+
 ### Scheduled to graduate (semantics agreed 2026-06-12)
 
-Planned order: testbench increment → small bundle → state-scoped
-attributes → `accept when` → deep entry → Tier 3.
+Planned order: ~~testbench increment~~ (done, §10) → follow-up bundle
+(cross-scope sends, `out attribute`, `accept at`) → small bundle →
+state-scoped attributes → `accept when` → deep entry → Tier 3.
 
 | Construct | Agreed mapping | Increment |
 |---|---|---|
-| cross-scope sends | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (the testbench's cross-machine routing pointed inward) | testbench |
-| `out attribute` | output port, set on every assignment; doubles as plant observation for testbenches | testbench |
-| `accept at` | absolute logical time from startup (timer / scheduled action) | testbench |
+| intra-machine cross-scope sends | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (reuses the rig's outward-ported send machinery, pointed inward) | follow-up bundle |
+| `out attribute` | output port, set on every assignment; doubles as plant observation for testbenches | follow-up bundle |
+| `accept at` | absolute logical time from startup (timer / scheduled action) | follow-up bundle |
 | leaf regions | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works) | small bundle |
 | transitions sourced at a region | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, ALL regions' exit actions run in declaration order, then the parallel state's exit, then the effect, then the switch. The parallel-state-sourced group interrupt adopts the same exit-all convention, making the two spellings equivalent. Substate exits inside regions still do not run (they live in child reactors) | small bundle |
 | payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist | small bundle |
@@ -269,3 +402,7 @@ attributes → `accept when` → deep entry → Tier 3.
 | mixed payload names for one signal | use one name — a model error |
 | duplicate enum / item simple names | rename one — preamble classes are keyed by simple name |
 | `in` attribute without a default | LF reactor parameters require one |
+| a signal sent by **both** machines of a rig (bidirectional same name) | LF port direction clashes; neither side can keep the matching input — split the name per direction |
+| a rig not exhibiting **exactly two named** state defs (fewer/more, anonymous, or a non-exhibit member) | a rig composes exactly two machines; name both exhibits |
+| the **same state def exhibited twice** in one rig | a rig composes two distinct machines |
+| cross-machine reactor / enum / payload **name collisions** across a rig's two families | the merged program and preamble are keyed by simple name — rename a state, machine, or item |
