@@ -321,6 +321,7 @@ def test_traffic_light_rig_verdict(tmp_path: Path) -> None:
     # walkRequest is the unique landmark: it is only entered when a
     # PedestrianRequest is accepted while showGreen is active.
     assert "walkRequest" in states["plant"]
+    assert states["plant"][-1] == "showYellow"
     assert states["tb"][-1] == "done"
 
 
