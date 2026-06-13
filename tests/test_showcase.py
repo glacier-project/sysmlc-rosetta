@@ -278,6 +278,11 @@ def test_milling_workcell_deep_exit_propagates_two_scopes() -> None:
 
 
 def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
+    # The `announcing` transient latch (added to break the LF causality
+    # cycle in rig mode) moved the BatchReport send out of the
+    # c_producing.completed reaction and into announcing's startup reaction.
+    # The completion reaction now transitions to either `producing` (loop)
+    # or `announcing` (batch done); BatchReport is sent from announcing.
     program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
     producing = _mode(program, "producing")
     (completion,) = [
@@ -287,8 +292,16 @@ def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
     ]
     body = "\n".join(completion.body)
     assert "if self.produced + 1 < self.batchSize:" in body
-    assert "BatchReport_act.schedule" in body
+    assert "announcing.set()" in body
     assert "SysML constraint wearWithinLimit violated" in body
+    # BatchReport is sent from the `announcing` mode startup reaction,
+    # not from the c_producing.completed reaction.
+    announcing = _mode(program, "announcing")
+    (startup,) = [r for r in announcing.reactions if "startup" in r.triggers]
+    # In standalone mode the send renders as a logical-action schedule;
+    # in rig mode it becomes BatchReport.set() on the output port.
+    # Either way the announcement payload is present in the body.
+    assert "BatchReport" in "\n".join(startup.body)
 
 
 def test_batch_reactor_parallel_regions_and_payload_guard() -> None:
