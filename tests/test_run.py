@@ -1138,6 +1138,38 @@ def test_showcase_level_crossing_fault_paths(tmp_path: Path) -> None:
     ]
 
 
+def test_level_crossing_rig_verdict(tmp_path: Path) -> None:
+    # LevelCrossingRig: testbench sends TrainApproaching at 0.3 s then
+    # TrainPassed at 4 s (abs); waits for Reopened — announced by the
+    # plant when the opening sequence completes and the crossing returns
+    # to open after a full safe passage cycle. Reopened is sent on a
+    # COMPLETION transition from `opening` (not in the same reaction that
+    # consumed TrainPassed), so no `announcing` latch is needed and
+    # lfc 0.11 sees no causality cycle.
+    #
+    # Timeline (logical fast time):
+    #   t=0.3 s   TrainApproaching sent → plant: open→securing
+    #   t≈1.8 s   securing completes (0.4+0.4+0.7+rounding) → closed
+    #   t=4.0 s   TrainPassed sent → closed.passage→done
+    #   t≈4.5 s   bellCycle also done → join fires → opening
+    #   t≈5.6 s   opening completes (0.7+0.4) → Reopened sent → open
+    #   tb: reopenWait accepts Reopened → done → request_stop → exit 0
+    process, states = run_rig(
+        tmp_path,
+        SHOWCASE_DIR / "level-crossing",
+        "LevelCrossing::LevelCrossingRig",
+        timeout="30 sec",
+    )
+    assert process.returncode == 0, process.stderr
+    # The plant must visit the full securing→closed→opening path to prove
+    # a safe cycle; pinning individual substates gives landmark confidence.
+    assert "securing.warnLights" in states["plant"]
+    assert "closed.passage.waiting" in states["plant"]
+    assert "opening.barrierUp" in states["plant"]
+    assert states["plant"][-1] == "open"
+    assert states["tb"][-1] == "done"
+
+
 def test_rig_pair_passing_verdict(tmp_path: Path) -> None:
     process, states = run_rig(
         tmp_path, FIXTURES_DIR / "rig-pair", "RigPair::PlantRig"
