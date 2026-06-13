@@ -28,16 +28,18 @@ from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions, transitions
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.facts import (
+    AfterTrigger,
     AttributeBinding,
     AttributeDirection,
     AttributeValue,
+    AtTrigger,
     CompletionTarget,
     CompositeValue,
     ConstraintFact,
+    SignalTrigger,
     StateFact,
     StateKind,
     TransitionFact,
-    TriggerKind,
 )
 from sysmlc.sysml.queries import feature_value
 
@@ -308,9 +310,8 @@ class RosettaBuilder:
         """
         for t in self._transitions:
             trigger = t.trigger
-            if trigger is None or trigger.kind is not TriggerKind.SIGNAL:
+            if not isinstance(trigger, SignalTrigger):
                 continue
-            assert trigger.signal_name is not None
             src_scope = _scope_of(t.source)
             self._handled.setdefault(src_scope, set()).add(trigger.signal_name)
             for scope in _enclosing(src_scope):
@@ -330,13 +331,12 @@ class RosettaBuilder:
         """
         for t in self._transitions:
             trigger = t.trigger
-            if trigger is None or trigger.kind is not TriggerKind.SIGNAL:
+            if not isinstance(trigger, SignalTrigger):
                 continue
             composite = t.source
             fact = self._facts.get(composite)
             if fact is None or fact.kind is StateKind.LEAF:
                 continue  # not a group interrupt on a composite/parallel state
-            assert trigger.signal_name is not None
             signal = trigger.signal_name
             inner_scopes = [
                 scope
@@ -729,9 +729,9 @@ class RosettaBuilder:
             trigger = t.trigger
             if trigger is None:
                 continue
-            if trigger.kind is TriggerKind.SIGNAL:
+            if isinstance(trigger, SignalTrigger):
                 signals.setdefault(t.source, set()).add(trigger.signal_name)
-            elif trigger.kind is TriggerKind.AFTER:
+            elif isinstance(trigger, AfterTrigger):
                 afters[t.source] = afters.get(t.source, 0) + 1
         out: set[str] = set()
         for source in set(signals) | set(afters):
@@ -804,16 +804,16 @@ class RosettaBuilder:
             trigger = transition.trigger
             if trigger is None:
                 eventless.append(transition)
-            elif trigger.kind is TriggerKind.SIGNAL:
-                assert trigger.signal_name is not None
+            elif isinstance(trigger, SignalTrigger):
                 signal_groups.setdefault(trigger.signal_name, []).append(
                     transition
                 )
-            elif trigger.kind is TriggerKind.AFTER:
+            elif isinstance(trigger, AfterTrigger):
                 afters.append(transition)
             else:
+                kind = "at" if isinstance(trigger, AtTrigger) else "when"
                 raise UnsupportedConstructError(
-                    f"an `accept {trigger.kind.name.lower()}` trigger is "
+                    f"an `accept {kind}` trigger is "
                     "unsupported by rosetta; only signal and relative "
                     "`accept after` triggers are supported."
                 )
@@ -852,8 +852,8 @@ class RosettaBuilder:
         # declarations into one per-reactor C struct, so identical names in
         # two modes collide ("duplicate member" compile errors).
         for index, transition in enumerate(afters):
-            assert transition.trigger is not None
-            after = transition.trigger.after
+            assert isinstance(transition.trigger, AfterTrigger)
+            after = transition.trigger.duration
             body, targets = self._dispatch(
                 [transition], exit_stmts, scope, gen, fired=fired_flag
             )
@@ -904,7 +904,8 @@ class RosettaBuilder:
             payload_names = {
                 t.trigger.payload_name
                 for t in group
-                if t.trigger is not None and t.trigger.payload_name is not None
+                if isinstance(t.trigger, SignalTrigger)
+                and t.trigger.payload_name is not None
             }
             if len(payload_names) > 1:
                 raise UnsupportedConstructError(
