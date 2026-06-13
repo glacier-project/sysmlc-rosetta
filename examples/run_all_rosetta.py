@@ -20,15 +20,14 @@ For each model directory under ``models/showcase/``:
 3. **Run**: the binary executes and the observed state sequence is
    reported.
 
-Each observer also carries the model's demo drivers (the same scripted
-stimuli the run tests use), so every machine animates through a
-representative scenario; pass ``--no-drivers`` for bare, unstimulated
-runs.
+Models that ship a SysML testbench rig (the nine showcase models) are
+self-driving: the rig stimulates the machine under test and run_all just
+observes the per-stream state announcements. Models without a rig
+(thermostat) run unstimulated via the legacy single-machine observer path.
 
 Usage:
     python models/showcase/run_all.py [--only thermostat microwave]
-        [--timeout "60 sec"] [--no-values] [--no-drivers]
-        [--show-states N]
+        [--timeout "60 sec"] [--no-values] [--show-states N]
 """
 
 from __future__ import annotations
@@ -51,7 +50,6 @@ import {reactor} from "{reactor}.lf"
 
 main reactor {{
   m = new {reactor}()
-{drivers}
   reaction(m.current_state) {{=
     print(f"STATE: {{m.current_state.value}}")
   =}}
@@ -75,95 +73,6 @@ main reactor {{
 RIG_OBSERVER = """  reaction(m.{port}) {{=
     print(f"STATE {label}: {{m.{port}.value}}")
   =}}"""
-
-# Demo stimuli per model (mirroring tests/backends/rosetta/test_run.py).
-# Payloads are duck-typed SimpleNamespace stand-ins; sys is the
-# module-level import the LF Python target always provides.
-DRIVERS: dict[str, str] = {
-    "traffic-light": """\
-  timer ped(5 sec)
-  reaction(ped) -> m.PedestrianRequest {=
-    m.PedestrianRequest.set(True)
-  =}""",
-    "stopwatch": """\
-  timer go(100 msec)
-  reaction(go) -> m.StartCmd {=
-    m.StartCmd.set(True)
-  =}
-  timer halt(3500 msec)
-  reaction(halt) -> m.StopCmd {=
-    m.StopCmd.set(True)
-  =}""",
-    "vending-machine": """\
-  timer c1(100 msec)
-  reaction(c1) -> m.Coin {=
-    m.Coin.set(sys.modules["types"].SimpleNamespace(value=2))
-  =}
-  timer c2(200 msec)
-  reaction(c2) -> m.Coin {=
-    m.Coin.set(sys.modules["types"].SimpleNamespace(value=2))
-  =}
-  timer s1(300 msec)
-  reaction(s1) -> m.Selection {=
-    m.Selection.set(sys.modules["types"].SimpleNamespace(product="cola"))
-  =}""",
-    "furuta-pendulum": """\
-  state thetas = {= [1.5, 0.9, 0.4, 0.3, 0.2, 0.1, 1.4] =}
-  state i = 0
-  timer sample(100 msec, 100 msec)
-  reaction(sample) -> m.AngleReading {=
-    if self.i < len(self.thetas):
-      m.AngleReading.set(
-        sys.modules["types"].SimpleNamespace(theta=self.thetas[self.i])
-      )
-      self.i += 1
-  =}""",
-    "microwave": """\
-  timer go(100 msec)
-  reaction(go) -> m.StartCmd {=
-    m.StartCmd.set(True)
-  =}""",
-    "milling-workcell": """\
-  timer power(100 msec)
-  reaction(power) -> m.PowerOn {=
-    m.PowerOn.set(True)
-  =}
-  timer start(1200 msec)
-  reaction(start) -> m.StartBatch {=
-    m.StartBatch.set(True)
-  =}
-  timer off(12 sec)
-  reaction(off) -> m.Shutdown {=
-    m.Shutdown.set(True)
-  =}""",
-    "batch-reactor": """\
-  timer go(200 msec)
-  reaction(go) -> m.StartRecipe {=
-    m.StartRecipe.set(True)
-  =}""",
-    "charging-station": """\
-  timer plug(200 msec)
-  reaction(plug) -> m.PlugIn {=
-    m.PlugIn.set(True)
-  =}
-  timer deny(1200 msec)
-  reaction(deny) -> m.AuthResult {=
-    m.AuthResult.set(sys.modules["types"].SimpleNamespace(code=7))
-  =}
-  timer grant(1600 msec)
-  reaction(grant) -> m.AuthResult {=
-    m.AuthResult.set(sys.modules["types"].SimpleNamespace(code=1))
-  =}""",
-    "level-crossing": """\
-  timer approach(300 msec)
-  reaction(approach) -> m.TrainApproaching {=
-    m.TrainApproaching.set(True)
-  =}
-  timer passed(4 sec)
-  reaction(passed) -> m.TrainPassed {=
-    m.TrainPassed.set(True)
-  =}""",
-}
 
 
 def _parse_state_line(line: str) -> str:
@@ -229,7 +138,6 @@ def _run_model(
     build_root: Path,
     timeout: str,
     use_values: bool,
-    use_drivers: bool,
 ) -> Result:
     name = model_dir.name
     src = build_root / name / "src"
@@ -249,7 +157,7 @@ def _run_model(
     streams = re.findall(
         r"^\s*output (\w+)_current_state$", machine.read_text(), re.M
     )
-    if streams:  # rig models drive themselves; DRIVERS are not injected
+    if streams:  # rig models are self-driving via their SysML testbench
         observers = "\n".join(
             RIG_OBSERVER.format(port=f"{label}_current_state", label=label)
             for label in streams
@@ -260,12 +168,7 @@ def _run_model(
             )
         )
     else:
-        drivers = DRIVERS.get(name, "") if use_drivers else ""
-        app.write_text(
-            APP_TEMPLATE.format(
-                reactor=reactor, timeout=timeout, drivers=drivers
-            )
-        )
+        app.write_text(APP_TEMPLATE.format(reactor=reactor, timeout=timeout))
     compiled = subprocess.run(
         ["lfc", str(app)], capture_output=True, text=True, timeout=600
     )
@@ -310,12 +213,6 @@ def main() -> int:
         help="ignore the models' shipped values.yaml files",
     )
     parser.add_argument(
-        "--no-drivers",
-        action="store_true",
-        help="run without demo stimuli (machines idle in their initial "
-        "state unless self-driving)",
-    )
-    parser.add_argument(
         "--show-states",
         type=int,
         default=8,
@@ -337,7 +234,6 @@ def main() -> int:
             build_root,
             args.timeout,
             not args.no_values,
-            not args.no_drivers,
         )
         results.append(result)
         _report(result, args.show_states)
