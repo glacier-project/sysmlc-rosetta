@@ -10,6 +10,30 @@ from sysmlc.errors import UnsupportedConstructError
 if TYPE_CHECKING:
     from sysmlc.codegen.python import PythonCodeGenContext
 
+# ---------------------------------------------------------------------------
+# Verified syside node shapes for call-effect transitions (2026-06-15)
+# Fixture: tests/backends/sm_examples/sm14-call-effect/sm14.sysml
+#
+# Perform-call effect (do logAct where logAct : sysmlc::log { ... }):
+#   t.effect                      -> PerformActionUsage
+#   t.effect.performed_action     -> ActionUsage (the named logAct usage)
+#   performed_action.owned_typings[].type
+#                                 -> ActionDefinition  qn=sysmlc::log
+#   arg bindings on performed_action.owned_features (ReferenceUsage):
+#     feature.feature_value.value -> LiteralString (.value) or
+#                                    FeatureReferenceExpression (.referent)
+#   actions.inline_actions(eff)   -> []  (PerformActionUsage not unwrapped)
+#
+# Assignment-from-calc (do assign theta := Plant::step(theta, 0.1)):
+#   t.effect                      -> AssignmentActionUsage
+#   inline_actions(t.effect)[0]   -> AssignmentActionUsage
+#   act.value_expression          -> InvocationExpression
+#   act.value_expression.function -> CalculationDefinition  (not ActionDef)
+#   act.value_expression.arguments[]  (positional):
+#       -> [FeatureReferenceExpression, LiteralRational, …]
+#   FeatureReferenceExpression.referent -> AttributeUsage (qn resolved)
+# ---------------------------------------------------------------------------
+
 # Maps a fully-qualified SysML function name to the Python call target and a
 # flag indicating whether the generated code needs ``import math``.
 _FUNCTIONS: Final[dict[str, tuple[str, bool]]] = {
