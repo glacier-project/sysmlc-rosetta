@@ -65,6 +65,9 @@ class PreambleNeeds:
         self.item_defs: dict[str, syside.Definition] = {}
         self.uses_math = False
         self.uses_namespace = False
+        self.external_module: str | None = None
+        self.external_names: frozenset[str] = frozenset()
+        self.used_external: set[str] = set()
 
     def register_enum(self, literal: syside.EnumerationUsage) -> str:
         """Register the literal's enum def; return ``Def.literal`` source.
@@ -115,6 +118,11 @@ class PreambleNeeds:
             )
         self.item_defs[item.name] = item
 
+    def register_external(self, *, module: str, names: frozenset[str]) -> None:
+        """Record the --python module and the function names it provides."""
+        self.external_module = module
+        self.external_names = names
+
     def _enum_class_lines(self) -> list[str]:
         """Render registered enum defs as Python Enum classes, sorted by name.
 
@@ -162,14 +170,17 @@ class PreambleNeeds:
         """Assemble the LF preamble: imports, enum classes, payloads.
 
         Imports precede the class blocks that rely on them.  Line order is
-        pinned by golden tests: math import, SimpleNamespace import, enum
-        classes, payload dataclasses.
+        pinned by golden tests: math import, SimpleNamespace import,
+        external-module imports, enum classes, payload dataclasses.
         """
         lines: list[str] = []
         if self.uses_math:
             lines.append("import math")
         if self.uses_namespace:
             lines.append("from types import SimpleNamespace")
+        for name in sorted(self.used_external):
+            assert self.external_module is not None
+            lines.append(f"from {self.external_module} import {name}")
         lines += self._enum_class_lines()
         lines += self._payload_class_lines()
         return lines
@@ -403,6 +414,17 @@ class LfPythonCodeGen(PythonCodeGen):
         func = expr.function
         qn = None if func is None else func.qualified_name
         if qn is None or str(qn) not in _FUNCTIONS:
+            if (
+                isinstance(func, syside.CalculationDefinition)
+                and func.name is not None
+                and func.name in self._needs.external_names
+            ):
+                self._needs.used_external.add(func.name)
+                args = ", ".join(
+                    self._emit(argument, 0)
+                    for argument in expr.arguments.collect()
+                )
+                return f"{func.name}({args})"
             raise UnsupportedConstructError(
                 f"function {qn or '<unresolved>'!s} is not in rosetta's "
                 "supported set.",
