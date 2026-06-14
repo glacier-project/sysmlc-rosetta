@@ -406,3 +406,112 @@ state-scoped attributes → `accept when` → deep entry → Tier 3.
 | a rig not exhibiting **exactly two named** state defs (fewer/more, anonymous, or a non-exhibit member) | a rig composes exactly two machines; name both exhibits |
 | the **same state def exhibited twice** in one rig | a rig composes two distinct machines |
 | cross-machine reactor / enum / payload **name collisions** across a rig's two families | the merged program and preamble are keyed by simple name — rename a state, machine, or item |
+
+## 12. Function-call layer (Plan 1)
+
+### Builtin functions in expression positions
+
+A whitelist of standard-library functions is resolved in **expression
+positions** — guards and assignment RHS — via `_FUNCTIONS` in
+`sysmlc/backends/rosetta/codegen.py`:
+
+| SysML qualified name | Python rendering |
+|---|---|
+| `NumericalFunctions::abs` | `abs(…)` |
+| `NumericalFunctions::max` | `max(…)` |
+| `NumericalFunctions::min` | `min(…)` |
+| `TrigFunctions::sin` | `math.sin(…)` (adds `import math`) |
+| `TrigFunctions::cos` | `math.cos(…)` |
+| `TrigFunctions::tan` | `math.tan(…)` |
+
+Unlisted functions are rejected; extend `_FUNCTIONS` as new cases demand.
+
+### Assignment-from-call
+
+The only form in which a function call appears as a transition effect is an
+**assignment-from-call** — the RHS of `do assign x := …`:
+
+```sysml
+do assign x := NumericalFunctions::max(x, 0.0)
+```
+
+renders as:
+
+```python
+self.x = max(self.x, 0.0)
+```
+
+The RHS routes through `_emit_invocation` in `LfPythonCodeGen`, which
+resolves the callee against `_FUNCTIONS` (builtins) or the external
+registry (see below).
+
+**Functions cannot be bare `do` effects.** A SysML `calc def` can only be
+invoked in an expression position; syside rejects a standalone
+`do log(...)` statement effect with
+`perform-action-usage-reference: A perform action must reference an action
+usage`. IO/observation must therefore be backend-generated, not a
+user-written `do` call.
+
+### The `sysmlc` utility library
+
+`sysmlc/sysml/lib/sysmlc.sysml` ships two utility **functions** (declared
+as `calc def`, like `NumericalFunctions::abs` — not `action def`):
+
+```sysml
+package sysmlc {
+    calc def print { in msg; }
+    calc def log { in tag; in value; }
+}
+```
+
+`load_model` always prepends bundled libraries (libraries first), so any
+model can reference `sysmlc::print`/`sysmlc::log` without an explicit
+import. The library is **not yet mapped by rosetta** — `print`/`log` are
+reserved for Plan 2's observation layer, where the backend generates the
+logging reaction; the user never writes the invocation.
+
+### External functions (`--python`)
+
+A `calc def` declared in SysML can be backed by a user-supplied Python file
+at build time:
+
+```sysml
+package P { calc def step { in x : Real; in dt : Real; return : Real; } }
+state def Ramp {
+    attribute x : Real := 0.0;
+    …
+    transition … do assign x := P::step(x, 0.1) then run;
+}
+```
+
+```bash
+sysmlc rosetta build models/furuta -e Furuta::Plant -o out/ --python plant.py
+```
+
+The CLI:
+
+1. Parses `plant.py` with `ast.parse` and collects top-level `def` names.
+2. Passes `(module_stem, names)` into the build; codegen registers them on
+   `PreambleNeeds.register_external`.
+3. Matches the invoked `calc def` **by simple name** (e.g. `step`) against
+   the registered set; adds each hit to `used_external`.
+4. Emits `from <module> import <name>` in the `.lf` preamble for each used
+   name, and calls the function as `step(self.x, 0.1)` — a bare
+   unqualified call.
+5. **Copies `plant.py` next to every generated `.lf`** so the import
+   resolves at `lfc` compile time.
+6. **`--python` is rosetta-only** — passing it with another backend raises a
+   CLI error immediately.
+
+**Purity / determinism contract.** An external function MUST be a pure,
+deterministic function of its inputs — no `random`, no wall-clock time, no
+hidden global state. LF's logical-time model guarantees deterministic
+reaction scheduling; a side-effecting or non-deterministic function breaks
+that guarantee. This contract is the model author's responsibility; the
+toolchain does not enforce it.
+
+**Deployment (`PYTHONPATH`).** The compiled LF Python binary runs
+`from <module> import <name>` inside the generated `src/` directory.
+The `lf run` test harness sets `PYTHONPATH` to `src/` (where the module was
+copied by the CLI). Users compiling the generated project manually must
+place the external module on `PYTHONPATH` before running the binary.
