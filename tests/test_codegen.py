@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from syside import ActionUsage, Expression
 
 
-def _only_effect(model_dir: str, qn: str, source: str):
+def _only_effect(model_dir: str, qn: str, source: str) -> ActionUsage:
     recorded = record(SM_EXAMPLES_DIR / model_dir, qn)
     (t,) = [t for t in recorded.transitions if t.source.endswith(source)]
     assert t.effect is not None
