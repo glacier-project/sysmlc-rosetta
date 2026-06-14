@@ -13,6 +13,8 @@ for a fast local loop when lfc is installed.
 
 from __future__ import annotations
 
+import ast
+import os
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
@@ -65,6 +67,7 @@ def compile_harness(
     timeout: str = "2 sec",
     drivers: str = "",
     values: dict[str, ValueNode] | None = None,
+    python_file: Path | None = None,
 ) -> Path:
     """Generate and lfc-compile one machine; return the harness binary."""
     name = qn.split("::")[-1]
@@ -73,7 +76,18 @@ def compile_harness(
         model = configure_model(model, qn, values)
     src = tmp_path / "src"
     src.mkdir()
-    (src / f"{name}.lf").write_text(to_lf(build_program(model, qn)))
+    external = None
+    if python_file is not None:
+        names = frozenset(
+            n.name
+            for n in ast.parse(python_file.read_text()).body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+        external = (python_file.stem, names)
+        shutil.copy(python_file, src / python_file.name)
+    (src / f"{name}.lf").write_text(
+        to_lf(build_program(model, qn, external=external))
+    )
     (src / "Harness.lf").write_text(
         HARNESS.format(
             reactor=name, machine=name, timeout=timeout, drivers=drivers
@@ -98,6 +112,7 @@ def run_machine(
     timeout: str = "2 sec",
     drivers: str = "",
     values: dict[str, ValueNode] | None = None,
+    python_file: Path | None = None,
 ) -> list[str]:
     """Generate, compile, and run one machine; return the state sequence."""
     binary = compile_harness(
@@ -107,12 +122,15 @@ def run_machine(
         timeout=timeout,
         drivers=drivers,
         values=values,
+        python_file=python_file,
     )
+    env = {**os.environ, "PYTHONPATH": str(binary.parent.parent / "src")}
     result = subprocess.run(
         [str(binary)],
         capture_output=True,
         text=True,
         timeout=120,
+        env=env,
     )
     assert result.returncode == 0, result.stderr
     return [
@@ -1215,3 +1233,18 @@ def test_rig_payload_serves_local_and_peer(tmp_path: Path) -> None:
     assert process.returncode == 0, process.stderr
     assert "finished" in states["plant"]  # local overlap delivery worked
     assert states["tb"][-1] == "done"  # peer payload delivery worked
+
+
+def test_external_ramp_runs(tmp_path: Path) -> None:
+    # `step` is supplied by ramp.py via the external build param; the
+    # self-loop re-enters `run` every 0.1 s, re-announcing it. Proves the
+    # external call compiles and runs (exit 0; every announcement is "run").
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm15-external",
+        "SM15::Ramp",
+        timeout="1 sec",
+        python_file=SM_EXAMPLES_DIR / "sm15-external" / "ramp.py",
+    )
+    assert states, "no state announcements"
+    assert all(s == "run" for s in states)
