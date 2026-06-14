@@ -17,6 +17,14 @@ if TYPE_CHECKING:
     from syside import ActionUsage, Expression
 
 
+def _only_effect(model_dir: str, qn: str, source: str):
+    recorded = record(SM_EXAMPLES_DIR / model_dir, qn)
+    (t,) = [t for t in recorded.transitions if t.source.endswith(source)]
+    assert t.effect is not None
+    (action,) = actions.inline_actions(t.effect)
+    return action
+
+
 def _only_guard(model_dir: str, qn: str) -> Expression:
     recorded = record(SM_EXAMPLES_DIR / model_dir, qn)
     guards = [t.guard for t in recorded.transitions if t.guard is not None]
@@ -140,3 +148,9 @@ def test_unlisted_function_is_rejected() -> None:
     gen = LfPythonCodeGen(frozenset({"x"}))
     with pytest.raises(UnsupportedConstructError, match="sqrt"):
         gen.render_expression(guard)
+
+
+def test_assignment_from_builtin_call_renders() -> None:
+    action = _only_effect("sm14-call-effect", "SM14::MachineAssignCall", "a")
+    gen = LfPythonCodeGen(frozenset({"x"}))
+    assert gen.render_action(action) == "self.x = max(self.x, 0.0)"
