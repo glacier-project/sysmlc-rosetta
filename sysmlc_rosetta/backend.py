@@ -29,13 +29,25 @@ class RosettaBackend(Backend):
         )
 
     @override
-    def build(self, model: syside.Model, element_qn: str) -> object:
+    def build(
+        self,
+        model: syside.Model,
+        element_qn: str,
+        *,
+        external: tuple[str, frozenset[str]] | None = None,
+    ) -> object:
         """Build the Lingua Franca program for the given state definition."""
-        return build_program(model, element_qn)
+        return build_program(model, element_qn, external=external)
 
-    def build_composition(self, model: syside.Model, rig_qn: str) -> object:
+    def build_composition(
+        self,
+        model: syside.Model,
+        rig_qn: str,
+        *,
+        external: tuple[str, frozenset[str]] | None = None,
+    ) -> object:
         """Build the composed LF program for a testbench rig."""
-        return build_rig_program(model, rig_qn)
+        return build_rig_program(model, rig_qn, external=external)
 
     @override
     def serialize(self, artifact: object, fmt: str) -> str:

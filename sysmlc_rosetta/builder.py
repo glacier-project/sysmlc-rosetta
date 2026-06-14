@@ -1088,7 +1088,12 @@ class RosettaBuilder:
         ]
 
 
-def build_program(model: syside.Model, state_def_qn: str) -> LfProgram:
+def build_program(
+    model: syside.Model,
+    state_def_qn: str,
+    *,
+    external: tuple[str, frozenset[str]] | None = None,
+) -> LfProgram:
     """Build a Lingua Franca program from a SysML state definition.
 
     Wires the generic :class:`StateMachineDriver` to a
@@ -1097,11 +1102,18 @@ def build_program(model: syside.Model, state_def_qn: str) -> LfProgram:
     Args:
         model: Loaded syside model containing the SysML state def.
         state_def_qn: Qualified name of the SysML ``state def`` to translate.
+        external: Optional ``(module_stem, names)`` pair identifying a Python
+            module that provides external ``calc def`` implementations.
 
     Returns:
         The assembled ``LfProgram``.
     """
     name = state_def_qn.split("::")[-1]
-    result = StateMachineDriver(model).run(state_def_qn, RosettaBuilder(name))
+    needs = PreambleNeeds()
+    if external is not None:
+        needs.register_external(module=external[0], names=external[1])
+    result = StateMachineDriver(model).run(
+        state_def_qn, RosettaBuilder(name, needs=needs)
+    )
     assert isinstance(result, LfProgram)
     return result

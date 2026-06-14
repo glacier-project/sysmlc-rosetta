@@ -23,7 +23,12 @@ from sysmlc.sysml.queries import exhibited_state_defs, resolve
 logger = logging.getLogger(__name__)
 
 
-def build_rig_program(model: syside.Model, rig_qn: str) -> LfProgram:
+def build_rig_program(
+    model: syside.Model,
+    rig_qn: str,
+    *,
+    external: tuple[str, frozenset[str]] | None = None,
+) -> LfProgram:
     """Build the composed LF program for a testbench rig.
 
     Each exhibited machine builds once with ``peer_accepts`` set to the
@@ -65,6 +70,8 @@ def build_rig_program(model: syside.Model, rig_qn: str) -> LfProgram:
                 sig,
             )
     needs = PreambleNeeds()
+    if external is not None:
+        needs.register_external(module=external[0], names=external[1])
     driver = StateMachineDriver(model)
     prog_a = driver.run(
         qn_a,
