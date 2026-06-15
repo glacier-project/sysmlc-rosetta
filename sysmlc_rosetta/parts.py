@@ -194,7 +194,8 @@ def build_part_program(
         )
     parts = {p.usage_name: p for p in g.parts}
     faces = {
-        p.usage_name: machine_interface(model, p.behavior_qn) for p in g.parts
+        p.usage_name: machine_interface(model, p.behaviors[0][1])
+        for p in g.parts
     }
 
     _validate_via_ports(g.parts, faces)
@@ -282,7 +283,13 @@ def _build_reactors(
     behavior: dict[str, str] = {}
     for node in nodes:
         union[node.definition_name] |= peer_accepts[node.usage_name]
-        behavior[node.definition_name] = node.behavior_qn
+        if len(node.behaviors) > 1:
+            raise UnsupportedConstructError(
+                f"part def {node.definition_name!r} has "
+                f"{len(node.behaviors)} exhibits; multi-exhibit reactor "
+                "build is not yet implemented (next task after graph support)"
+            )
+        behavior[node.definition_name] = node.behaviors[0][1]
 
     needs = PreambleNeeds()
     driver = StateMachineDriver(model)
