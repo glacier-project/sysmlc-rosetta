@@ -116,7 +116,7 @@ def test_thermostat_periodic_loop_with_eventless_guard() -> None:
 
 
 def test_vending_payload_binding_line() -> None:
-    program = _build("vending-machine", "VendingMachine::VendingMachine")
+    program = _build("vending-machine", "VendingMachine::VendingMachineBehavior")
     idle = _mode(program, "idle")
     # [0] entry; [1] the Coin-triggered reaction
     coin = idle.reactions[1]
@@ -126,7 +126,7 @@ def test_vending_payload_binding_line() -> None:
 
 
 def test_vending_dispatch_merges_same_signal_groups() -> None:
-    program = _build("vending-machine", "VendingMachine::VendingMachine")
+    program = _build("vending-machine", "VendingMachine::VendingMachineBehavior")
     idle = _mode(program, "idle")
     # both Coin transitions merge into ONE reaction (if/elif)
     assert len(idle.reactions) == 2  # entry + Coin
@@ -136,7 +136,7 @@ def test_vending_dispatch_merges_same_signal_groups() -> None:
 
 
 def test_vending_dispense_constructs_payload_class() -> None:
-    program = _build("vending-machine", "VendingMachine::VendingMachine")
+    program = _build("vending-machine", "VendingMachine::VendingMachineBehavior")
     assert "@dataclass" in program.preamble
     assert "class Dispensed:" in program.preamble
     paid = _mode(program, "paid")

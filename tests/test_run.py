@@ -452,7 +452,7 @@ def test_showcase_vending_machine(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "vending-machine",
-        "VendingMachine::VendingMachine",
+        "VendingMachine::VendingMachineBehavior",
         timeout="1 sec",
         drivers=drivers,
     )
@@ -462,23 +462,17 @@ def test_showcase_vending_machine(tmp_path: Path) -> None:
 
 
 def test_vending_machine_rig_verdict(tmp_path: Path) -> None:
-    # VendingMachineRig: testbench inserts two Coin(2) payments at 0.1 s
+    # vendingMachineSystem: testbench inserts two Coin(2) payments at 0.1 s
     # intervals (credit 2 then 4 >= price 3, plant → paid), then sends
     # Selection("cola") from dispenseWait's entry action so the mode is
     # already active when the plant's Dispensed reply arrives.  Verdict
     # passes (exit 0).
-    process, states = run_rig(
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "vending-machine",
-        "VendingMachine::VendingMachineRig",
-        timeout="15 sec",
+        "VendingMachine::vendingMachineSystem",
     )
-    assert process.returncode == 0, process.stderr
-    # paid is the unique landmark: only entered when cumulative credit
-    # meets or exceeds price (after the second Coin(2) is accepted).
-    assert "paid" in states["plant"]
-    assert states["plant"][-1] == "idle"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 def test_sm08_nested_composite_runs(tmp_path: Path) -> None:

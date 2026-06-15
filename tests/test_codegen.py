@@ -120,7 +120,7 @@ def test_enum_literal_renders_and_registers() -> None:
 
 def test_payload_local_renders_bare_and_attr_check_skipped() -> None:
     recorded = record(
-        SHOWCASE_DIR / "vending-machine", "VendingMachine::VendingMachine"
+        SHOWCASE_DIR / "vending-machine", "VendingMachine::VendingMachineBehavior"
     )
     guards = [t.guard for t in recorded.transitions if t.guard is not None]
     gen = LfPythonCodeGen(
