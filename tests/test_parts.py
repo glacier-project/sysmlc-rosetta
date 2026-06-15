@@ -49,3 +49,17 @@ def test_observation_logs_entry_and_exit() -> None:
     assert "import logging" in text
     assert 'logging.debug("entered Plant.idle")' in text
     assert 'logging.debug("exited Plant.idle")' in text
+
+
+MULTI = Path("models/sm-examples/part-multi-exhibit")
+
+
+def test_multi_exhibit_part_builds_composite_reactor() -> None:
+    prog = build_part_program(
+        load_model(MULTI),
+        "PartMulti::sys",
+    )
+    names = {r.name for r in prog.reactors}
+    assert {"PlantBehavior", "TesterBehavior", "Rig"} <= names
+    insts = {(i.name, i.reactor) for i in prog.main.instantiations}
+    assert ("rig", "Rig") in insts

@@ -186,23 +186,55 @@ def build_part_program(
     *,
     target_options: tuple[tuple[str, str], ...] = (),
 ) -> LfProgram:
-    """Build the composed LF program for a top-level part usage."""
+    """Build the composed LF program for a top-level part usage.
+
+    Part nodes are partitioned into two groups:
+
+    * **Single-exhibit** (``len(node.behaviors) == 1``): participate in
+      port-based interface validation and signal routing, exactly as before.
+    * **Multi-exhibit** (``len(node.behaviors) >= 2``): self-contained
+      sub-systems built via :func:`compose_exhibits`.  They do not
+      participate in ``faces`` / ``_validate_via_ports`` / ``_peer_accepts``
+      / ``_route`` (their signals are internal).  A ``connect`` that
+      references a multi-exhibit part is rejected with
+      :class:`~sysmlc.errors.UnsupportedConstructError`.
+
+    The ``main reactor`` instantiates ALL parts (single and multi).
+    """
     g = part_graph(model, usage_qn)
     if not g.parts:
         raise UnsupportedConstructError(
             f"part usage {usage_qn!r} composes no parts"
         )
-    parts = {p.usage_name: p for p in g.parts}
+
+    single_nodes = tuple(p for p in g.parts if len(p.behaviors) == 1)
+    multi_nodes = tuple(p for p in g.parts if len(p.behaviors) >= 2)
+    multi_names = {p.usage_name for p in multi_nodes}
+
+    # Reject connections that touch multi-exhibit parts (not supported yet).
+    for (ia, _pa), (ib, _pb) in g.connections:
+        for inst in (ia, ib):
+            if inst in multi_names:
+                raise UnsupportedConstructError(
+                    f"connection references part {inst!r}, which is a "
+                    "multi-exhibit part; connecting to a multi-exhibit part "
+                    "is not supported yet"
+                )
+
+    # Port-based machinery applies to single-exhibit nodes only.
+    parts = {p.usage_name: p for p in single_nodes}
     faces = {
         p.usage_name: machine_interface(model, p.behaviors[0][1])
-        for p in g.parts
+        for p in single_nodes
     }
 
-    _validate_via_ports(g.parts, faces)
+    _validate_via_ports(single_nodes, faces)
     _validate_connections(g, parts)
 
     peer_accepts = _peer_accepts(g, faces)
-    reactors, preamble = _build_reactors(model, g.parts, peer_accepts)
+    reactors, preamble = _build_reactors(
+        model, single_nodes, multi_nodes, peer_accepts
+    )
 
     main = MainReactor(
         instantiations=tuple(
@@ -270,31 +302,35 @@ def _peer_accepts(
 
 def _build_reactors(
     model: syside.Model,
-    nodes: tuple[PartNode, ...],
+    single_nodes: tuple[PartNode, ...],
+    multi_nodes: tuple[PartNode, ...],
     peer_accepts: dict[str, frozenset[str]],
 ) -> tuple[tuple[Reactor, ...], tuple[str, ...]]:
-    """Build one reactor class per distinct part def, sharing a preamble.
+    """Build reactor classes for all part nodes, sharing one preamble.
 
-    A part def reused by several parts builds once; its ``peer_accepts`` is the
-    union over those usages so the shared class exposes every needed output.
+    Single-exhibit nodes produce one inline machine reactor per distinct part
+    def (with ``observe=True`` so DEBUG logging is emitted at run time).
+    Multi-exhibit nodes are built via :func:`compose_exhibits`, which wires
+    the exhibited machines internally.
+
+    A part def reused by several single-exhibit parts builds once; its
+    ``peer_accepts`` is the union over those usages so the shared class
+    exposes every needed output.
+
     Returns the reactor classes and the shared preamble lines.
     """
+    needs = PreambleNeeds()
+    seen: set[str] = set()
+    reactors: list[Reactor] = []
+
+    # --- Single-exhibit nodes: one reactor per distinct def (observe=True) ---
     union: dict[str, set[str]] = defaultdict(set)
     behavior: dict[str, str] = {}
-    for node in nodes:
+    for node in single_nodes:
         union[node.definition_name] |= peer_accepts[node.usage_name]
-        if len(node.behaviors) > 1:
-            raise UnsupportedConstructError(
-                f"part def {node.definition_name!r} has "
-                f"{len(node.behaviors)} exhibits; multi-exhibit reactor "
-                "build is not yet implemented (next task after graph support)"
-            )
         behavior[node.definition_name] = node.behaviors[0][1]
 
-    needs = PreambleNeeds()
     driver = StateMachineDriver(model)
-    reactors: list[Reactor] = []
-    seen: set[str] = set()
     for def_name, behavior_qn in behavior.items():
         result = driver.run(
             behavior_qn,
@@ -314,6 +350,25 @@ def _build_reactors(
                 )
             seen.add(reactor.name)
             reactors.append(reactor)
+
+    # --- Multi-exhibit nodes: build via compose_exhibits (once per def) ---
+    built_multi: set[str] = set()
+    for node in multi_nodes:
+        if node.definition_name in built_multi:
+            continue
+        built_multi.add(node.definition_name)
+        children, composite = compose_exhibits(
+            model, node.definition_name, node.behaviors, needs
+        )
+        for reactor in (*children, composite):
+            if reactor.name in seen:
+                raise UnsupportedConstructError(
+                    f"reactor name {reactor.name!r} collides across parts; "
+                    "rename a part def, state, or machine"
+                )
+            seen.add(reactor.name)
+            reactors.append(reactor)
+
     return tuple(reactors), tuple(needs.preamble_lines())
 
 

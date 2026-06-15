@@ -1305,6 +1305,22 @@ def test_part01_runs_and_logs(tmp_path: Path) -> None:
     assert "entered Tester.waitPong" in logs
 
 
+def test_multi_exhibit_part_runs_and_passes_verdict(tmp_path: Path) -> None:
+    # PartMulti::sys contains one part `rig : Rig` where Rig exhibits both
+    # PlantBehavior and TesterBehavior. The tester sends Ping after 0.1 s,
+    # the plant receives it (name-based cross-wiring inside Rig), replies
+    # with Pong, and the tester reaches `done` (verdict == 0 → request_stop
+    # → exit 0).  Verifies that compose_exhibits wires the internal signals
+    # and the program compiles and runs cleanly.
+    logs, rc = run_part(
+        tmp_path,
+        SM_EXAMPLES_DIR / "part-multi-exhibit",
+        "PartMulti::sys",
+        timeout="10 sec",
+    )
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
+
+
 def test_part01_silent_without_debug(tmp_path: Path) -> None:
     # Without the run enabling DEBUG, the generated program emits no
     # observation lines (spec 5.5: silent unless the run turns DEBUG on).
