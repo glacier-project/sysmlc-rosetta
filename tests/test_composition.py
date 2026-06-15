@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 import syside
 
+from sysmlc.backends.rosetta.backend import RosettaBackend
 from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
-from sysmlc.backends.rosetta.composition import build_rig_program
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
@@ -135,7 +135,7 @@ def test_overlap_payload_send_dodges_port_shadowing() -> None:
     # after the port shadows the preamble dataclass, so the constructor must
     # be reached via globals(). The overlap form renders BOTH lines; both
     # must use the globals() reach (set line + schedule line).
-    program = build_rig_program(
+    program = RosettaBackend().build_composition(
         load_model(FIXTURES_DIR / "rig-payload"),
         "RigPayload::CounterRig",
     )
@@ -161,7 +161,7 @@ def test_bare_payload_send_keeps_plain_constructor() -> None:
 
 def test_rig_program_composes_bench_reactor() -> None:
     model = load_model(FIXTURES_DIR / "rig-pair")
-    program = build_rig_program(model, "RigPair::PlantRig")
+    program = RosettaBackend().build_composition(model, "RigPair::PlantRig")
     bench = program.reactor
     assert bench.name == "PlantRig"
     assert [i.name for i in bench.instantiations] == ["plant", "tb"]
@@ -187,18 +187,18 @@ def test_rig_program_composes_bench_reactor() -> None:
 def test_rig_with_same_def_twice_is_rejected() -> None:
     model = load_model(FIXTURES_DIR / "rig-invalid")
     with pytest.raises(UnsupportedConstructError, match="twice"):
-        build_rig_program(model, "RigInvalid::Twice")
+        RosettaBackend().build_composition(model, "RigInvalid::Twice")
 
 
 def test_signal_sent_by_both_machines_is_rejected() -> None:
     model = load_model(FIXTURES_DIR / "rig-invalid")
     with pytest.raises(UnsupportedConstructError, match="both machines"):
-        build_rig_program(model, "RigInvalid::BothSend")
+        RosettaBackend().build_composition(model, "RigInvalid::BothSend")
 
 
 def test_rig_pair_serializes_to_lf() -> None:
     model = load_model(FIXTURES_DIR / "rig-pair")
-    text = to_lf(build_rig_program(model, "RigPair::PlantRig"))
+    text = to_lf(RosettaBackend().build_composition(model, "RigPair::PlantRig"))
     assert "reactor PlantRig {" in text
     assert "main reactor {" in text
     assert text.index("reactor Plant ") < text.index("reactor PlantRig")
@@ -206,12 +206,11 @@ def test_rig_pair_serializes_to_lf() -> None:
 
 
 def test_rig_pair_lf_is_stable() -> None:
-    from sysmlc.backends.rosetta.composition import build_rig_program
     from sysmlc.backends.rosetta.serialize import to_lf
     from sysmlc.sysml.loading import load_model
 
     model = load_model(Path("tests/backends/rosetta/fixtures/rig-pair"))
-    text = to_lf(build_rig_program(model, "RigPair::PlantRig"))
+    text = to_lf(RosettaBackend().build_composition(model, "RigPair::PlantRig"))
     golden = Path("tests/backends/rosetta/fixtures/rig-pair/expected.lf")
     if not golden.exists():
         golden.write_text(text)  # first run records the golden

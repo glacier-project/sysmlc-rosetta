@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from sysmlc.backends.rosetta.backend import RosettaBackend
 from sysmlc.backends.rosetta.builder import OUTPUT_PORT, build_program
-from sysmlc.backends.rosetta.composition import build_rig_program
 from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
@@ -176,7 +176,7 @@ def run_rig(
     if values:
         for machine_qn, overrides in values.items():
             model = configure_model(model, machine_qn, overrides)
-    program = build_rig_program(model, rig_qn)
+    program = RosettaBackend().build_composition(model, rig_qn)
     streams = [
         port.removesuffix(f"_{OUTPUT_PORT}") for port in program.reactor.outputs
     ]

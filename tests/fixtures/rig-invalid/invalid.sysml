@@ -29,7 +29,7 @@ package RigInvalid {
         exhibit state z : A;
     }
     // Shape-valid for exhibited_state_defs (two named exhibits, each typed
-    // by a model state def), but rejected by build_rig_program: the same
+    // by a model state def), but rejected by build_composition: the same
     // state def A is exhibited twice, which the composition builder forbids.
     part def Twice {
         exhibit state x : A;
@@ -41,7 +41,7 @@ package RigInvalid {
         exhibit state y : B;
     }
     // Shape-valid for exhibited_state_defs (two distinct state defs, two
-    // named exhibits), but rejected by build_rig_program: both A and B
+    // named exhibits), but rejected by build_composition: both A and B
     // send AND accept Ping, so both sides have the same signal name on
     // their commPort — the composition builder cannot assign a unique
     // input port to either machine.

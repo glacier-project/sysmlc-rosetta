@@ -12,7 +12,7 @@ maps). This generalizes the rig's name-based ``_cross`` to N parts while
 honouring the SysML ports, and validates ports strictly.
 
 ``compose_exhibits`` provides the reusable N-machine composition kernel
-consumed by the rig path (``build_rig_program``).
+consumed by the rig path (``RosettaBackend.build_composition``).
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def _cross_all(
     Iterates ordered pairs (i, j) with i≠j in the order (0,1), (1,0),
     (0,2), (1,2), (2,0), ... — specifically the same order as nested
     ``for i ... for j`` loops — which for N=2 produces (0→1) then (1→0),
-    matching the original ``build_rig_program`` wiring exactly.
+    matching the original rig wiring exactly.
 
     Rejects two sources into the same ``(target_inst, signal)`` input
     (fan-in) with the same error style as ``_route``.
