@@ -817,7 +817,7 @@ def test_showcase_batch_reactor_recipe(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "batch-reactor",
-        "BatchReactor::BatchReactor",
+        "BatchReactor::BatchReactorBehavior",
         timeout="20 sec",
         drivers=drivers,
         values=_REACTOR_VALUES,
@@ -857,7 +857,7 @@ def test_showcase_batch_reactor_overpressure(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "batch-reactor",
-        "BatchReactor::BatchReactor",
+        "BatchReactor::BatchReactorBehavior",
         timeout="20 sec",
         drivers=drivers,
         values=_REACTOR_VALUES,
@@ -880,33 +880,13 @@ def test_showcase_batch_reactor_overpressure(tmp_path: Path) -> None:
 
 
 def test_batch_reactor_rig_verdict(tmp_path: Path) -> None:
-    # BatchReactorRig: testbench sends StartRecipe at 0.2 s, waits for
-    # BatchDone (announced when draining reaches level<=0 and batches+1
-    # meets batchTarget). With sped-up _REACTOR_VALUES (batchTarget=1,
-    # rates=60/65/60/60) and the model default sampleTime=1.0 s, the
-    # full fill/heat/react/cool/drain cycle completes in ~7.2 s logical
-    # (0.2 stimulus + 1.0 fill + 1.0 heat + 3.0 react + 1.0 cool +
-    # 1.0 drain); the 30 s fail window is generous.
-    #
-    # No `announcing` latch needed: BatchDone is sent on a GUARDED
-    # eventless completion transition exiting `draining`, not in the same
-    # reaction that consumed StartRecipe, so lfc 0.11 sees no
-    # read-input+write-output cycle.
-    process, states = run_rig(
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "batch-reactor",
-        "BatchReactor::BatchReactorRig",
+        "BatchReactor::batchReactorSystem",
         timeout="40 sec",
-        values={"BatchReactor::BatchReactor": _REACTOR_VALUES},
     )
-    assert process.returncode == 0, process.stderr
-    # draining is the unique plant landmark proving a complete batch cycle:
-    # the reactor only reaches draining after fill→heat→react→cool, and
-    # BatchDone is sent the moment draining detects level<=0 and
-    # batches+1 >= batchTarget.
-    assert "draining" in states["plant"]
-    assert states["plant"][-1] == "done"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 _STATION_HANDSHAKE = [

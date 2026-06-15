@@ -305,11 +305,11 @@ def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
 
 
 def test_batch_reactor_parallel_regions_and_payload_guard() -> None:
-    program = _build("batch-reactor", "BatchReactor::BatchReactor")
+    program = _build("batch-reactor", "BatchReactor::BatchReactorBehavior")
     assert [r.name for r in program.reactors] == [
-        "BatchReactor_reacting_agitation",
-        "BatchReactor_reacting_ventWatch",
-        "BatchReactor",
+        "BatchReactorBehavior_reacting_agitation",
+        "BatchReactorBehavior_reacting_ventWatch",
+        "BatchReactorBehavior",
     ]
     vent_watch = program.reactors[1]
     (watching,) = [m for m in vent_watch.modes if m.name == "watching"]
@@ -321,7 +321,7 @@ def test_batch_reactor_parallel_regions_and_payload_guard() -> None:
 
 
 def test_batch_reactor_saturating_dynamics_use_whitelist() -> None:
-    program = _build("batch-reactor", "BatchReactor::BatchReactor")
+    program = _build("batch-reactor", "BatchReactor::BatchReactorBehavior")
     filling = _mode(program, "filling")
     timer_reaction = filling.reactions[1]
     assert (
@@ -339,7 +339,7 @@ def test_showcase_values_examples_configure_and_build() -> None:
     examples = [
         ("thermostat", "Thermostat::Thermostat"),
         ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
-        ("batch-reactor", "BatchReactor::BatchReactor"),
+        ("batch-reactor", "BatchReactor::BatchReactorBehavior"),
         ("charging-station", "ChargingStation::ChargingStationBehavior"),
         ("level-crossing", "LevelCrossing::LevelCrossing"),
     ]
