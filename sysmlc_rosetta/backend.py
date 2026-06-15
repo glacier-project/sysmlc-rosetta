@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, override
 from sysmlc.backends.base import Backend, OutputOptions
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.composition import build_rig_program
+from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import SerializationError
@@ -48,6 +49,18 @@ class RosettaBackend(Backend):
     ) -> object:
         """Build the composed LF program for a testbench rig."""
         return build_rig_program(model, rig_qn, external=external)
+
+    def build_part(
+        self,
+        model: syside.Model,
+        usage_qn: str,
+        *,
+        target_options: tuple[tuple[str, str], ...] = (),
+    ) -> object:
+        """Build the LF program (main reactor) for a top-level part usage."""
+        return build_part_program(
+            model, usage_qn, target_options=target_options
+        )
 
     @override
     def serialize(self, artifact: object, fmt: str) -> str:
