@@ -115,7 +115,7 @@ def test_payload_referencing_guard_builds_and_binds() -> None:
 @pytest.mark.parametrize(
     "trigger",
     [
-        AtTrigger(),
+        AtTrigger(instant=0.0),
         WhenTrigger(condition=cast("syside.Expression", object())),
     ],
 )
