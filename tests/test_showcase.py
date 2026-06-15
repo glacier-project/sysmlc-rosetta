@@ -24,7 +24,7 @@ def _mode(program: LfProgram, name: str) -> Mode:
 
 
 def test_traffic_light_enum_class_in_preamble() -> None:
-    program = _build("traffic-light", "TrafficLight::TrafficLight")
+    program = _build("traffic-light", "TrafficLight::TrafficLightBehavior")
     assert "from enum import Enum" in program.preamble
     assert "class LightColor(Enum):" in program.preamble
     assert '    red = "red"' in program.preamble
@@ -33,7 +33,7 @@ def test_traffic_light_enum_class_in_preamble() -> None:
 
 
 def test_traffic_light_enum_literals_in_bodies_and_init() -> None:
-    program = _build("traffic-light", "TrafficLight::TrafficLight")
+    program = _build("traffic-light", "TrafficLight::TrafficLightBehavior")
     (color, _requested) = program.reactor.state_vars
     assert color.name == "color"
     assert color.init == "LightColor.red"
@@ -42,7 +42,7 @@ def test_traffic_light_enum_literals_in_bodies_and_init() -> None:
 
 
 def test_traffic_light_structure() -> None:
-    program = _build("traffic-light", "TrafficLight::TrafficLight")
+    program = _build("traffic-light", "TrafficLight::TrafficLightBehavior")
     # walkRequest is a transient latch entered when PedestrianRequest is
     # accepted; its eventless completion transition sends WalkOn via commPort
     # at the next microstep, ensuring the testbench is settled in walkWait

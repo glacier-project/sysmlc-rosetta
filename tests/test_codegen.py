@@ -108,7 +108,9 @@ def _entry_assigns(model_dir: Path, qn: str, state: str) -> list[ActionUsage]:
 
 def test_enum_literal_renders_and_registers() -> None:
     (assign, _) = _entry_assigns(
-        SHOWCASE_DIR / "traffic-light", "TrafficLight::TrafficLight", "showRed"
+        SHOWCASE_DIR / "traffic-light",
+        "TrafficLight::TrafficLightBehavior",
+        "showRed",
     )
     needs = PreambleNeeds()
     gen = LfPythonCodeGen(frozenset({"color", "requested"}), needs=needs)

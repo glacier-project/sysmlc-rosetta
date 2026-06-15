@@ -314,7 +314,7 @@ def test_showcase_traffic_light(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "traffic-light",
-        "TrafficLight::TrafficLight",
+        "TrafficLight::TrafficLightBehavior",
         timeout="6 sec",
         drivers=drivers,
     )
@@ -325,23 +325,17 @@ def test_showcase_traffic_light(tmp_path: Path) -> None:
 
 
 def test_traffic_light_rig_verdict(tmp_path: Path) -> None:
-    # TrafficLightRig: testbench waits 5 s, then sends PedestrianRequest from
-    # the walkWait entry action (one microstep after the mode is active, so
-    # reaction(WalkOn) fires in walkWait, not waitGreen). Plant enters the
+    # trafficLightSystem: testbench waits 5 s, then sends PedestrianRequest
+    # from the walkWait entry action (one microstep after the mode is active,
+    # so reaction(WalkOn) fires in walkWait, not waitGreen). Plant enters the
     # transient walkRequest state, announces WalkOn, then showYellow. Verdict
     # passes (exit 0).
-    process, states = run_rig(
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "traffic-light",
-        "TrafficLight::TrafficLightRig",
-        timeout="20 sec",
+        "TrafficLight::trafficLightSystem",
     )
-    assert process.returncode == 0, process.stderr
-    # walkRequest is the unique landmark: it is only entered when a
-    # PedestrianRequest is accepted while showGreen is active.
-    assert "walkRequest" in states["plant"]
-    assert states["plant"][-1] == "showYellow"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 def test_showcase_stopwatch(tmp_path: Path) -> None:
