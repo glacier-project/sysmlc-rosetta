@@ -181,6 +181,24 @@ def _route(
     ways over a single connection (same name) is rejected, as in the rig.
     """
     connections: list[Connection] = []
+    # (target instance, signal) -> the source instance already wired to it,
+    # so a second source into the same single-channel input is rejected.
+    destinations: dict[tuple[str, str], str] = {}
+
+    def wire(source_inst: str, target_inst: str, sig: str) -> None:
+        key = (target_inst, sig)
+        if key in destinations:
+            raise UnsupportedConstructError(
+                f"signal {sig!r} has two sources ({destinations[key]!r} and "
+                f"{source_inst!r}) into {target_inst!r}; single-channel "
+                "fan-in is forbidden — model it with multiplicity (a bank "
+                "into a multiport), which is deferred to a later increment."
+            )
+        destinations[key] = source_inst
+        connections.append(
+            Connection(f"{source_inst}.{sig}", f"{target_inst}.{sig}")
+        )
+
     for (ia, pa), (ib, pb) in g.connections:
         fa, fb = faces[ia], faces[ib]
         a_to_b = fa.sent_via.get(pa, frozenset()) & fb.accepted_via.get(
@@ -197,9 +215,9 @@ def _route(
                 "same-name signals are not supported"
             )
         for sig in sorted(a_to_b):
-            connections.append(Connection(f"{ia}.{sig}", f"{ib}.{sig}"))
+            wire(ia, ib, sig)
         for sig in sorted(b_to_a):
-            connections.append(Connection(f"{ib}.{sig}", f"{ia}.{sig}"))
+            wire(ib, ia, sig)
         _warn_unwired(ia, pa, fa, fb, pb)
         _warn_unwired(ib, pb, fb, fa, pa)
     return tuple(connections)

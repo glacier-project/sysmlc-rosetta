@@ -190,3 +190,12 @@ def test_out_attribute_is_rejected() -> None:
     )
     with pytest.raises(UnsupportedConstructError, match="`out` attribute"):
         builder.result()
+
+
+def test_single_channel_fan_in_is_rejected() -> None:
+    """Two sources into one input -> rejected, pointing at multiplicity."""
+    from sysmlc.backends.rosetta.parts import build_part_program
+
+    model = load_model(FIXTURES_DIR / "part-fanin")
+    with pytest.raises(UnsupportedConstructError, match="multiplicity"):
+        build_part_program(model, "PartFanin::sys")
