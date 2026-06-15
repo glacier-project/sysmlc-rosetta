@@ -65,7 +65,7 @@ def test_traffic_light_structure() -> None:
 
 
 def test_stopwatch_self_loop_timer() -> None:
-    program = _build("stopwatch", "Stopwatch::Stopwatch")
+    program = _build("stopwatch", "Stopwatch::StopwatchBehavior")
     running = _mode(program, "running")
     (timer,) = running.timers
     assert timer.offset == "1 sec"
@@ -78,7 +78,7 @@ def test_stopwatch_self_loop_timer() -> None:
 
 
 def test_stopwatch_signal_self_loop_on_reset_cmd() -> None:
-    program = _build("stopwatch", "Stopwatch::Stopwatch")
+    program = _build("stopwatch", "Stopwatch::StopwatchBehavior")
     stopped = _mode(program, "stopped")
     triggers = [r.triggers for r in stopped.reactions]
     assert ("StartCmd",) in triggers

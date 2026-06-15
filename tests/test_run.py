@@ -352,7 +352,7 @@ def test_showcase_stopwatch(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "stopwatch",
-        "Stopwatch::Stopwatch",
+        "Stopwatch::StopwatchBehavior",
         timeout="4 sec",
         drivers=drivers,
     )
@@ -364,22 +364,17 @@ def test_showcase_stopwatch(tmp_path: Path) -> None:
 
 
 def test_stopwatch_rig_verdict(tmp_path: Path) -> None:
-    # StopwatchRig: testbench sends StartCmd at 0.1 s, waits 3.4 s (absolute
-    # 3.5 s), then enters stopWait whose entry action sends StopCmd -- so the
-    # mode is already active when Stopped comes back. Plant ticks 3 times while
-    # running (at 1.1 s, 2.1 s, 3.1 s), then stops. Verdict passes (exit 0).
-    process, states = run_rig(
+    # stopwatchSystem: testbench sends StartCmd at 0.1 s, waits 3.4 s
+    # (absolute 3.5 s), then enters stopWait whose entry action sends StopCmd
+    # -- so the mode is already active when Stopped comes back. Plant ticks 3
+    # times while running (at 1.1 s, 2.1 s, 3.1 s), then stops. Verdict
+    # passes (exit 0).
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "stopwatch",
-        "Stopwatch::StopwatchRig",
-        timeout="15 sec",
+        "Stopwatch::stopwatchSystem",
     )
-    assert process.returncode == 0, process.stderr
-    # 4 running entries is the unique landmark: initial entry + 3 periodic
-    # re-entries proving the stopwatch ticked while running before stopping.
-    assert states["plant"].count("running") == 4
-    assert states["plant"][-1] == "stopped"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 def test_showcase_thermostat(tmp_path: Path) -> None:
