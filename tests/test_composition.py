@@ -75,16 +75,9 @@ def _build_peer(
 
 
 def test_default_peer_accepts_is_byte_identical() -> None:
-    bare = to_lf(
-        build_program(
-            load_model(SHOWCASE_DIR / "microwave"), "Microwave::Microwave"
-        )
-    )
-    explicit = to_lf(
-        _build_peer(
-            SHOWCASE_DIR / "microwave", "Microwave::Microwave", frozenset()
-        )
-    )
+    qn = "Microwave::MicrowaveBehavior"
+    bare = to_lf(build_program(load_model(SHOWCASE_DIR / "microwave"), qn))
+    explicit = to_lf(_build_peer(SHOWCASE_DIR / "microwave", qn, frozenset()))
     assert bare == explicit
 
 

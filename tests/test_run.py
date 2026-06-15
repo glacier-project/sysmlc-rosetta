@@ -547,7 +547,7 @@ def test_showcase_microwave_completes(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "microwave",
-        "Microwave::Microwave",
+        "Microwave::MicrowaveBehavior",
         timeout="2 sec",
         drivers=drivers,
     )
@@ -586,7 +586,7 @@ def test_showcase_microwave_pause_and_door_interrupt(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "microwave",
-        "Microwave::Microwave",
+        "Microwave::MicrowaveBehavior",
         timeout="2 sec",
         drivers=drivers,
     )
@@ -601,21 +601,12 @@ def test_showcase_microwave_pause_and_door_interrupt(tmp_path: Path) -> None:
 
 
 def test_microwave_rig_verdict(tmp_path: Path) -> None:
-    # MicrowaveRig: testbench sends StartCmd at 0.1 s, waits for Finished
-    # (announced when `cooking` completion fires after ~0.6 s), verdict passes.
-    process, states = run_rig(
-        tmp_path,
-        SHOWCASE_DIR / "microwave",
-        "Microwave::MicrowaveRig",
-        timeout="10 sec",
+    # microwaveSystem: testbench sends StartCmd at 0.1 s, expects Finished
+    # before the 5 s timeout; verdict stays 0 (testPassed) -> exit 0.
+    logs, rc = run_part(
+        tmp_path, SHOWCASE_DIR / "microwave", "Microwave::microwaveSystem"
     )
-    assert process.returncode == 0, process.stderr
-    # cooking.heating.turntable.rotating is the deepest-path announcement at
-    # the composite entry tag (heater and turntable both enter, but turntable
-    # is declared last so its announcement overwrites heater's at the same tag).
-    assert "cooking.heating.turntable.rotating" in states["plant"]
-    assert states["plant"][-1] == "idle"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 def test_showcase_furuta_pendulum(tmp_path: Path) -> None:

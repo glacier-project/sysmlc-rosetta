@@ -569,7 +569,7 @@ class RosettaBuilder:
             )
         )
         parameters, state_vars = self._attribute_split()
-        state_vars += [StateVar(flag, "False") for flag in flags]
+        state_vars += [StateVar(flag, "False", reset=True) for flag in flags]
         ported = tuple(self._exported.get("", {}))
         sent_self = [
             sig
@@ -877,7 +877,9 @@ class RosettaBuilder:
             all_exit_stmts += exit_stmts
             if eventless:
                 flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
-                extra_state += [StateVar(flag, "False") for flag in flags]
+                extra_state += [
+                    StateVar(flag, "False", reset=True) for flag in flags
+                ]
                 entry_body += [f"self.{flag} = False" for flag in flags]
                 join_body: list[str] = []
                 for region, flag in zip(regions, flags, strict=True):

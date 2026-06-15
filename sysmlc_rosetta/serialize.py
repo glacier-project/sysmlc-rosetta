@@ -105,7 +105,8 @@ def _reactor_lines(reactor: Reactor) -> list[str]:
     lines.extend(f"{_INDENT}input {name}" for name in reactor.inputs)
     lines.extend(f"{_INDENT}output {name}" for name in reactor.outputs)
     lines.extend(
-        f"{_INDENT}state {var.name} = {{= {var.init} =}}"
+        f"{_INDENT}{'reset ' if var.reset else ''}"
+        f"state {var.name} = {{= {var.init} =}}"
         for var in reactor.state_vars
     )
     lines.extend(

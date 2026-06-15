@@ -13,10 +13,16 @@ class Parameter:
 
 @dataclass(frozen=True)
 class StateVar:
-    """A reactor state variable with its rendered Python initializer."""
+    """A reactor state variable with its rendered Python initializer.
+
+    ``reset`` marks the variable for automatic reset on mode entry (LF
+    ``reset state``).  Join-completion flags must be reset so lfc accepts
+    their parent reactor when it is instantiated inside a ``reset`` mode.
+    """
 
     name: str
     init: str
+    reset: bool = False
 
 
 @dataclass(frozen=True)

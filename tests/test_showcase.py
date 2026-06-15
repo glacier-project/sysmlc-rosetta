@@ -173,19 +173,19 @@ def test_pendulum_parameters() -> None:
 
 
 def test_microwave_builds_nested_reactor_family() -> None:
-    program = _build("microwave", "Microwave::Microwave")
+    program = _build("microwave", "Microwave::MicrowaveBehavior")
     assert [r.name for r in program.reactors] == [
-        "Microwave_cooking_heating_heater",
-        "Microwave_cooking_heating_turntable",
-        "Microwave_cooking",
-        "Microwave",
+        "MicrowaveBehavior_cooking_heating_heater",
+        "MicrowaveBehavior_cooking_heating_turntable",
+        "MicrowaveBehavior_cooking",
+        "MicrowaveBehavior",
     ]
 
 
 def test_microwave_forwards_only_inner_signals() -> None:
     # StartCmd/DoorOpen are handled at the root; only the pause pair is
     # accepted inside `cooking` and forwarded down.
-    program = _build("microwave", "Microwave::Microwave")
+    program = _build("microwave", "Microwave::MicrowaveBehavior")
     cooking = _mode(program, "cooking")
     assert [(c.source, c.target) for c in cooking.connections] == [
         ("PauseCmd", "c_cooking.PauseCmd"),
@@ -194,7 +194,7 @@ def test_microwave_forwards_only_inner_signals() -> None:
 
 
 def test_microwave_join_flags_track_region_completion() -> None:
-    program = _build("microwave", "Microwave::Microwave")
+    program = _build("microwave", "Microwave::MicrowaveBehavior")
     cooking_reactor = program.reactors[2]
     assert {v.name for v in cooking_reactor.state_vars} == {
         "heating_heater_done",
