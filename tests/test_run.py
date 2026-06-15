@@ -23,6 +23,7 @@ import pytest
 
 from sysmlc.backends.rosetta.builder import OUTPUT_PORT, build_program
 from sysmlc.backends.rosetta.composition import build_rig_program
+from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from sysmlc.values import configure_model
@@ -1248,3 +1249,86 @@ def test_external_ramp_runs(tmp_path: Path) -> None:
     )
     assert states, "no state announcements"
     assert all(s == "run" for s in states)
+
+
+def run_part(
+    tmp_path: Path,
+    model_dir: Path,
+    usage_qn: str,
+    *,
+    timeout: str = "10 sec",
+) -> tuple[str, int]:
+    """Build, compile, and run a part system; return (debug logs, returncode).
+
+    The generated program has its own ``main reactor``, so it compiles
+    directly (written as ``Main.lf`` -- no reactor is named ``Main`` -- to
+    dodge the filename/reactor-name collision). The program stays silent by
+    default; a ``sitecustomize.py`` on ``PYTHONPATH`` enables DEBUG logging so
+    the entry/exit observation lines reach stderr, modelling how the run (not
+    the program) turns observation on.
+    """
+    model = load_model(model_dir)
+    program = build_part_program(
+        model,
+        usage_qn,
+        target_options=(("fast", "true"), ("timeout", timeout)),
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Main.lf").write_text(to_lf(program))
+    (src / "sitecustomize.py").write_text(
+        "import logging\nlogging.basicConfig(level=logging.DEBUG)\n"
+    )
+    compile_result = subprocess.run(
+        ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
+    )
+    assert compile_result.returncode == 0, compile_result.stderr.decode(
+        errors="replace"
+    )
+    env = {**os.environ, "PYTHONPATH": str(src)}
+    process = subprocess.run(
+        [str(tmp_path / "bin" / "Main")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    return process.stderr, process.returncode
+
+
+def test_part01_runs_and_logs(tmp_path: Path) -> None:
+    logs, rc = run_part(
+        tmp_path, SM_EXAMPLES_DIR / "part01-two-parts", "Part01::pingSystem"
+    )
+    assert rc == 0  # tester verdict ok (Pong arrived before the timeout)
+    assert "entered Plant.pinged" in logs  # plant got the Ping (port-routed)
+    assert "entered Tester.waitPong" in logs
+
+
+def test_part01_silent_without_debug(tmp_path: Path) -> None:
+    # Without the run enabling DEBUG, the generated program emits no
+    # observation lines (spec 5.5: silent unless the run turns DEBUG on).
+    model = load_model(SM_EXAMPLES_DIR / "part01-two-parts")
+    program = build_part_program(
+        model,
+        "Part01::pingSystem",
+        target_options=(("fast", "true"), ("timeout", "10 sec")),
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Main.lf").write_text(to_lf(program))
+    compile_result = subprocess.run(
+        ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
+    )
+    assert compile_result.returncode == 0, compile_result.stderr.decode(
+        errors="replace"
+    )
+    process = subprocess.run(
+        [str(tmp_path / "bin" / "Main")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert process.returncode == 0
+    assert "entered" not in process.stderr
+    assert "exited" not in process.stderr
