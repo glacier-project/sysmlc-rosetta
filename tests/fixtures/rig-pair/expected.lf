@@ -1,0 +1,123 @@
+target Python
+
+preamble {=
+  from dataclasses import dataclass
+  @dataclass
+  class Done:
+      pass
+  @dataclass
+  class Go:
+      pass
+=}
+
+reactor Plant_working {
+  output completed
+  output current_state
+  output Done
+  initial mode grind {
+    timer t_grind(200 msec)
+    reaction(reset, startup) -> current_state {=
+      current_state.set("grind")
+    =}
+    reaction(t_grind) -> reset(done), Done {=
+      Done.set(True)
+      done.set()
+    =}
+  }
+  mode done {
+    reaction(reset, startup) -> current_state, completed {=
+      current_state.set("done")
+      completed.set(True)
+    =}
+  }
+}
+
+reactor Plant {
+  input Go
+  output current_state
+  output Done
+  initial mode idle {
+    reaction(reset, startup) -> current_state {=
+      current_state.set("idle")
+    =}
+    reaction(Go) -> reset(working) {=
+      working.set()
+    =}
+  }
+  mode working {
+    c_working = new Plant_working()
+    reaction(reset, startup) -> current_state {=
+      current_state.set("working")
+    =}
+    reaction(c_working.current_state) -> current_state {=
+      current_state.set("working." + c_working.current_state.value)
+    =}
+    reaction(c_working.Done) -> Done {=
+      Done.set(c_working.Done.value)
+    =}
+    reaction(c_working.completed) -> reset(idle) {=
+      idle.set()
+    =}
+  }
+}
+
+reactor PlantTest {
+  input Done
+  output current_state
+  output Go
+  state verdict = {= 0 =}
+  reaction(startup) {=
+    assert self.verdict == 0, "SysML constraint testPassed violated"
+  =}
+  initial mode kicking {
+    timer t_kicking(100 msec)
+    reaction(reset, startup) -> current_state {=
+      current_state.set("kicking")
+    =}
+    reaction(t_kicking) -> reset(waiting), Go {=
+      Go.set(True)
+      waiting.set()
+    =}
+  }
+  mode waiting {
+    timer t_waiting(1 sec)
+    reaction(reset, startup) -> current_state {=
+      current_state.set("waiting")
+    =}
+    reaction(t_waiting) -> reset(fail) {=
+      fail.set()
+    =}
+    reaction(Done) -> reset(done) {=
+      done.set()
+    =}
+  }
+  mode fail {
+    reaction(reset, startup) -> current_state, reset(done) {=
+      current_state.set("fail")
+      self.verdict = 1
+      done.set()
+      assert self.verdict == 0, "SysML constraint testPassed violated"
+    =}
+  }
+  mode done {
+    reaction(reset, startup) -> current_state {=
+      current_state.set("done")
+      request_stop()
+    =}
+  }
+}
+
+reactor PlantRig {
+  output plant_current_state
+  output tb_current_state
+  plant = new Plant()
+  tb = new PlantTest()
+  plant.Done -> tb.Done
+  tb.Go -> plant.Go
+  plant.current_state -> plant_current_state
+  tb.current_state -> tb_current_state
+}
+
+main reactor {
+  m = new PlantRig()
+}

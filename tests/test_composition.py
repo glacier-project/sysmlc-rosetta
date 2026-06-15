@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,7 +23,7 @@ from tests.backends.rosetta.conftest import FIXTURES_DIR
 from tests.backends.showcase import SHOWCASE_DIR
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    pass
 
 
 def test_rig_definitions_finds_the_rig() -> None:
@@ -206,3 +207,16 @@ def test_rig_pair_serializes_to_lf() -> None:
     assert "main reactor {" in text
     assert text.index("reactor Plant ") < text.index("reactor PlantRig")
     assert "m = new PlantRig()" in text
+
+
+def test_rig_pair_lf_is_stable() -> None:
+    from sysmlc.backends.rosetta.composition import build_rig_program
+    from sysmlc.backends.rosetta.serialize import to_lf
+    from sysmlc.sysml.loading import load_model
+
+    model = load_model(Path("tests/backends/rosetta/fixtures/rig-pair"))
+    text = to_lf(build_rig_program(model, "RigPair::PlantRig"))
+    golden = Path("tests/backends/rosetta/fixtures/rig-pair/expected.lf")
+    if not golden.exists():
+        golden.write_text(text)  # first run records the golden
+    assert text == golden.read_text()
