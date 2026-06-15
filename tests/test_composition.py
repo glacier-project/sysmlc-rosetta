@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 import syside
@@ -21,9 +20,6 @@ from sysmlc.sysml.queries import (
 )
 from tests.backends.rosetta.conftest import FIXTURES_DIR
 from tests.backends.showcase import SHOWCASE_DIR
-
-if TYPE_CHECKING:
-    pass
 
 
 def test_rig_definitions_finds_the_rig() -> None:

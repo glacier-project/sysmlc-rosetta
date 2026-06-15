@@ -10,15 +10,18 @@ Connection routing is **port-based** (spec rosetta-parts-design.md §5.3): for
 one end and *accepted via* ``pb`` on the other (the port-aware interface
 maps). This generalizes the rig's name-based ``_cross`` to N parts while
 honouring the SysML ports, and validates ports strictly.
+
+``compose_exhibits`` provides the reusable N-machine composition kernel
+consumed by the rig path (``build_rig_program``).
 """
 
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
-from sysmlc.backends.rosetta.builder import RosettaBuilder
+from sysmlc.backends.rosetta.builder import OUTPUT_PORT, RosettaBuilder
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.program import (
     Connection,
@@ -39,6 +42,142 @@ if TYPE_CHECKING:
     import syside
 
 logger = logging.getLogger(__name__)
+
+
+def _simple(qualified_name: str) -> str:
+    """Return the last segment of a qualified name."""
+    return qualified_name.split("::")[-1]
+
+
+def compose_exhibits(
+    model: syside.Model,
+    composite_name: str,
+    exhibits: tuple[tuple[str, str], ...],
+    needs: PreambleNeeds,
+) -> tuple[tuple[Reactor, ...], Reactor]:
+    """Build N exhibited machines as children and a same-name-wired composite.
+
+    Returns ``(child_reactor_classes, composite_reactor)``. The composite
+    instantiates each machine under its instance name, cross-wires same-named
+    signals among all ordered pairs (rejecting two sources into one input —
+    fan-in/multiplicity), and forwards each ``current_state`` out as
+    ``<instance>_current_state``.
+
+    Args:
+        model: Loaded syside model.
+        composite_name: Simple name for the composite reactor.
+        exhibits: ``((instance_name, behavior_qn), ...)`` in declaration order.
+        needs: Shared preamble registry (caller populates before this call).
+    """
+    # Build the machine interface for each exhibit.
+    faces = [(inst, qn, machine_interface(model, qn)) for inst, qn in exhibits]
+
+    # Per exhibit: peer_accepts = union of every OTHER exhibit's accepted set.
+    peer_accepts_map: list[frozenset[str]] = []
+    for i, (_inst, _qn, _face) in enumerate(faces):
+        union: set[str] = set()
+        for j, (_inst2, _qn2, face2) in enumerate(faces):
+            if j != i:
+                union |= face2.accepted
+        peer_accepts_map.append(frozenset(union))
+
+    # Build each machine in declaration order, collecting all child reactors.
+    driver = StateMachineDriver(model)
+    child_reactors: list[Reactor] = []
+    machine_reactors: list[Reactor] = []  # the top-level reactor per exhibit
+    for (_inst, qn, _face), peer_acc in zip(
+        faces, peer_accepts_map, strict=True
+    ):
+        result = driver.run(
+            qn,
+            RosettaBuilder(_simple(qn), peer_accepts=peer_acc, needs=needs),
+        )
+        assert isinstance(result, LfProgram)
+        child_reactors.extend(result.reactors)
+        machine_reactors.append(result.reactor)
+
+    # Reactor name collision check (all child reactors + composite name).
+    all_names = [r.name for r in child_reactors]
+    all_names.append(composite_name)
+    counts = Counter(all_names)
+    duplicates = {name for name, n in counts.items() if n > 1}
+    if duplicates:
+        raise UnsupportedConstructError(
+            f"reactor name(s) {sorted(duplicates)!r} collide across the "
+            "rig; rename a machine, state, or the rig"
+        )
+
+    # Cross-wire all ordered pairs (source_i → target_j for i ≠ j).
+    connections: list[Connection] = _cross_all(faces, machine_reactors)
+
+    # Forward each exhibit's current_state as <inst>_current_state.
+    for inst, _qn, _face in faces:
+        connections.append(
+            Connection(f"{inst}.{OUTPUT_PORT}", f"{inst}_{OUTPUT_PORT}")
+        )
+
+    composite = Reactor(
+        name=composite_name,
+        outputs=tuple(f"{inst}_{OUTPUT_PORT}" for inst, _qn, _face in faces),
+        instantiations=tuple(
+            Instantiation(inst, mach.name)
+            for (inst, _qn, _face), mach in zip(
+                faces, machine_reactors, strict=True
+            )
+        ),
+        connections=tuple(connections),
+    )
+    return tuple(child_reactors), composite
+
+
+def _cross_all(
+    faces: list[tuple[str, str, MachineInterface]],
+    machine_reactors: list[Reactor],
+) -> list[Connection]:
+    """Wire all ordered pairs of exhibits: source outputs → target inputs.
+
+    Iterates ordered pairs (i, j) with i≠j in the order (0,1), (1,0),
+    (0,2), (1,2), (2,0), ... — specifically the same order as nested
+    ``for i ... for j`` loops — which for N=2 produces (0→1) then (1→0),
+    matching the original ``build_rig_program`` wiring exactly.
+
+    Rejects two sources into the same ``(target_inst, signal)`` input
+    (fan-in) with the same error style as ``_route``.
+    """
+    # (target_inst, signal) -> source_inst already wired to it
+    destinations: dict[tuple[str, str], str] = {}
+    connections: list[Connection] = []
+    n = len(faces)
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            source_inst = faces[i][0]
+            target_inst = faces[j][0]
+            target_reactor = machine_reactors[j]
+            source_reactor = machine_reactors[i]
+            for sig in source_reactor.outputs:
+                if sig == OUTPUT_PORT:
+                    continue
+                assert sig in target_reactor.inputs, (
+                    f"{sig!r} missing from {target_reactor.name!r} inputs; "
+                    "interface scan and builder disagree"
+                )
+                key = (target_inst, sig)
+                if key in destinations:
+                    raise UnsupportedConstructError(
+                        f"signal {sig!r} has two sources "
+                        f"({destinations[key]!r} and {source_inst!r}) "
+                        f"into {target_inst!r}; single-channel "
+                        "fan-in is forbidden — model it with multiplicity "
+                        "(a bank into a multiport), which is deferred to a "
+                        "later increment."
+                    )
+                destinations[key] = source_inst
+                connections.append(
+                    Connection(f"{source_inst}.{sig}", f"{target_inst}.{sig}")
+                )
+    return connections
 
 
 def build_part_program(

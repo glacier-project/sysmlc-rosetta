@@ -1,22 +1,15 @@
-"""Compose a rig's two state machines into one LF program."""
+"""Compose a rig's exhibited state machines into one LF program."""
 
 from __future__ import annotations
 
 import logging
-from collections import Counter
 
 import syside
 
-from sysmlc.backends.rosetta.builder import OUTPUT_PORT, RosettaBuilder
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
-from sysmlc.backends.rosetta.program import (
-    Connection,
-    Instantiation,
-    LfProgram,
-    Reactor,
-)
+from sysmlc.backends.rosetta.parts import compose_exhibits
+from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.errors import UnsupportedConstructError
-from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import machine_interface
 from sysmlc.sysml.queries import exhibited_state_defs, resolve
 
@@ -36,6 +29,9 @@ def build_rig_program(
     reactor (named after the rig) instantiates both under their usage
     names, wires same-named signals in both directions, and forwards
     each machine's ``current_state`` as ``<usage>_current_state``.
+
+    Delegates composition to
+    :func:`~sysmlc.backends.rosetta.parts.compose_exhibits`.
     """
     rig = resolve(model, syside.PartDefinition, rig_qn)
     (usage_a, def_a), (usage_b, def_b) = exhibited_state_defs(model, rig)
@@ -72,50 +68,14 @@ def build_rig_program(
     needs = PreambleNeeds()
     if external is not None:
         needs.register_external(module=external[0], names=external[1])
-    driver = StateMachineDriver(model)
-    prog_a = driver.run(
-        qn_a,
-        RosettaBuilder(
-            _simple(qn_a), peer_accepts=face_b.accepted, needs=needs
-        ),
-    )
-    prog_b = driver.run(
-        qn_b,
-        RosettaBuilder(
-            _simple(qn_b), peer_accepts=face_a.accepted, needs=needs
-        ),
-    )
-    assert isinstance(prog_a, LfProgram)
-    assert isinstance(prog_b, LfProgram)
-    rig_name = _simple(rig_qn)
-    names = [r.name for r in (*prog_a.reactors, *prog_b.reactors)]
-    names.append(rig_name)
-    counts = Counter(names)
-    duplicates = {name for name, n in counts.items() if n > 1}
-    if duplicates:
-        raise UnsupportedConstructError(
-            f"reactor name(s) {sorted(duplicates)!r} collide across the "
-            "rig; rename a machine, state, or the rig"
-        )
-    bench = Reactor(
-        name=rig_name,
-        outputs=(
-            f"{usage_a}_{OUTPUT_PORT}",
-            f"{usage_b}_{OUTPUT_PORT}",
-        ),
-        instantiations=(
-            Instantiation(usage_a, prog_a.reactor.name),
-            Instantiation(usage_b, prog_b.reactor.name),
-        ),
-        connections=(
-            *_cross(prog_a.reactor, usage_a, prog_b.reactor, usage_b),
-            *_cross(prog_b.reactor, usage_b, prog_a.reactor, usage_a),
-            Connection(f"{usage_a}.{OUTPUT_PORT}", f"{usage_a}_{OUTPUT_PORT}"),
-            Connection(f"{usage_b}.{OUTPUT_PORT}", f"{usage_b}_{OUTPUT_PORT}"),
-        ),
+    children, composite = compose_exhibits(
+        model,
+        _simple(rig_qn),
+        ((usage_a, qn_a), (usage_b, qn_b)),
+        needs,
     )
     return LfProgram(
-        reactors=(*prog_a.reactors, *prog_b.reactors, bench),
+        reactors=(*children, composite),
         preamble=tuple(needs.preamble_lines()),
     )
 
@@ -123,27 +83,3 @@ def build_rig_program(
 def _simple(qualified_name: str) -> str:
     """Return the last segment of a qualified name."""
     return qualified_name.split("::")[-1]
-
-
-def _cross(
-    source: Reactor,
-    source_inst: str,
-    target: Reactor,
-    target_inst: str,
-) -> list[Connection]:
-    """Wire the source machine's signal ports into the target's inputs.
-
-    By construction every machine output (except ``current_state``) is a
-    signal its peer accepts, and the both-send rejection guarantees the
-    matching input exists.
-    """
-    out: list[Connection] = []
-    for sig in source.outputs:
-        if sig == OUTPUT_PORT:
-            continue
-        assert sig in target.inputs, (
-            f"{sig!r} missing from {target.name!r} inputs; "
-            "interface scan and builder disagree"
-        )
-        out.append(Connection(f"{source_inst}.{sig}", f"{target_inst}.{sig}"))
-    return out
