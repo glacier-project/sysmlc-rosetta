@@ -103,17 +103,37 @@ class Reactor:
 
 
 @dataclass(frozen=True)
+class MainReactor:
+    """An explicit ``main reactor`` body: a part system's composition.
+
+    Like ``Reactor`` but with no ports or modes — it only instantiates the
+    part reactors, wires their connected ports, and (optionally) carries
+    part-level reactions. Used by the part assembler; a program with
+    ``main=None`` falls back to the trivial ``m = new <last>()`` main.
+    """
+
+    instantiations: tuple[Instantiation, ...] = ()
+    connections: tuple[Connection, ...] = ()
+    reactions: tuple[Reaction, ...] = ()
+
+
+@dataclass(frozen=True)
 class LfProgram:
-    """A Lingua Franca program: reactor classes plus a trivial main.
+    """A Lingua Franca program: reactor classes plus a main.
 
     ``reactors`` holds child reactor classes first and the machine reactor
-    last (lfc wants definitions before use); ``main`` instantiates the last.
-    ``preamble`` holds Python preamble lines (imports/helpers); empty means
-    no preamble block is emitted.
+    last (lfc wants definitions before use). When ``main`` is None the trivial
+    main instantiates the last reactor; otherwise the explicit ``MainReactor``
+    is rendered. ``preamble`` holds Python preamble lines (imports/helpers);
+    empty means no preamble block is emitted. ``target_options`` populate the
+    ``target Python { ... }`` header (run config); empty -> bare ``target
+    Python``.
     """
 
     reactors: tuple[Reactor, ...]
     preamble: tuple[str, ...] = ()
+    main: MainReactor | None = None
+    target_options: tuple[tuple[str, str], ...] = ()
 
     @property
     def reactor(self) -> Reactor:

@@ -202,3 +202,33 @@ def test_reactor_scope_instantiations_render() -> None:
     text = to_lf(LfProgram(reactors=(region, machine)))
     assert "  c_lights = new M_lights()\n" in text
     assert "  Flip -> c_lights.Flip\n" in text
+
+
+def test_explicit_main_reactor_and_target() -> None:
+    from sysmlc.backends.rosetta.program import MainReactor
+
+    prog = LfProgram(
+        reactors=(Reactor(name="Plant"), Reactor(name="Tester")),
+        main=MainReactor(
+            instantiations=(
+                Instantiation("plant", "Plant"),
+                Instantiation("tb", "Tester"),
+            ),
+            connections=(Connection("plant.Pong", "tb.Pong"),),
+        ),
+        target_options=(("fast", "true"), ("timeout", "5 sec")),
+    )
+    text = to_lf(prog)
+    assert "target Python {" in text
+    assert "fast: true" in text and "timeout: 5 sec" in text
+    assert "main reactor {" in text
+    assert "plant = new Plant()" in text
+    assert "plant.Pong -> tb.Pong" in text
+
+
+def test_bare_target_and_trivial_main_unchanged() -> None:
+    # No target_options / no main -> byte-identical legacy output.
+    text = to_lf(LfProgram(reactors=(Reactor(name="M"),)))
+    assert text.startswith("target Python\n")
+    assert "main reactor {\n  m = new M()\n}\n" in text
+    assert "target Python {" not in text

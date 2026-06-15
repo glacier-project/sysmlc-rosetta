@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from sysmlc.backends.rosetta.program import (
         LfProgram,
+        MainReactor,
         Mode,
         Reaction,
         Reactor,
@@ -39,7 +40,7 @@ def to_lf(program: LfProgram) -> str:
     definition before use); the trivial ``main`` instantiates the machine
     (the last reactor).
     """
-    lines: list[str] = ["target Python", ""]
+    lines: list[str] = [*_target_lines(program.target_options), ""]
     if program.preamble:
         lines.append("preamble {=")
         lines.extend(f"{_INDENT}{line}" for line in program.preamble)
@@ -47,10 +48,45 @@ def to_lf(program: LfProgram) -> str:
     for reactor in program.reactors:
         lines.extend(_reactor_lines(reactor))
         lines.append("")
-    lines.append("main reactor {")
-    lines.append(f"{_INDENT}m = new {program.reactor.name}()")
-    lines.append("}")
+    lines.extend(_main_lines(program))
     return "\n".join(lines) + "\n"
+
+
+def _target_lines(options: tuple[tuple[str, str], ...]) -> list[str]:
+    # No options -> bare ``target Python`` (byte-identical legacy output).
+    if not options:
+        return ["target Python"]
+    lines = ["target Python {"]
+    lines.extend(f"{_INDENT}{key}: {value}," for key, value in options)
+    lines.append("}")
+    return lines
+
+
+def _main_lines(program: LfProgram) -> list[str]:
+    main = program.main
+    if main is None:
+        # Trivial main instantiates the last reactor (legacy fallback).
+        return [
+            "main reactor {",
+            f"{_INDENT}m = new {program.reactor.name}()",
+            "}",
+        ]
+    return _main_reactor_lines(main)
+
+
+def _main_reactor_lines(main: MainReactor) -> list[str]:
+    lines = ["main reactor {"]
+    lines.extend(
+        f"{_INDENT}{inst.name} = new {inst.reactor}()"
+        for inst in main.instantiations
+    )
+    lines.extend(
+        f"{_INDENT}{conn.source} -> {conn.target}" for conn in main.connections
+    )
+    for reaction in main.reactions:
+        lines.extend(_reaction_lines(reaction, depth=1))
+    lines.append("}")
+    return lines
 
 
 def _reactor_lines(reactor: Reactor) -> list[str]:
