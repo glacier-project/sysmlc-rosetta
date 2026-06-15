@@ -96,6 +96,7 @@ class RosettaBuilder:
         *,
         peer_accepts: frozenset[str] = frozenset(),
         needs: PreambleNeeds | None = None,
+        observe: bool = False,
     ) -> None:
         """Initialize the builder.
 
@@ -104,9 +105,13 @@ class RosettaBuilder:
             peer_accepts: Signals a peer machine accepts; a send of one of
                 these becomes an LF output port instead of a self-event.
             needs: A shared preamble registry, or ``None`` for a fresh one.
+            observe: When True, inject ``logging.debug`` on each state's
+                entry and exit (opt-in; the part assembler sets it). Off by
+                default, so existing build paths emit byte-identical output.
         """
         self._name = name
         self._peer_accepts = peer_accepts
+        self._observe = observe
         self._constraints: list[ConstraintFact] = []
         self._needs = needs if needs is not None else PreambleNeeds()
         self._init_codegen = LfPythonCodeGen(
@@ -636,6 +641,11 @@ class RosettaBuilder:
 
     # -- mode assembly --
 
+    def _observe_log(self, verb: str, simple: str) -> str:
+        """An entry/exit DEBUG log line; flags the preamble for ``logging``."""
+        self._needs.uses_logging = True
+        return f'logging.debug("{verb} {self._name}.{simple}")'
+
     def _child_mode(
         self,
         fact: StateFact,
@@ -678,12 +688,21 @@ class RosettaBuilder:
                     "`accept after` triggers are supported."
                 )
 
-        exit_stmts = self._statements(fact.exit_action, gen)
+        # Observation exit log: prepended to BOTH exit-statement threads (the
+        # default one below and the payload-aware ``group_exit`` for signal
+        # transitions). It lands in every outgoing transition's reaction, but
+        # only the firing transition runs, so each departure logs exactly once.
+        exit_log = (
+            [self._observe_log("exited", simple)] if self._observe else []
+        )
+        exit_stmts = [*exit_log, *self._statements(fact.exit_action, gen)]
         timers: list[Timer] = []
         mode_actions: list[LogicalAction] = []
         reactions: list[Reaction] = []
         entry_body = [f'{OUTPUT_PORT}.set("{simple}")']
         entry_effects = [OUTPUT_PORT]
+        if self._observe:
+            entry_body.insert(0, self._observe_log("entered", simple))
         entry_body += self._statements(fact.entry_action, gen)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
@@ -760,7 +779,10 @@ class RosettaBuilder:
                     self._scope_attribute_names(scope),
                     local_names=frozenset({payload_name}),
                 )
-            group_exit = self._statements(fact.exit_action, group_gen)
+            group_exit = [
+                *exit_log,
+                *self._statements(fact.exit_action, group_gen),
+            ]
             body, targets = self._dispatch(group, group_exit, scope, group_gen)
             reactions.append(
                 self._reaction(

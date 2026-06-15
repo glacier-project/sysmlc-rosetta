@@ -156,6 +156,7 @@ def _build_reactors(
                 def_name,
                 peer_accepts=frozenset(union[def_name]),
                 needs=needs,
+                observe=True,
             ),
         )
         assert isinstance(result, LfProgram)

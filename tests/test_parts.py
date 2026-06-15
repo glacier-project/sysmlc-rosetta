@@ -41,3 +41,11 @@ def test_undeclared_via_port_is_rejected() -> None:
     model = load_model(UNDECLARED_VIA)
     with pytest.raises(UnsupportedConstructError, match="does not declare"):
         build_part_program(model, "PartUV::sys")
+
+
+def test_observation_logs_entry_and_exit() -> None:
+    prog = build_part_program(load_model(FIX), "Part01::pingSystem")
+    text = to_lf(prog)
+    assert "import logging" in text
+    assert 'logging.debug("entered Plant.idle")' in text
+    assert 'logging.debug("exited Plant.idle")' in text

@@ -67,6 +67,7 @@ class PreambleNeeds:
         self.item_defs: dict[str, syside.Definition] = {}
         self.uses_math = False
         self.uses_namespace = False
+        self.uses_logging = False
         self.external_module: str | None = None
         self.external_names: frozenset[str] = frozenset()
         self.used_external: set[str] = set()
@@ -176,6 +177,8 @@ class PreambleNeeds:
         external-module imports, enum classes, payload dataclasses.
         """
         lines: list[str] = []
+        if self.uses_logging:
+            lines.append("import logging")
         if self.uses_math:
             lines.append("import math")
         if self.uses_namespace:
