@@ -515,3 +515,90 @@ toolchain does not enforce it.
 The `lf run` test harness sets `PYTHONPATH` to `src/` (where the module was
 copied by the CLI). Users compiling the generated project manually must
 place the external module on `PYTHONPATH` before running the binary.
+
+## 13. Parts → reactors and the generated main reactor (Plan 2a)
+
+A SysML **part** is the structural unit a backend turns into LF reactors. The
+part assembler (`sysmlc/backends/rosetta/parts.py`, `build_part_program`)
+walks the part graph (`sysmlc/semantics/parts/graph.py`) and emits one reactor
+class per part def plus an explicit `main reactor`.
+
+| SysML | LF |
+|---|---|
+| `part def Foo { exhibit state : Beh; }` | `reactor Foo { … }` (the inlined machine `Beh`, named after the part def) |
+| nested `part f : Foo;` in a usage | `f = new Foo()` inside `main reactor` |
+| top-level **part usage** `part sys { … }` | the `main reactor` |
+| `connect a.pa to b.pb;` | LF connections for the signals that cross those ports (§13.1) |
+| CLI `--fast` / `--timeout "5 sec"` | `target Python { fast: true, timeout: 5 sec, }` header |
+
+A part def with **1 exhibit** inlines that machine (this increment). **0**
+exhibits (pure composite) and **≥2** exhibits are rejected with a pointer to
+Plan 2b. A part def reused by several parts builds its reactor **once** and is
+instantiated per usage.
+
+### 13.1 Connections are port-based (not name-based)
+
+Routing follows the **connected ports**, honoring the SysML model
+(`docs/rosetta-parts-design.md` §5.3) — *not* the rig's global same-name
+auto-wire. For `connect a.pa to b.pb`, a signal `S` crosses **only if** one
+end *sends* `S` `via pa` and the other *accepts* `S` `via pb`:
+
+```sysml
+part def Plant  { port commPort; exhibit state : PlantBehavior; }   // sends Pong via commPort
+part def Tester { port commPort; exhibit state : TesterBehavior; }  // sends Ping via commPort
+part pingSystem { part plant : Plant; part tb : Tester;
+                  connect plant.commPort to tb.commPort; }
+```
+→
+```
+main reactor {
+  plant = new Plant()
+  tb = new Tester()
+  plant.Pong -> tb.Pong
+  tb.Ping -> plant.Ping
+}
+```
+
+The port-aware interface (`MachineInterface.accepted_via` / `sent_via`,
+`sysmlc/semantics/statemachine/interface.py`) supplies the per-port signal
+sets. The send-side `via` port is `SendActionUsage.sender_argument.referent`;
+the accept-side is `Trigger.via_port`. The LF input/output ports are still
+named by **signal** (`Ping`, `Pong`); the SysML port scopes *which* signals a
+connection carries — so a part with two ports routes each port independently
+(a signal sent via one port does not leak to a peer on the other).
+
+### 13.2 Strict validation & rejections
+
+- A `connect` naming a part or port that the model does not declare → rejected.
+- A behavior that `send/accept`s `via` a port the part def does not declare →
+  rejected (the inlined machine's ports must resolve against the part's, §5.2).
+- **Single-channel fan-in** — two sources into one input port (the same LF
+  destination) → rejected, pointing at multiplicity (banks/multiports,
+  deferred).
+- **Bidirectional same-name** signal over one connection → rejected (as in the
+  rig).
+
+### 13.3 Observation (auto entry/exit DEBUG logging)
+
+With `RosettaBuilder(observe=True)` (set only by the part assembler), every
+state's mode logs its entry and exit:
+
+```python
+logging.debug("entered <Reactor>.<state>")   # in the entry reaction
+logging.debug("exited <Reactor>.<state>")     # in each leaving transition
+```
+
+`PreambleNeeds.uses_logging` adds `import logging`. The program is **silent by
+default** (the root logger is unconfigured at WARNING); the *run* enables
+DEBUG — the lf test drops a `sitecustomize.py` doing
+`logging.basicConfig(level=logging.DEBUG)` on `PYTHONPATH`, so the entry/exit
+lines reach stderr without the generated program forcing them on. Existing
+`build_program`/`build_rig_program` leave `observe` off, so their output is
+byte-identical.
+
+### 13.4 Deferred to Plan 2b
+
+Multi-exhibit parts (≥2), deep composite parts (an inline exhibit *and* nested
+parts), per-port signal *scoping beyond routing*, banks/multiports (the
+multiplicity fix for fan-in), showcase Style-A migration, `run_all.py`
+reduction, furuta external physics, and retiring `build_rig_program`.
