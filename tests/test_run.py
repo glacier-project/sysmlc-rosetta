@@ -940,7 +940,7 @@ def test_showcase_charging_station_session(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "charging-station",
-        "ChargingStation::ChargingStation",
+        "ChargingStation::ChargingStationBehavior",
         timeout="12 sec",
         drivers=drivers,
         values={"tempLimit": 45.0, "coolThreshold": 40.0},
@@ -990,7 +990,7 @@ def test_showcase_charging_station_auth_exhaustion(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "charging-station",
-        "ChargingStation::ChargingStation",
+        "ChargingStation::ChargingStationBehavior",
         timeout="6 sec",
         drivers=drivers,
     )
@@ -1007,36 +1007,12 @@ def test_showcase_charging_station_auth_exhaustion(tmp_path: Path) -> None:
 
 
 def test_charging_station_rig_verdict(tmp_path: Path) -> None:
-    # ChargingStationRig: testbench sends PlugIn at 0.2 s, AuthResult(7,
-    # denied) at 1.2 s abs, AuthResult(1, granted) at 1.6 s abs.  The plant
-    # completes the three-phase charge cycle and announces SessionReport from
-    # the ``finishing`` state's timed reaction (accept after 0.5 s).
-    # SessionReport is sent by a timer, not an input reaction, so lfc 0.11
-    # requires no announcing latch -- no read-input + write-output cycle.
-    #
-    # values override: tight thermal (tempLimit=45, coolThreshold=40) matches
-    # the standalone session test so the expected plant sequence is the same;
-    # the 40 s timeout is generous for the ~14 s logical run.
-    process, states = run_rig(
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "charging-station",
-        "ChargingStation::ChargingStationRig",
-        timeout="40 sec",
-        values={
-            "ChargingStation::ChargingStation": {
-                "tempLimit": 45.0,
-                "coolThreshold": 40.0,
-            }
-        },
+        "ChargingStation::chargingStationSystem",
     )
-    assert process.returncode == 0, process.stderr
-    # ``finishing`` is the unique plant landmark proving the charge session
-    # completed: the station only reaches finishing after successful auth,
-    # ramp-up, bulk, optional derating, and top-off phases, and SessionReport
-    # is emitted there before the station returns to idle.
-    assert "finishing" in states["plant"]
-    assert states["plant"][-1] == "idle"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 _CROSSING_SECURING = [

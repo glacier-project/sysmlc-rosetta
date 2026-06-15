@@ -340,7 +340,7 @@ def test_showcase_values_examples_configure_and_build() -> None:
         ("thermostat", "Thermostat::Thermostat"),
         ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
         ("batch-reactor", "BatchReactor::BatchReactor"),
-        ("charging-station", "ChargingStation::ChargingStation"),
+        ("charging-station", "ChargingStation::ChargingStationBehavior"),
         ("level-crossing", "LevelCrossing::LevelCrossing"),
     ]
     for example, qn in examples:
@@ -360,10 +360,12 @@ def test_showcase_values_examples_configure_and_build() -> None:
 def test_charging_station_priority_guards_derate_first() -> None:
     # Declaration order is firing priority: in `bulk`, thermal derating
     # preempts the energy threshold.
-    program = _build("charging-station", "ChargingStation::ChargingStation")
+    program = _build(
+        "charging-station", "ChargingStation::ChargingStationBehavior"
+    )
     assert [r.name for r in program.reactors] == [
-        "ChargingStation_handshake",
-        "ChargingStation",
+        "ChargingStationBehavior_handshake",
+        "ChargingStationBehavior",
     ]
     bulk = _mode(program, "bulk")
     entry = bulk.reactions[0]
@@ -376,7 +378,9 @@ def test_charging_station_priority_guards_derate_first() -> None:
 
 
 def test_charging_station_auth_dispatch_and_timeout() -> None:
-    program = _build("charging-station", "ChargingStation::ChargingStation")
+    program = _build(
+        "charging-station", "ChargingStation::ChargingStationBehavior"
+    )
     authorizing = _mode(program, "authorizing")
     (auth,) = [r for r in authorizing.reactions if "AuthResult" in r.triggers]
     assert auth.body[0] == "r = AuthResult.value"
