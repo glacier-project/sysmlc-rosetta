@@ -81,7 +81,7 @@ def compile_harness(
         names = frozenset(
             n.name
             for n in ast.parse(python_file.read_text()).body
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            if isinstance(n, ast.FunctionDef)
         )
         external = (python_file.stem, names)
         shutil.copy(python_file, src / python_file.name)

@@ -14,9 +14,11 @@ if TYPE_CHECKING:
 # Verified syside node shapes for call-effect transitions (2026-06-15)
 # Fixture: models/sm-examples/sm14-call-effect/sm14.sysml
 #
-# NOTE: rosetta uses ONLY the assignment-from-call form below. print/log are
-# functions (not actions), so the perform-call form is kept for reference but
-# is NOT generated. See the RESHAPE NOTE in docs/rosetta-functions-plan.md.
+# NOTE: rosetta uses ONLY the assignment-from-call form below. print/log
+# are functions (not actions); a bare perform-call is invalid syside, so
+# the perform-call shapes below are a historical probe finding (since
+# removed from the fixture), NOT generated. See the RESHAPE NOTE in
+# docs/rosetta-functions-plan.md.
 #
 # Perform-call effect (do logAct where logAct : sysmlc::log { ... }):
 #   t.effect                      -> PerformActionUsage
