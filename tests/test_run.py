@@ -86,9 +86,13 @@ def compile_harness(
         )
         external = (python_file.stem, names)
         shutil.copy(python_file, src / python_file.name)
-    (src / f"{name}.lf").write_text(
-        to_lf(build_program(model, qn, external=external))
-    )
+    program = build_program(model, qn, external=external)
+    (src / f"{name}.lf").write_text(to_lf(program))
+    if program.types_module_lines:
+        assert program.types_module_name is not None
+        (src / f"{program.types_module_name}.py").write_text(
+            "\n".join(program.types_module_lines) + "\n"
+        )
     (src / "Harness.lf").write_text(
         HARNESS.format(
             reactor=name, machine=name, timeout=timeout, drivers=drivers
@@ -183,6 +187,11 @@ def run_rig(
     src = tmp_path / "src"
     src.mkdir()
     (src / f"{name}.lf").write_text(to_lf(program))
+    if program.types_module_lines:
+        assert program.types_module_name is not None
+        (src / f"{program.types_module_name}.py").write_text(
+            "\n".join(program.types_module_lines) + "\n"
+        )
     observers = "\n".join(
         OBSERVER.format(port=f"{label}_current_state", label=label)
         for label in streams
@@ -1146,6 +1155,11 @@ def run_part(
     src = tmp_path / "src"
     src.mkdir()
     (src / "Main.lf").write_text(to_lf(program))
+    if program.types_module_lines:
+        assert program.types_module_name is not None
+        (src / f"{program.types_module_name}.py").write_text(
+            "\n".join(program.types_module_lines) + "\n"
+        )
     (src / "sitecustomize.py").write_text(
         "import logging\nlogging.basicConfig(level=logging.DEBUG)\n"
     )
@@ -1219,6 +1233,11 @@ def test_part01_silent_without_debug(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
     (src / "Main.lf").write_text(to_lf(program))
+    if program.types_module_lines:
+        assert program.types_module_name is not None
+        (src / f"{program.types_module_name}.py").write_text(
+            "\n".join(program.types_module_lines) + "\n"
+        )
     compile_result = subprocess.run(
         ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
     )
