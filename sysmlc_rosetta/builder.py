@@ -4,7 +4,11 @@ from dataclasses import replace
 
 import syside
 
-from sysmlc.backends.rosetta.codegen import LfPythonCodeGen, PreambleNeeds
+from sysmlc.backends.rosetta.codegen import (
+    LfPythonCodeGen,
+    PreambleNeeds,
+    py_type,
+)
 from sysmlc.backends.rosetta.program import (
     Connection,
     Instantiation,
@@ -34,6 +38,7 @@ from sysmlc.semantics.statemachine.facts import (
     TransitionFact,
     TriggerKind,
 )
+from sysmlc.sysml.queries import feature_value
 
 OUTPUT_PORT = "current_state"
 COMPLETED_PORT = "completed"
@@ -344,7 +349,7 @@ class RosettaBuilder:
                 if isinstance(payload, syside.ConstructorExpression):
                     item_type = payload.instantiated_type
                     if isinstance(item_type, syside.Definition):
-                        self._needs.register_item(item_type)
+                        self._register_dataclass(item_type)
         for scope, sent in self._sent_by_scope.items():
             for sig in sent:
                 for other, handled in self._handled.items():
@@ -404,16 +409,45 @@ class RosettaBuilder:
                 state_vars.append(StateVar(binding.name, rendered))
         return parameters, state_vars
 
+    def _register_dataclass(self, definition: syside.Definition) -> None:
+        """Render ``definition`` as a dataclass and register it on the preamble.
+
+        Handles item defs and composite attr defs.  Fields are typed via
+        :func:`py_type` and default to the model's declared default, else
+        ``None`` (every field defaulted, so the dataclass needs no
+        field-ordering care).
+        """
+        assert definition.name is not None
+        lines: list[str] = ["@dataclass", f"class {definition.name}:"]
+        attrs = definition.owned_attributes.collect()
+        if not attrs:
+            lines.append("    pass")
+        for attr in attrs:
+            assert attr.name is not None
+            default_expr = feature_value(attr)
+            if default_expr is None:
+                default = "None"
+            else:
+                try:
+                    default = self._init_codegen.render_expression(default_expr)
+                except (ValueError, UnsupportedConstructError):
+                    # Quantity / complex expressions can't render as plain
+                    # Python literals; fall back to None (design note: only
+                    # scalar literal defaults are rendered in the companion).
+                    default = "None"
+            lines.append(f"    {attr.name}: {py_type(attr)} = {default}")
+        self._needs.register_dataclass(definition.name, tuple(lines))
+
     def _render_value(self, value: AttributeValue) -> str | None:
         if value is None:
             return None
         if isinstance(value, CompositeValue):
-            self._needs.uses_namespace = True
+            self._register_dataclass(value.definition)
             fields = ", ".join(
                 f"{name}={self._render_value(field)}"
                 for name, field in value.fields
             )
-            return f"SimpleNamespace({fields})"
+            return f"{value.type_name}({fields})"
         if isinstance(value, float):
             return repr(value)
         # Initial values render with the init codegen (self_prefix=False):
@@ -1134,6 +1168,7 @@ def build_program(
     """
     name = state_def_qn.split("::")[-1]
     needs = PreambleNeeds()
+    needs.types_module = f"{name}_types"
     if external is not None:
         needs.register_external(module=external[0], names=external[1])
     result = StateMachineDriver(model).run(

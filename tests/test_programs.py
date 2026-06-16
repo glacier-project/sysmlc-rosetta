@@ -109,10 +109,9 @@ def test_sm04_exit_runs_before_target_set() -> None:
 
 def test_sm05_chained_guard_and_composite_state_var() -> None:
     program = _build("sm05-chained-references", "SM05::MachineChainGuard")
-    assert program.preamble == ("from types import SimpleNamespace",)
     (pt,) = program.reactor.state_vars
     assert pt.name == "pt"
-    assert pt.init == "SimpleNamespace(x=0.5)"
+    assert pt.init == "Point(x=0.5)"
     entry = _mode(program, "idle").reactions[0]
     assert "if self.pt.x > 0.0:" in entry.body
 
