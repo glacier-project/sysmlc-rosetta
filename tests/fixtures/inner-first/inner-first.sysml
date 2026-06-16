@@ -64,6 +64,39 @@ package InnerFirst {
         transition first region accept Ev then aborted;
     }
 
+    // Parallel nested inside a conflicting composite: group interrupt on
+    // `outer` (outer -> aborted), and region regA inside the parallel `region`
+    // handles Ev. The consumed flag must propagate from regA up through the
+    // parallel `region` mode to `outer`'s reactor — exercising the per-region
+    // re-emit in _child_mode's PARALLEL branch. Inner-first => regA takes
+    // a1 -> a2, the outer group interrupt is suppressed.
+    state def MParDeep {
+        entry;
+            then outer;
+        state outer {
+            entry;
+                then region;
+            state region parallel {
+                state regA {
+                    entry;
+                        then a1;
+                    state a1;
+                    state a2;
+                    transition first a1 accept Ev then a2;
+                }
+                state regB {
+                    entry;
+                        then b1;
+                    state b1;
+                    state b2;
+                    transition first b1 accept after 5 [s] then b2;
+                }
+            }
+        }
+        state aborted;
+        transition first outer accept Ev then aborted;
+    }
+
     // Control: BarrierFault-style sibling composites sharing a signal (NOT a
     // conflict — the handlers live in sibling, never-co-active modes).
     state def MSibling {

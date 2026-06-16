@@ -125,3 +125,51 @@ def test_parallel_inner_first_matches_quake(tmp_path: Path) -> None:
     # regA consumed Ev (a1 -> a2); the parallel group interrupt is suppressed.
     assert any(s.startswith("region.regA.a2") for s in states)
     assert "aborted" not in states
+
+
+# ---------------------------------------------------------------------------
+# MParDeep: parallel nested inside a conflicting composite (Task 4 gap)
+# ---------------------------------------------------------------------------
+
+
+def test_par_deep_conflict_propagates_to_outer() -> None:
+    """White-box: consumed flag propagates from regA through `region` to outer.
+
+    This exercises the gate ``sig in self._consumed.get(scope, {})`` in the
+    PARALLEL branch of ``_child_mode``.
+    """
+    b = _builder("InnerFirst::MParDeep")
+    # The outer reactor must carry the consumed flag (enables the per-region
+    # re-emit in _child_mode's PARALLEL branch).
+    assert "Ev" in b._consumed.get("outer", {})
+    assert b._guarded_interrupts.get("outer", {}).get("Ev") == ["outer"]
+
+
+def test_par_deep_structural_has_per_region_reemit() -> None:
+    """Structural: the per-region re-emit reaction appears in generated LF."""
+    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::MParDeep"))
+    # _port_reemit emits this reaction body in MParDeep_outer's region mode.
+    assert "Ev_consumed.set(c_regA.Ev_consumed.value)" in lf
+    # The outer group-interrupt reaction is also present and guarded.
+    assert "reaction(Ev, c_outer.Ev_consumed) -> reset(aborted)" in lf
+    assert "if not (c_outer.Ev_consumed.is_present):" in lf
+
+
+@pytest.mark.lf
+def test_par_deep_inner_first_matches_quake(tmp_path: Path) -> None:
+    """End-to-end: regA takes a1->a2; outer group interrupt is suppressed."""
+    states = run_machine(
+        tmp_path,
+        MODEL_DIR,
+        "InnerFirst::MParDeep",
+        drivers=EV_AT_100MS,
+        timeout="1 sec",
+    )
+    quake = _quake_config_after_ev("InnerFirst::MParDeep")
+    # Rosetta: regA settled in a2 (observed: ['outer.region.regB.b1',
+    # 'outer.region.regA.a2']); outer group interrupt never fired.
+    assert any(s.endswith("regA.a2") for s in states)
+    assert "aborted" not in states
+    # Quake agrees: a2 leaf present, aborted absent.
+    assert "outer::region::regA::a2" in quake
+    assert not any("aborted" in c for c in quake)
