@@ -341,7 +341,7 @@ def test_showcase_values_examples_configure_and_build() -> None:
         ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
         ("batch-reactor", "BatchReactor::BatchReactorBehavior"),
         ("charging-station", "ChargingStation::ChargingStationBehavior"),
-        ("level-crossing", "LevelCrossing::LevelCrossing"),
+        ("level-crossing", "LevelCrossing::LevelCrossingBehavior"),
     ]
     for example, qn in examples:
         values_file = SHOWCASE_DIR / example / "values.yaml"
@@ -392,13 +392,13 @@ def test_charging_station_auth_dispatch_and_timeout() -> None:
 
 
 def test_level_crossing_reactor_family_and_fault_paths() -> None:
-    program = _build("level-crossing", "LevelCrossing::LevelCrossing")
+    program = _build("level-crossing", "LevelCrossing::LevelCrossingBehavior")
     assert [r.name for r in program.reactors] == [
-        "LevelCrossing_securing",
-        "LevelCrossing_closed_bellCycle",
-        "LevelCrossing_closed_passage",
-        "LevelCrossing_opening",
-        "LevelCrossing",
+        "LevelCrossingBehavior_securing",
+        "LevelCrossingBehavior_closed_bellCycle",
+        "LevelCrossingBehavior_closed_passage",
+        "LevelCrossingBehavior_opening",
+        "LevelCrossingBehavior",
     ]
     securing = program.reactors[0]
     assert "exit_0" in securing.outputs
@@ -414,7 +414,7 @@ def test_level_crossing_reactor_family_and_fault_paths() -> None:
 def test_level_crossing_join_mixes_timer_and_signal_regions() -> None:
     # The closed state's join waits for a time-driven region (bellCycle)
     # AND a signal-driven one (passage).
-    program = _build("level-crossing", "LevelCrossing::LevelCrossing")
+    program = _build("level-crossing", "LevelCrossing::LevelCrossingBehavior")
     passage = program.reactors[2]
     (waiting,) = [m for m in passage.modes if m.name == "waiting"]
     (passed,) = [r for r in waiting.reactions if "TrainPassed" in r.triggers]
