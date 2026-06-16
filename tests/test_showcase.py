@@ -89,7 +89,7 @@ def test_stopwatch_signal_self_loop_on_reset_cmd() -> None:
 
 
 def test_thermostat_parameters() -> None:
-    program = _build("thermostat", "Thermostat::Thermostat")
+    program = _build("thermostat", "Thermostat::ThermostatBehavior")
     params = {p.name: p.default for p in program.reactor.parameters}
     assert params == {"setpoint": "21.0", "hysteresis": "0.5"}
     (temp,) = program.reactor.state_vars
@@ -98,7 +98,7 @@ def test_thermostat_parameters() -> None:
 
 
 def test_thermostat_periodic_loop_with_eventless_guard() -> None:
-    program = _build("thermostat", "Thermostat::Thermostat")
+    program = _build("thermostat", "Thermostat::ThermostatBehavior")
     heating = _mode(program, "heating")
     (timer,) = heating.timers
     assert timer.offset == "1 sec"
@@ -212,7 +212,7 @@ def test_microwave_join_flags_track_region_completion() -> None:
 
 
 def test_thermostat_constraints_check_at_startup() -> None:
-    program = _build("thermostat", "Thermostat::Thermostat")
+    program = _build("thermostat", "Thermostat::ThermostatBehavior")
     (startup_checks,) = [
         r for r in program.reactor.reactions if r.triggers == ("startup",)
     ]
@@ -228,7 +228,7 @@ def test_thermostat_constraints_check_at_startup() -> None:
 
 
 def test_thermostat_constraints_follow_assignments() -> None:
-    program = _build("thermostat", "Thermostat::Thermostat")
+    program = _build("thermostat", "Thermostat::ThermostatBehavior")
     heating = _mode(program, "heating")
     timer_reaction = heating.reactions[1]
     assert "self.temperature = self.temperature + 0.8" in timer_reaction.body
@@ -349,7 +349,7 @@ def test_showcase_values_examples_configure_and_build() -> None:
     from sysmlc.values import configure_model, load_values, select_values
 
     examples = [
-        ("thermostat", "Thermostat::Thermostat"),
+        ("thermostat", "Thermostat::ThermostatBehavior"),
         ("milling-workcell", "MillingWorkcell::MillingWorkcellBehavior"),
         ("batch-reactor", "BatchReactor::BatchReactorBehavior"),
         ("charging-station", "ChargingStation::ChargingStationBehavior"),

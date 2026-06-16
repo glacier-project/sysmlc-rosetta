@@ -381,7 +381,7 @@ def test_showcase_thermostat(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "thermostat",
-        "Thermostat::Thermostat",
+        "Thermostat::ThermostatBehavior",
         timeout="20 sec",
     )
     # 18.0 heats by 0.8/s past 21.5 (5 ticks), idles down by 0.3/s to
@@ -400,7 +400,7 @@ def test_showcase_thermostat_override_changes_behavior(
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "thermostat",
-        "Thermostat::Thermostat",
+        "Thermostat::ThermostatBehavior",
         timeout="12 sec",
         values={"setpoint": 23.0, "hysteresis": 1.0},
     )
@@ -416,7 +416,7 @@ def test_showcase_thermostat_violated_constraint_aborts(
     binary = compile_harness(
         tmp_path,
         SHOWCASE_DIR / "thermostat",
-        "Thermostat::Thermostat",
+        "Thermostat::ThermostatBehavior",
         values={"setpoint": -10.0},
     )
     result = subprocess.run(
@@ -424,6 +424,17 @@ def test_showcase_thermostat_violated_constraint_aborts(
     )
     assert result.returncode != 0
     assert "setpointPositive" in result.stderr
+
+
+def test_thermostat_system_runs(tmp_path: Path) -> None:
+    # Driverless: the single-part usage builds a runnable main reactor.
+    logs, rc = run_part(
+        tmp_path,
+        SHOWCASE_DIR / "thermostat",
+        "Thermostat::thermostatSystem",
+        timeout="2 sec",
+    )
+    assert rc == 0, f"expected clean exit at timeout; stderr:\n{logs}"
 
 
 def test_showcase_vending_machine(tmp_path: Path) -> None:
