@@ -232,3 +232,26 @@ def test_bare_target_and_trivial_main_unchanged() -> None:
     assert text.startswith("target Python\n")
     assert "main reactor {\n  m = new M()\n}\n" in text
     assert "target Python {" not in text
+
+
+def test_preamble_with_types_module_import_renders_correctly() -> None:
+    # When a companion module exists, the preamble should contain an import
+    # line, not inline class definitions.
+    from sysmlc.backends.rosetta.program import LfProgram
+
+    prog = LfProgram(
+        reactors=(Reactor(name="Machine"),),
+        preamble=("from Machine_types import Point",),
+        target_options=(("files", '["Machine_types.py"]'),),
+        types_module_name="Machine_types",
+        types_module_lines=(
+            "from dataclasses import dataclass",
+            "@dataclass",
+            "class Point:",
+            "    x: float = 0.5",
+        ),
+    )
+    text = to_lf(prog)
+    assert 'files: ["Machine_types.py"],' in text
+    assert "from Machine_types import Point" in text
+    assert "@dataclass" not in text  # class not inlined in the .lf

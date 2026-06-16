@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, override
 import syside as _syside
 
 from sysmlc.backends.base import Backend, OutputOptions
-from sysmlc.backends.rosetta.builder import build_program
+from sysmlc.backends.rosetta.builder import _finalize, build_program
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.parts import build_part_program, compose_exhibits
 from sysmlc.backends.rosetta.program import LfProgram
@@ -89,19 +89,22 @@ class RosettaBackend(Backend):
                     usage,
                     sig,
                 )
+        composite_name = rig_qn.split("::")[-1]
         needs = PreambleNeeds()
+        needs.types_module = f"{composite_name}_types"
         if external is not None:
             needs.register_external(module=external[0], names=external[1])
         children, composite = compose_exhibits(
             model,
-            rig_qn.split("::")[-1],
+            composite_name,
             ((usage_a, qn_a), (usage_b, qn_b)),
             needs,
         )
-        return LfProgram(
+        program = LfProgram(
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
         )
+        return _finalize(program, needs, external)
 
     def build_part(
         self,
@@ -154,7 +157,17 @@ class RosettaBackend(Backend):
         options.output_dir.mkdir(parents=True, exist_ok=True)
         path = options.output_dir / f"{basename}.lf"
         path.write_text(self.serialize(artifact, "lf"))
-        return [path]
+        written = [path]
+        if artifact.types_module_lines:
+            assert artifact.types_module_name is not None
+            module_path = (
+                options.output_dir / f"{artifact.types_module_name}.py"
+            )
+            module_path.write_text(
+                "\n".join(artifact.types_module_lines) + "\n"
+            )
+            written.append(module_path)
+        return written
 
     @override
     def summary(self, artifact: object) -> str:

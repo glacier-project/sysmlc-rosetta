@@ -7,6 +7,7 @@ import syside
 from sysmlc.backends.rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
+    files_option,
     py_type,
 )
 from sysmlc.backends.rosetta.program import (
@@ -1146,6 +1147,26 @@ class RosettaBuilder:
         ]
 
 
+def _finalize(
+    program: LfProgram,
+    needs: PreambleNeeds,
+    external: tuple[str, frozenset[str]] | None,
+) -> LfProgram:
+    """Attach the companion module + ``files:`` to a built program."""
+    companion = needs.companion_module_lines()
+    fo = files_option(
+        needs.types_module if companion else None,
+        external[0] if external is not None else None,
+    )
+    options = program.target_options + ((fo,) if fo else ())
+    return replace(
+        program,
+        target_options=options,
+        types_module_name=needs.types_module if companion else None,
+        types_module_lines=tuple(companion),
+    )
+
+
 def build_program(
     model: syside.Model,
     state_def_qn: str,
@@ -1175,4 +1196,4 @@ def build_program(
         state_def_qn, RosettaBuilder(name, needs=needs)
     )
     assert isinstance(result, LfProgram)
-    return result
+    return _finalize(result, needs, external)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sysmlc.backends.rosetta.builder import build_program
+from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
@@ -10,6 +12,8 @@ from tests.backends.sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from sysmlc.backends.rosetta.program import LfProgram, Mode
+
+PART_EXT = Path("models/sm-examples/part-external")
 
 
 def _build(model_dir: str, qn: str) -> LfProgram:
@@ -406,3 +410,35 @@ def test_sm09_nested_parallel_mode_holds_region_instances() -> None:
     assert reemit.body == (
         'current_state.set("dual.sound." + c_sound.current_state.value)',
     )
+
+
+# -- companion module wiring (Task 5) --
+
+
+def test_build_program_sets_types_module_when_composite_type_exists() -> None:
+    # sm05 MachineChainGuard has `attribute pt : Point` — a composite type.
+    program = _build("sm05-chained-references", "SM05::MachineChainGuard")
+    assert program.types_module_name == "MachineChainGuard_types"
+    assert any("class Point:" in ln for ln in program.types_module_lines)
+    files = dict(program.target_options).get("files")
+    assert files == '["MachineChainGuard_types.py"]'
+
+
+def test_build_program_no_types_module_when_no_types() -> None:
+    # sm01 has no composite types: no companion module, no files:.
+    program = _build("sm01-helloworld", "SM01::Machine")
+    assert program.types_module_name is None
+    assert program.types_module_lines == ()
+    assert "files" not in dict(program.target_options)
+
+
+def test_part_program_sets_types_module_and_files() -> None:
+    prog = build_part_program(
+        load_model(PART_EXT),
+        "PartExt::counterSystem",
+        external=("bump", frozenset({"bump"})),
+    )
+    # part-external has no composite attribute types, only external functions.
+    # files: must still include the --python module.
+    files = dict(prog.target_options).get("files")
+    assert files == '["bump.py"]'

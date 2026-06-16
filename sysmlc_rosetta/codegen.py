@@ -201,6 +201,21 @@ class PreambleNeeds:
         return lines
 
 
+def files_option(
+    types_module: str | None, external_module: str | None
+) -> tuple[str, str] | None:
+    """Build the ``files:`` target option, or None when nothing to ship."""
+    names: list[str] = []
+    if types_module is not None:
+        names.append(f"{types_module}.py")
+    if external_module is not None:
+        names.append(f"{external_module}.py")
+    if not names:
+        return None
+    listed = ", ".join(f'"{n}"' for n in names)
+    return ("files", f"[{listed}]")
+
+
 class LfPythonCodeGen(PythonCodeGen):
     """Python code generator for Lingua Franca reaction bodies.
 

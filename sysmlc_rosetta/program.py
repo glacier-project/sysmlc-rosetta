@@ -133,13 +133,16 @@ class LfProgram:
     is rendered. ``preamble`` holds Python preamble lines (imports/helpers);
     empty means no preamble block is emitted. ``target_options`` populate the
     ``target Python { ... }`` header (run config); empty -> bare ``target
-    Python``.
+    Python``. ``types_module_name`` and ``types_module_lines`` describe the
+    companion ``<basename>_types.py`` module written beside the ``.lf``.
     """
 
     reactors: tuple[Reactor, ...]
     preamble: tuple[str, ...] = ()
     main: MainReactor | None = None
     target_options: tuple[tuple[str, str], ...] = ()
+    types_module_name: str | None = None
+    types_module_lines: tuple[str, ...] = ()
 
     @property
     def reactor(self) -> Reactor:

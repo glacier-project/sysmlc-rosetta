@@ -21,7 +21,11 @@ import logging
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
-from sysmlc.backends.rosetta.builder import OUTPUT_PORT, RosettaBuilder
+from sysmlc.backends.rosetta.builder import (
+    OUTPUT_PORT,
+    RosettaBuilder,
+    _finalize,
+)
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.program import (
     Connection,
@@ -243,9 +247,15 @@ def build_part_program(
     _validate_via_ports(single_nodes, faces)
     _validate_connections(g, parts)
 
+    module_name = f"{usage_qn.split('::')[-1]}_types"
     peer_accepts = _peer_accepts(g, faces)
-    reactors, preamble = _build_reactors(
-        model, single_nodes, multi_nodes, peer_accepts, external=external
+    reactors, needs = _build_reactors(
+        model,
+        single_nodes,
+        multi_nodes,
+        peer_accepts,
+        module_name=module_name,
+        external=external,
     )
 
     main = MainReactor(
@@ -254,12 +264,13 @@ def build_part_program(
         ),
         connections=_route(g, faces),
     )
-    return LfProgram(
+    program = LfProgram(
         reactors=reactors,
-        preamble=preamble,
+        preamble=tuple(needs.preamble_lines()),
         main=main,
         target_options=target_options,
     )
+    return _finalize(program, needs, external)
 
 
 def _validate_via_ports(
@@ -318,8 +329,9 @@ def _build_reactors(
     multi_nodes: tuple[PartNode, ...],
     peer_accepts: dict[str, frozenset[str]],
     *,
+    module_name: str,
     external: tuple[str, frozenset[str]] | None = None,
-) -> tuple[tuple[Reactor, ...], tuple[str, ...]]:
+) -> tuple[tuple[Reactor, ...], PreambleNeeds]:
     """Build reactor classes for all part nodes, sharing one preamble.
 
     Single-exhibit nodes produce one inline machine reactor per distinct part
@@ -336,14 +348,18 @@ def _build_reactors(
         single_nodes: Part nodes with exactly one exhibited behavior.
         multi_nodes: Part nodes with two or more exhibited behaviors.
         peer_accepts: Per-usage-name set of signal names accepted by peers.
+        module_name: Stem of the companion ``_types`` module (set on the
+            shared :class:`PreambleNeeds` before any builder pass).
         external: Optional ``(module_stem, function_names)`` pair.  When
             supplied, registered on the shared :class:`PreambleNeeds` before
             any builder pass so that matched calls land in the preamble.
 
     Returns:
-        A tuple of ``(reactor_classes, preamble_lines)``.
+        A tuple of ``(reactor_classes, needs)`` where ``needs`` is the shared
+        preamble registry, ready for :func:`_finalize`.
     """
     needs = PreambleNeeds()
+    needs.types_module = module_name
     if external is not None:
         needs.register_external(module=external[0], names=external[1])
     seen: set[str] = set()
@@ -395,7 +411,7 @@ def _build_reactors(
             seen.add(reactor.name)
             reactors.append(reactor)
 
-    return tuple(reactors), tuple(needs.preamble_lines())
+    return tuple(reactors), needs
 
 
 def _route(
