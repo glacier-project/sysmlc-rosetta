@@ -175,7 +175,14 @@ class PreambleNeeds:
         return lines
 
     def companion_module_lines(self) -> list[str]:
-        """Render the ``<basename>_types.py`` module: enums + dataclasses."""
+        """Render the ``<basename>_types.py`` module: enums + dataclasses.
+
+        Note: no ``from __future__ import annotations`` here on purpose —
+        annotations evaluate eagerly, so an unregistered nested-composite
+        field type (see ``RosettaBuilder._register_dataclass``) fails loud at
+        import with ``NameError`` rather than silently producing a broken
+        module. Adding deferred annotations would move that to use-time.
+        """
         lines = self._enum_class_lines()
         if self.dataclass_blocks:
             lines.append("from dataclasses import dataclass")

@@ -304,7 +304,9 @@ def test_after_with_guard(tmp_path: Path) -> None:
 
 
 def test_sm05_composite_state_var(tmp_path: Path) -> None:
-    # SimpleNamespace initializers must serialize as {= ... =} target code.
+    # Composite-attribute initializers (e.g. Point(x=0.5)) must serialize as
+    # {= ... =} target code, and the Point dataclass ships in the companion
+    # module via files:.
     states = run_machine(
         tmp_path,
         SM_EXAMPLES_DIR / "sm05-chained-references",
