@@ -242,6 +242,16 @@ composes BOTH machines into one LF program — the testbench drives stimuli
 the plant accepts, observes the plant's sends, and decides a verdict, with
 no scripted harness.
 
+> **Status (Plan 2b):** `build_rig_program` is **retired** — there is now one
+> composition path, the part assembler's `compose_exhibits` (§13.5), of which
+> the two-machine rig is the N=2 case. The showcase no longer ships rigs:
+> every model migrated to **Style A** (single-exhibit part defs + a top-level
+> part *usage* with port-based `connect`, §13.1), so cross-machine routing is
+> the port-based wiring of §13.1. The mechanism described below is what
+> `compose_exhibits` performs (name-based, for exhibits *within* one part def);
+> it is still reachable by selecting a ≥2-exhibit `part def` directly
+> (`-e P::XRig`).
+
 ```sysml
 state def Microwave { … }              // plant — unchanged
 state def MicrowaveTest { … }          // stimuli + verdict
@@ -531,10 +541,11 @@ class per part def plus an explicit `main reactor`.
 | `connect a.pa to b.pb;` | LF connections for the signals that cross those ports (§13.1) |
 | CLI `--fast` / `--timeout "5 sec"` | `target Python { fast: true, timeout: 5 sec, }` header |
 
-A part def with **1 exhibit** inlines that machine (this increment). **0**
-exhibits (pure composite) and **≥2** exhibits are rejected with a pointer to
-Plan 2b. A part def reused by several parts builds its reactor **once** and is
-instantiated per usage.
+A part def with **1 exhibit** inlines that machine; **≥2 exhibits** compose
+into a reactor that instantiates each exhibit as a named child and same-name
+cross-wires them (`compose_exhibits`, §13.5). **0** exhibits with nested parts
+(a deep composite) is still rejected (deferred). A part def reused by several
+parts builds its reactor **once** and is instantiated per usage.
 
 ### 13.1 Connections are port-based (not name-based)
 
@@ -590,15 +601,43 @@ logging.debug("exited <Reactor>.<state>")     # in each leaving transition
 
 `PreambleNeeds.uses_logging` adds `import logging`. The program is **silent by
 default** (the root logger is unconfigured at WARNING); the *run* enables
-DEBUG — the lf test drops a `sitecustomize.py` doing
+DEBUG — `run_all.py` and the lf tests drop a `sitecustomize.py` doing
 `logging.basicConfig(level=logging.DEBUG)` on `PYTHONPATH`, so the entry/exit
-lines reach stderr without the generated program forcing them on. Existing
-`build_program`/`build_rig_program` leave `observe` off, so their output is
-byte-identical.
+lines reach stderr without the generated program forcing them on. `build_program`
+(bare machine) and `compose_exhibits` (≥2-exhibit) leave `observe` off; only the
+part assembler sets it, so existing outputs stay byte-identical.
 
-### 13.4 Deferred to Plan 2b
+### 13.4 Plan 2b status (Phases 0–2 landed)
 
-Multi-exhibit parts (≥2), deep composite parts (an inline exhibit *and* nested
-parts), per-port signal *scoping beyond routing*, banks/multiports (the
-multiplicity fix for fan-in), showcase Style-A migration, `run_all.py`
-reduction, furuta external physics, and retiring `build_rig_program`.
+**Landed:** ≥2-exhibit composition (§13.5); the whole showcase migrated to
+Style A; `run_all.py` reduced to part-usage orchestration (each model
+builds → `lfc` → runs, observed via the DEBUG entry/exit trace); furuta rebuilt
+as an **honest closed loop** with external physics; and `build_rig_program`
+**retired** — one composition path (the part assembler; §10).
+
+**Still deferred** (each its own future increment): **banks/multiports** (the
+multiplicity fix for single-channel fan-in, §13.2 — designed in
+`docs/rosetta-parts-design.md` §5.4, lfc-validated by a spike, but the
+state-machine *consumption* of a width-N multiport needs its own brainstorm);
+**deep composite parts** (an inline exhibit *and* nested parts); per-port signal
+*scoping beyond routing*.
+
+### 13.5 ≥2-exhibit composition, external functions, reset-state
+
+- **≥2-exhibit parts** (`compose_exhibits`, `parts.py`): each exhibit → a named
+  child reactor; same-named signals cross-wired among all exhibits (name-based —
+  the retired rig's mechanism generalized to N), each `current_state` forwarded
+  as `<exhibit>_current_state`; fan-in of one signal into a common accepter and
+  bidirectional same-name are rejected. The directly-selected rig spelling
+  (`-e P::XRig`, the optional `build_composition` hook) routes through this too,
+  byte-identically at N=2. A ≥2-exhibit part is **self-contained** — its
+  exhibits' `via` ports are internal, so it does not participate in port-based
+  `connect` routing.
+- **External functions for part usages**: `--python FILE` works when building a
+  top-level part usage (`build_part_program(…, external=…)`), not just bare
+  machines/rigs — the honest furuta closed loop uses it for the pendulum physics.
+- **`reset state` for join flags**: a parallel composite's join-completion flags
+  render as LF `reset state` (not plain `state`) so lfc accepts the child reactor
+  when it is instantiated inside a `reset` mode (surfaced once part builds inline
+  all reactors into one file; semantically correct — the flags reset on composite
+  re-entry).
