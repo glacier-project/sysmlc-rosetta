@@ -109,10 +109,22 @@ class RosettaBackend(Backend):
         usage_qn: str,
         *,
         target_options: tuple[tuple[str, str], ...] = (),
+        external: tuple[str, frozenset[str]] | None = None,
     ) -> object:
-        """Build the LF program (main reactor) for a top-level part usage."""
+        """Build the LF program (main reactor) for a top-level part usage.
+
+        Args:
+            model: Loaded syside model.
+            usage_qn: Qualified name of the top-level part usage.
+            target_options: Key/value pairs for the LF target header.
+            external: Optional ``(module_stem, function_names)`` pair for
+                ``--python`` external calc-def backing.
+        """
         return build_part_program(
-            model, usage_qn, target_options=target_options
+            model,
+            usage_qn,
+            target_options=target_options,
+            external=external,
         )
 
     @override

@@ -185,6 +185,7 @@ def build_part_program(
     usage_qn: str,
     *,
     target_options: tuple[tuple[str, str], ...] = (),
+    external: tuple[str, frozenset[str]] | None = None,
 ) -> LfProgram:
     """Build the composed LF program for a top-level part usage.
 
@@ -200,6 +201,17 @@ def build_part_program(
       :class:`~sysmlc.errors.UnsupportedConstructError`.
 
     The ``main reactor`` instantiates ALL parts (single and multi).
+
+    Args:
+        model: Loaded syside model.
+        usage_qn: Qualified name of the top-level part usage to assemble.
+        target_options: Key/value pairs for the LF ``target Python { … }``
+            header (e.g. ``(("fast", "true"), ("timeout", "5 sec"))``).
+        external: Optional ``(module_stem, function_names)`` pair identifying
+            a ``--python`` module whose top-level functions back external
+            calc-def calls.  When supplied, ``module_stem`` and any matched
+            function names are emitted as ``from <module> import <name>`` in
+            the generated preamble.
     """
     g = part_graph(model, usage_qn)
     if not g.parts:
@@ -233,7 +245,7 @@ def build_part_program(
 
     peer_accepts = _peer_accepts(g, faces)
     reactors, preamble = _build_reactors(
-        model, single_nodes, multi_nodes, peer_accepts
+        model, single_nodes, multi_nodes, peer_accepts, external=external
     )
 
     main = MainReactor(
@@ -305,6 +317,8 @@ def _build_reactors(
     single_nodes: tuple[PartNode, ...],
     multi_nodes: tuple[PartNode, ...],
     peer_accepts: dict[str, frozenset[str]],
+    *,
+    external: tuple[str, frozenset[str]] | None = None,
 ) -> tuple[tuple[Reactor, ...], tuple[str, ...]]:
     """Build reactor classes for all part nodes, sharing one preamble.
 
@@ -317,9 +331,21 @@ def _build_reactors(
     ``peer_accepts`` is the union over those usages so the shared class
     exposes every needed output.
 
-    Returns the reactor classes and the shared preamble lines.
+    Args:
+        model: Loaded syside model.
+        single_nodes: Part nodes with exactly one exhibited behavior.
+        multi_nodes: Part nodes with two or more exhibited behaviors.
+        peer_accepts: Per-usage-name set of signal names accepted by peers.
+        external: Optional ``(module_stem, function_names)`` pair.  When
+            supplied, registered on the shared :class:`PreambleNeeds` before
+            any builder pass so that matched calls land in the preamble.
+
+    Returns:
+        A tuple of ``(reactor_classes, preamble_lines)``.
     """
     needs = PreambleNeeds()
+    if external is not None:
+        needs.register_external(module=external[0], names=external[1])
     seen: set[str] = set()
     reactors: list[Reactor] = []
 

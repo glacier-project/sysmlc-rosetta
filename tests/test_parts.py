@@ -11,6 +11,7 @@ from sysmlc.sysml.loading import load_model
 FIX = Path("models/sm-examples/part01-two-parts")
 MUX = Path("models/sm-examples/part-mux")
 UNDECLARED_VIA = Path("models/sm-examples/part-undeclared-via")
+PART_EXT = Path("models/sm-examples/part-external")
 
 
 def test_build_part_program_composes_two_parts() -> None:
@@ -63,3 +64,17 @@ def test_multi_exhibit_part_builds_composite_reactor() -> None:
     assert {"PlantBehavior", "TesterBehavior", "Rig"} <= names
     insts = {(i.name, i.reactor) for i in prog.main.instantiations}
     assert ("rig", "Rig") in insts
+
+
+def test_build_part_program_with_external_emits_import_and_call() -> None:
+    # build_part_program must accept external= and thread it into the preamble.
+    # Preamble must contain ``from bump import bump``; reaction body must call
+    # ``bump(self.x)`` (assignment-from-calc in CounterBehavior).
+    prog = build_part_program(
+        load_model(PART_EXT),
+        "PartExt::counterSystem",
+        external=("bump", frozenset({"bump"})),
+    )
+    text = to_lf(prog)
+    assert "from bump import bump" in text
+    assert "bump(self.x)" in text

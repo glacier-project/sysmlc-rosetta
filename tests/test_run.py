@@ -1153,6 +1153,7 @@ def run_part(
     usage_qn: str,
     *,
     timeout: str = "10 sec",
+    python_file: Path | None = None,
 ) -> tuple[str, int]:
     """Build, compile, and run a part system; return (debug logs, returncode).
 
@@ -1162,12 +1163,30 @@ def run_part(
     default; a ``sitecustomize.py`` on ``PYTHONPATH`` enables DEBUG logging so
     the entry/exit observation lines reach stderr, modelling how the run (not
     the program) turns observation on.
+
+    Args:
+        tmp_path: Temporary directory for build artefacts.
+        model_dir: Directory containing the SysML model to build.
+        usage_qn: Qualified name of the top-level part usage.
+        timeout: LF run timeout string (e.g. ``"10 sec"``).
+        python_file: Optional Python module whose top-level functions back
+            external calc-def calls.  When given, the module is copied into
+            ``src/`` so the compiled binary can import it via PYTHONPATH.
     """
     model = load_model(model_dir)
+    external = None
+    if python_file is not None:
+        names = frozenset(
+            n.name
+            for n in ast.parse(python_file.read_text()).body
+            if isinstance(n, ast.FunctionDef)
+        )
+        external = (python_file.stem, names)
     program = build_part_program(
         model,
         usage_qn,
         target_options=(("fast", "true"), ("timeout", timeout)),
+        external=external,
     )
     src = tmp_path / "src"
     src.mkdir()
@@ -1175,6 +1194,8 @@ def run_part(
     (src / "sitecustomize.py").write_text(
         "import logging\nlogging.basicConfig(level=logging.DEBUG)\n"
     )
+    if python_file is not None:
+        shutil.copy(python_file, src / python_file.name)
     compile_result = subprocess.run(
         ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
     )
@@ -1215,6 +1236,20 @@ def test_multi_exhibit_part_runs_and_passes_verdict(tmp_path: Path) -> None:
         timeout="10 sec",
     )
     assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
+
+
+def test_part_external_with_python_runs(tmp_path: Path) -> None:
+    # counterSystem has one part `c : Counter` whose CounterBehavior calls the
+    # external calc def ``PartExt::bump``.  With bump.py supplied, the program
+    # must compile and run cleanly (exit 0).
+    logs, rc = run_part(
+        tmp_path,
+        SM_EXAMPLES_DIR / "part-external",
+        "PartExt::counterSystem",
+        python_file=SM_EXAMPLES_DIR / "part-external" / "bump.py",
+        timeout="1 sec",
+    )
+    assert rc == 0, f"expected exit 0; stderr:\n{logs}"
 
 
 def test_part01_silent_without_debug(tmp_path: Path) -> None:
