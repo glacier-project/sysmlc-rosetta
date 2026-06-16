@@ -244,14 +244,16 @@ def test_thermostat_constraints_follow_assignments() -> None:
 
 
 def test_milling_workcell_builds_nested_reactor_family() -> None:
-    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    program = _build(
+        "milling-workcell", "MillingWorkcell::MillingWorkcellBehavior"
+    )
     assert [r.name for r in program.reactors] == [
-        "MillingWorkcell_homing",
-        "MillingWorkcell_producing_machining_spindle",
-        "MillingWorkcell_producing_machining_coolant",
-        "MillingWorkcell_producing_machining_monitor",
-        "MillingWorkcell_producing",
-        "MillingWorkcell",
+        "MillingWorkcellBehavior_homing",
+        "MillingWorkcellBehavior_producing_machining_spindle",
+        "MillingWorkcellBehavior_producing_machining_coolant",
+        "MillingWorkcellBehavior_producing_machining_monitor",
+        "MillingWorkcellBehavior_producing",
+        "MillingWorkcellBehavior",
     ]
     assert [p.name for p in program.reactor.parameters] == [
         "batchSize",
@@ -264,7 +266,9 @@ def test_milling_workcell_builds_nested_reactor_family() -> None:
 def test_milling_workcell_deep_exit_propagates_two_scopes() -> None:
     # monitor.tripped exits to the ROOT's faultRecovery: the region raises
     # exit_0, the producing reactor re-raises it, the root resolves it.
-    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    program = _build(
+        "milling-workcell", "MillingWorkcell::MillingWorkcellBehavior"
+    )
     monitor = program.reactors[3]
     assert "exit_0" in monitor.outputs
     producing = program.reactors[4]
@@ -289,7 +293,9 @@ def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
     # c_producing.completed reaction and into announcing's startup reaction.
     # The completion reaction now transitions to either `producing` (loop)
     # or `announcing` (batch done); BatchReport is sent from announcing.
-    program = _build("milling-workcell", "MillingWorkcell::MillingWorkcell")
+    program = _build(
+        "milling-workcell", "MillingWorkcell::MillingWorkcellBehavior"
+    )
     producing = _mode(program, "producing")
     (completion,) = [
         r
@@ -344,7 +350,7 @@ def test_showcase_values_examples_configure_and_build() -> None:
 
     examples = [
         ("thermostat", "Thermostat::Thermostat"),
-        ("milling-workcell", "MillingWorkcell::MillingWorkcell"),
+        ("milling-workcell", "MillingWorkcell::MillingWorkcellBehavior"),
         ("batch-reactor", "BatchReactor::BatchReactorBehavior"),
         ("charging-station", "ChargingStation::ChargingStationBehavior"),
         ("level-crossing", "LevelCrossing::LevelCrossingBehavior"),

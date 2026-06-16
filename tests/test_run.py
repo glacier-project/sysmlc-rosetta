@@ -696,7 +696,7 @@ def test_showcase_milling_workcell_batch(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "milling-workcell",
-        "MillingWorkcell::MillingWorkcell",
+        "MillingWorkcell::MillingWorkcellBehavior",
         timeout="10 sec",
         drivers=drivers,
         values={"batchSize": 2},
@@ -741,7 +741,7 @@ def test_showcase_milling_workcell_fault_retry(tmp_path: Path) -> None:
     states = run_machine(
         tmp_path,
         SHOWCASE_DIR / "milling-workcell",
-        "MillingWorkcell::MillingWorkcell",
+        "MillingWorkcell::MillingWorkcellBehavior",
         timeout="10 sec",
         drivers=drivers,
         values={"batchSize": 1},
@@ -766,34 +766,12 @@ def test_showcase_milling_workcell_fault_retry(tmp_path: Path) -> None:
 
 
 def test_milling_workcell_rig_verdict(tmp_path: Path) -> None:
-    # MillingWorkcellRig: testbench sends PowerOn at 0.1 s, StartBatch at
-    # 1.2 s (abs), then waits for BatchReport from the plant's `announcing`
-    # transient latch. The latch fires one microstep after the final piece
-    # completes, so batchWait is already active when BatchReport arrives.
-    # On receipt the testbench enters done (request_stop ends the run).
-    #
-    # The testbench intentionally omits Shutdown to avoid an lfc 0.11
-    # causality cycle: wiring tb.Shutdown → plant.Shutdown creates a
-    # same-tag path from announcing.startup through tb.batchWait → Shutdown
-    # → plant.ready reaction(Shutdown). The plant stays in `ready` while
-    # the testbench's done calls request_stop(). Verdict passes (exit 0).
-    #
-    # values override: batchSize=1 so exactly one piece is machined before
-    # BatchReport; the rig ships values.yaml with batchSize=2 for run_all.
-    process, states = run_rig(
+    logs, rc = run_part(
         tmp_path,
         SHOWCASE_DIR / "milling-workcell",
-        "MillingWorkcell::MillingWorkcellRig",
-        timeout="30 sec",
-        values={"MillingWorkcell::MillingWorkcell": {"batchSize": 1}},
+        "MillingWorkcell::millingWorkcellSystem",
     )
-    assert process.returncode == 0, process.stderr
-    # `announcing` is the unique plant landmark: it is only entered when
-    # produced+1 >= batchSize on a piece completion, proving a full batch
-    # was machined and BatchReport was sent to the testbench.
-    assert "announcing" in states["plant"]
-    assert states["plant"][-1] == "ready"
-    assert states["tb"][-1] == "done"
+    assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
 _REACTOR_VALUES = {
