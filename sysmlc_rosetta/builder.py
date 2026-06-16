@@ -908,6 +908,12 @@ class RosettaBuilder:
                     f"if not ({cond}):",
                     *(f"{_PY_INDENT}{line}" for line in body),
                 ]
+                # {sig}_consumed ports are reaction TRIGGERS, not sources/uses,
+                # so LF schedules this reaction whenever the flag port fires.
+                # This is strictly safe: the flag is only ever set by the child
+                # in the same reaction cycle that also sets {sig}, and if the
+                # flag somehow arrived alone the body degrades to a no-op
+                # (reset() is gated behind ``if not (...is_present)``).
                 triggers = (*triggers, *guard_srcs)
             reactions.append(
                 self._reaction(

@@ -127,4 +127,22 @@ package InnerFirst {
         transition first stateA then stateB;
         transition first stateB accept Ev then failsafe;
     }
+
+    // Outer-fires direction: the inner handler is guarded false, so Ev is
+    // NOT consumed and the (still-generated) outer group interrupt fires.
+    // Detection keys on the trigger, not the guard, so Ev_consumed plumbing
+    // IS generated; the outer reaction fires because the flag is never set.
+    state def MOuterFires {
+        entry;
+            then outer;
+        state outer {
+            entry;
+                then inner;
+            state inner;
+            state innerB;
+            transition first inner accept Ev if false then innerB;
+        }
+        state aborted;
+        transition first outer accept Ev then aborted;
+    }
 }

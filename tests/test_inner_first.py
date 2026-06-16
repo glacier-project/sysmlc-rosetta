@@ -184,3 +184,41 @@ def test_par_deep_inner_first_matches_quake(tmp_path: Path) -> None:
 def test_consumed_name_collision_is_rejected() -> None:
     with pytest.raises(UnsupportedConstructError, match="collides"):
         build_program(load_model(MODEL_DIR), "InnerFirst::MNameClash")
+
+
+# ---------------------------------------------------------------------------
+# MOuterFires: inner guard is false → outer group interrupt fires (1A gap)
+# ---------------------------------------------------------------------------
+
+
+def test_outer_fires_conflict_detected() -> None:
+    """White-box: guarded inner transition still triggers conflict detection.
+
+    Detection keys on the trigger, not the guard; Ev_consumed plumbing is
+    generated even though the inner branch can never execute.
+    """
+    b = _builder("InnerFirst::MOuterFires")
+    assert "Ev" in b._consumed.get("outer", {})
+    assert b._guarded_interrupts.get("outer", {}).get("Ev") == ["outer"]
+    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::MOuterFires"))
+    assert "Ev_consumed" in lf
+
+
+@pytest.mark.lf
+def test_outer_fires_when_inner_guard_false(tmp_path: Path) -> None:
+    """End-to-end: guard-false inner transition never consumes Ev; outer fires.
+
+    Both rosetta and quake must reach ``aborted``.  This is the symmetric
+    direction of the inner-first tests: confirms the guard cannot be
+    accidentally inverted or stuck.
+    """
+    rosetta = run_machine(
+        tmp_path, MODEL_DIR, "InnerFirst::MOuterFires", drivers=EV_AT_100MS
+    )
+    quake = _quake_config_after_ev("InnerFirst::MOuterFires")
+    # Outer group interrupt fired; aborted is the final state.
+    assert rosetta[-1] == "aborted"
+    assert "aborted" in quake
+    # Inner transition never fired (guard was false).
+    assert "innerB" not in rosetta
+    assert not any("innerB" in c for c in quake)
