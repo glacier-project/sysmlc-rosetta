@@ -2,13 +2,22 @@
 
 Imports the module by file path since it lives under models/ (not the
 sysmlc package).  No ``lf`` mark — these are fast, deterministic tests.
+
+The physics module's ``step()`` does a runtime import of ``PendulumState``
+from the generated companion module ``furutaSystem_types``.  Tests that call
+``step()`` use the ``generated_types`` session fixture which builds the furuta
+part once, puts ``furutaSystem_types.py`` on ``sys.path``, and imports the
+generated types for use in test assertions.
 """
 
+from __future__ import annotations
+
+import importlib
 import importlib.util
 import math
+import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -23,6 +32,11 @@ _MODULE_PATH = (
     / "furuta-pendulum"
     / "furuta_physics.py"
 )
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_SYSMLC = str(_PROJECT_ROOT / ".venv" / "bin" / "sysmlc")
+_MODEL_DIR = str(_PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum")
+_PHYSICS_FILE = str(_MODULE_PATH)
 
 
 def _load_module():
@@ -39,12 +53,48 @@ _fp = _load_module()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Session fixture: generate furutaSystem_types.py once per test session
 # ---------------------------------------------------------------------------
 
 
-def _state(theta=0.0, d_theta=0.0, phi=0.0, d_phi=0.0) -> SimpleNamespace:
-    return SimpleNamespace(theta=theta, d_theta=d_theta, phi=phi, d_phi=d_phi)
+@pytest.fixture(scope="session")
+def generated_types(tmp_path_factory):
+    """Generate furutaSystem_types.py by building the furuta part.
+
+    Puts the output dir on sys.path so that the runtime
+    ``from furutaSystem_types import PendulumState`` inside ``step()``
+    resolves.  Also forces a reload of ``furuta_physics`` under its canonical
+    module name so any previously-cached module sees the new path.
+
+    Returns a namespace with ``PendulumState`` and ``AngleReading`` classes.
+    """
+    out = tmp_path_factory.mktemp("furuta_gen")
+    subprocess.run(
+        [
+            _SYSMLC,
+            "rosetta",
+            "build",
+            _MODEL_DIR,
+            "-o",
+            str(out),
+            "--python",
+            _PHYSICS_FILE,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    # Put the generated dir first so furutaSystem_types is importable.
+    if str(out) not in sys.path:
+        sys.path.insert(0, str(out))
+    # Clear any stale cached module so the fresh one is imported.
+    sys.modules.pop("furutaSystem_types", None)
+    types_mod = importlib.import_module("furutaSystem_types")
+    # Reload furuta_physics so its module-level state is consistent
+    # (the runtime import inside step() will now resolve via sys.path).
+    sys.modules.pop("furuta_physics", None)
+    global _fp
+    _fp = _load_module()
+    return types_mod
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +102,15 @@ def _state(theta=0.0, d_theta=0.0, phi=0.0, d_phi=0.0) -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 
 
-def test_step_is_deterministic_and_pure():
+def test_step_is_deterministic_and_pure(generated_types):
     """step() called twice on identical inputs gives identical outputs.
 
-    Also verifies the input object is NOT mutated.
+    Also verifies the input object is NOT mutated and the return type
+    is ``PendulumState`` (the generated companion dataclass).
     """
-    s = _state(theta=0.1, d_theta=0.02, phi=0.5, d_phi=-0.01)
+    s = generated_types.PendulumState(
+        theta=0.1, d_theta=0.02, phi=0.5, d_phi=-0.01
+    )
     original_theta = s.theta
     original_d_theta = s.d_theta
     original_phi = s.phi
@@ -78,8 +131,9 @@ def test_step_is_deterministic_and_pure():
     assert s.phi == original_phi
     assert s.d_phi == original_d_phi
 
-    # Returns a new object
+    # Returns a new object of the generated type
     assert r1 is not s
+    assert type(r1).__name__ == "PendulumState"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +141,7 @@ def test_step_is_deterministic_and_pure():
 # ---------------------------------------------------------------------------
 
 
-def test_stabilizer_holds_inverted_equilibrium():
+def test_stabilizer_holds_inverted_equilibrium(generated_types):
     """stabilize_torque closes the loop and actually balances the pendulum.
 
     Start near the upright position (theta ≈ 0.05 rad) with no velocity.
@@ -99,13 +153,18 @@ def test_stabilizer_holds_inverted_equilibrium():
     If this test fails the ported gains / dynamics equations are wrong —
     fix the port, not the thresholds.
     """
-    x = _state(theta=0.05, d_theta=0.0, phi=0.0, d_phi=0.0)
+    x = generated_types.PendulumState(
+        theta=0.05, d_theta=0.0, phi=0.0, d_phi=0.0
+    )
     phi0 = x.phi  # freeze arm reference as Stabilize would on entry
     n_steps = 2000
     max_theta_seen = 0.0
 
     for _ in range(n_steps):
-        u = _fp.stabilize_torque(x, phi0=phi0)
+        r = generated_types.AngleReading(
+            theta=x.theta, d_theta=x.d_theta, phi=x.phi, d_phi=x.d_phi
+        )
+        u = _fp.stabilize_torque(r, phi0=phi0)
         x = _fp.step(x, u, _fp.H)
         max_theta_seen = max(max_theta_seen, math.fabs(x.theta))
 
@@ -128,7 +187,7 @@ def test_stabilizer_holds_inverted_equilibrium():
 # ---------------------------------------------------------------------------
 
 
-def test_swingup_adds_energy():
+def test_swingup_adds_energy(generated_types):
     """swingup_torque pumps energy toward upright from hanging-down rest.
 
     Start hanging straight down (theta = pi, d_theta = 0).
@@ -140,11 +199,16 @@ def test_swingup_adds_energy():
     This is a loose check -- we just verify energy injection is happening,
     not that the full swing-up completes.
     """
-    x = _state(theta=math.pi, d_theta=0.0, phi=0.0, d_phi=0.0)
+    x = generated_types.PendulumState(
+        theta=math.pi, d_theta=0.0, phi=0.0, d_phi=0.0
+    )
     n_steps = 500
 
     for _ in range(n_steps):
-        u = _fp.swingup_torque(x)
+        r = generated_types.AngleReading(
+            theta=x.theta, d_theta=x.d_theta, phi=x.phi, d_phi=x.d_phi
+        )
+        u = _fp.swingup_torque(r)
         x = _fp.step(x, u, _fp.H)
 
     # Should have moved significantly away from hanging-down rest
