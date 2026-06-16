@@ -169,6 +169,8 @@ def _run_model(
 
     # Stage 5 — run
     binary = build_root / name / "bin" / "Main"
+    # PYTHONPATH is set only for sitecustomize.py (DEBUG logging); types and
+    # physics modules are imported via files: — lfc copies them into src-gen.
     env = {**os.environ, "PYTHONPATH": str(src)}
     ran = subprocess.run(
         [str(binary)],
