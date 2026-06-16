@@ -448,14 +448,20 @@ class LfPythonCodeGen(PythonCodeGen):
             if (
                 isinstance(func, syside.CalculationDefinition)
                 and func.name is not None
-                and func.name in self._needs.external_names
             ):
-                self._needs.used_external.add(func.name)
-                args = ", ".join(
-                    self._emit(argument, 0)
-                    for argument in expr.arguments.collect()
-                )
-                return f"{func.name}({args})"
+                if func.name in self._needs.external_names:
+                    self._needs.used_external.add(func.name)
+                    args = ", ".join(
+                        self._emit(argument, 0)
+                        for argument in expr.arguments.collect()
+                    )
+                    return f"{func.name}({args})"
+                if self._needs.external_module is not None:
+                    raise UnsupportedConstructError(
+                        f"calc def {func.name!r} has no backing function in "
+                        f"--python module {self._needs.external_module!r}.",
+                        node=expr,
+                    )
             raise UnsupportedConstructError(
                 f"function {qn or '<unresolved>'!s} is not in rosetta's "
                 "supported set.",

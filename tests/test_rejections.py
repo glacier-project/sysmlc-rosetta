@@ -199,3 +199,14 @@ def test_single_channel_fan_in_is_rejected() -> None:
     model = load_model(FIXTURES_DIR / "part-fanin")
     with pytest.raises(UnsupportedConstructError, match="multiplicity"):
         build_part_program(model, "PartFanin::sys")
+
+
+def test_missing_external_function_names_module() -> None:
+    """Calling a calc def not in the --python module names it and the module."""
+    # SM15 calls P::step; we register "phys" as the external module but
+    # supply an empty name set (step absent) — should name both in the error.
+    model = load_model(SM_EXAMPLES_DIR / "sm15-external")
+    with pytest.raises(
+        UnsupportedConstructError, match=r"step.*phys|phys.*step"
+    ):
+        build_program(model, "SM15::Ramp", external=("phys", frozenset()))
