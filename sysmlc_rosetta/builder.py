@@ -136,6 +136,13 @@ class RosettaBuilder:
         self._accepted: dict[str, dict[str, None]] = {}
         self._handled: dict[str, set[str]] = {}
         self._sent_by_scope: dict[str, dict[str, None]] = {}
+        # scope -> signals whose {sig}_consumed flag this scope's reactor
+        #   outputs (set by an inner transition here, or re-emitted from a
+        #   child). Empty unless a cross-level priority conflict exists.
+        self._consumed: dict[str, dict[str, None]] = {}
+        # group-interrupt composite/parallel state -> signal -> boundary child
+        #   scope names whose {sig}_consumed flag the group interrupt reads.
+        self._guarded_interrupts: dict[str, dict[str, list[str]]] = {}
         # Peer-mode state (empty unless peer_accepts is non-empty):
         # scope -> signals that scope's reactor must output (its own
         # peer-accepted sends plus those of its descendants).
@@ -206,6 +213,7 @@ class RosettaBuilder:
             self._children.setdefault(_scope_of(fact.name), []).append(fact)
         self._classify_transitions()
         self._collect_signals()
+        self._collect_consumed()
         self._collect_sends()
         # The port/self signal sets must exist (populated by _collect_sends)
         # before any peer-aware code generator is created.
@@ -309,6 +317,54 @@ class RosettaBuilder:
                 self._accepted.setdefault(scope, {}).setdefault(
                     trigger.signal_name, None
                 )
+
+    def _collect_consumed(self) -> None:
+        """Plan inner-first plumbing for cross-level priority conflicts.
+
+        A group interrupt on a composite/parallel state ``C`` accepting signal
+        ``s``, where ``s`` is also accepted strictly inside ``C``, must yield
+        to the inner handler (UML/SCXML inner-first). ``C``'s group-interrupt
+        reaction is guarded on a ``{s}_consumed`` flag the descendant raises
+        and intermediate scopes re-emit upward, terminating at ``C`` (a
+        composite) or at each consuming region (a parallel state).
+        """
+        for t in self._transitions:
+            trigger = t.trigger
+            if trigger is None or trigger.kind is not TriggerKind.SIGNAL:
+                continue
+            composite = t.source
+            fact = self._facts.get(composite)
+            if fact is None or fact.kind is StateKind.LEAF:
+                continue  # not a group interrupt on a composite/parallel state
+            assert trigger.signal_name is not None
+            signal = trigger.signal_name
+            inner_scopes = [
+                scope
+                for scope, handled in self._handled.items()
+                if signal in handled
+                and (scope == composite or _is_ancestor(composite, scope))
+            ]
+            if not inner_scopes:
+                continue
+            parallel = fact.kind is StateKind.PARALLEL
+            boundaries: list[str] = []
+            for scope in inner_scopes:
+                for enclosing in _enclosing(scope):
+                    self._consumed.setdefault(enclosing, {}).setdefault(
+                        signal, None
+                    )
+                    at_boundary = (
+                        _scope_of(enclosing) == composite
+                        if parallel
+                        else enclosing == composite
+                    )
+                    if at_boundary:
+                        if enclosing not in boundaries:
+                            boundaries.append(enclosing)
+                        break
+            self._guarded_interrupts.setdefault(composite, {})[signal] = (
+                boundaries
+            )
 
     def _slot_scope(self, fact: StateFact) -> str:
         """The scope whose reactor executes a state's own action slots.
