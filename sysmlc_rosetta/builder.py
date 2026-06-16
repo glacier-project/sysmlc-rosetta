@@ -219,10 +219,16 @@ class RosettaBuilder:
                 "the state definition declares no substates."
             )
         self._reactors.append(self._with_constraint_checks(machine))
-        return LfProgram(
+        self_defaulted = self._needs.types_module is None
+        if self_defaulted:
+            self._needs.types_module = f"{self._name}_types"
+        program = LfProgram(
             reactors=tuple(self._reactors),
             preamble=tuple(self._needs.preamble_lines()),
         )
+        if self_defaulted:
+            program = _finalize(program, self._needs, None)
+        return program
 
     def _with_constraint_checks(self, machine: Reactor) -> Reactor:
         """Weave asserted-constraint checks into the machine reactor.
