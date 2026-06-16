@@ -629,6 +629,52 @@ def test_furuta_closed_loop_stabilizes(tmp_path: Path) -> None:
     assert "entered Controller.stabilizing" in logs
 
 
+def test_part_runs_self_sufficiently_without_pythonpath(tmp_path: Path) -> None:
+    # The LF files: property ships the companion types module AND the --python
+    # physics module into src-gen, so the compiled binary imports both with NO
+    # PYTHONPATH.  This proves the generated artifact is self-sufficient -- the
+    # whole point of using files: instead of a runtime PYTHONPATH hack.  Unlike
+    # run_part, this test writes no sitecustomize and clears PYTHONPATH: the
+    # only path by which furutaSystem_types/furuta_physics can be imported is
+    # files:.  Exit 0 means the closed loop reached the Balanced verdict.
+    model = load_model(SHOWCASE_DIR / "furuta-pendulum")
+    python_file = SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
+    names = frozenset(
+        n.name
+        for n in ast.parse(python_file.read_text()).body
+        if isinstance(n, ast.FunctionDef)
+    )
+    program = build_part_program(
+        model,
+        "FurutaPendulum::furutaSystem",
+        target_options=(("fast", "true"), ("timeout", "20 sec")),
+        external=(python_file.stem, names),
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "Main.lf").write_text(to_lf(program))
+    assert program.types_module_name is not None
+    (src / f"{program.types_module_name}.py").write_text(
+        "\n".join(program.types_module_lines) + "\n"
+    )
+    shutil.copy(python_file, src / python_file.name)
+    compile_result = subprocess.run(
+        ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
+    )
+    assert compile_result.returncode == 0, compile_result.stderr.decode(
+        errors="replace"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    process = subprocess.run(
+        [str(tmp_path / "bin" / "Main")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    assert process.returncode == 0, process.stderr
+
+
 _WORKCELL_PIECE = [
     "producing.loadPart",
     "producing.machining.monitor.watching",
