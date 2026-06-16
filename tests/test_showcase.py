@@ -23,13 +23,18 @@ def _mode(program: LfProgram, name: str) -> Mode:
 # -- traffic-light: enumerations --
 
 
-def test_traffic_light_enum_class_in_preamble() -> None:
+def test_traffic_light_enum_class_in_companion_module() -> None:
     program = _build("traffic-light", "TrafficLight::TrafficLightBehavior")
-    assert "from enum import Enum" in program.preamble
-    assert "class LightColor(Enum):" in program.preamble
-    assert '    red = "red"' in program.preamble
-    assert '    green = "green"' in program.preamble
-    assert '    yellow = "yellow"' in program.preamble
+    # The enum class moved to the companion module; preamble now imports it.
+    assert any(
+        "from TrafficLightBehavior_types import" in ln and "LightColor" in ln
+        for ln in program.preamble
+    )
+    # The enum is correctly defined in the companion module.
+    assert "class LightColor(Enum):" in program.types_module_lines
+    assert '    red = "red"' in program.types_module_lines
+    assert '    green = "green"' in program.types_module_lines
+    assert '    yellow = "yellow"' in program.types_module_lines
 
 
 def test_traffic_light_enum_literals_in_bodies_and_init() -> None:
@@ -143,8 +148,14 @@ def test_vending_dispense_constructs_payload_class() -> None:
     program = _build(
         "vending-machine", "VendingMachine::VendingMachineBehavior"
     )
-    assert "@dataclass" in program.preamble
-    assert "class Dispensed:" in program.preamble
+    # The dataclass moved to the companion module; preamble now imports it.
+    assert any(
+        "from VendingMachineBehavior_types import" in ln and "Dispensed" in ln
+        for ln in program.preamble
+    )
+    # The dataclass is correctly defined in the companion module.
+    assert "@dataclass" in program.types_module_lines
+    assert "class Dispensed:" in program.types_module_lines
     paid = _mode(program, "paid")
     sel = paid.reactions[1]
     assert sel.body[0] == "sel = Selection.value"

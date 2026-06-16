@@ -1,13 +1,9 @@
-target Python
+target Python {
+  files: ["PlantRig_types.py"],
+}
 
 preamble {=
-  from dataclasses import dataclass
-  @dataclass
-  class Done:
-      pass
-  @dataclass
-  class Go:
-      pass
+  from PlantRig_types import Done, Go
 =}
 
 reactor Plant_working {
