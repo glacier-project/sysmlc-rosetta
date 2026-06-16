@@ -84,9 +84,10 @@ class PreambleNeeds:
     """Collects and renders everything the generated LF preamble declares.
 
     The builder owns one instance and shares it with every code generator;
-    rendering registers enum defs, payload item defs, and ``math`` /
-    ``SimpleNamespace`` usage as they are encountered, and
-    :meth:`preamble_lines` assembles the preamble source lines from them.
+    rendering registers enum defs, dataclass blocks, and ``math`` usage as
+    they are encountered, and :meth:`preamble_lines` assembles the preamble
+    import lines from them (type definitions go to the companion module via
+    :meth:`companion_module_lines`).
     """
 
     def __init__(self) -> None:

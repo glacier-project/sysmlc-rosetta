@@ -92,7 +92,7 @@ def _main_reactor_lines(main: MainReactor) -> list[str]:
 def _reactor_lines(reactor: Reactor) -> list[str]:
     # Parameter defaults and state initializers are wrapped in {= ... =}
     # unconditionally: lfc parses bare initializers as LF values and rejects
-    # any non-literal Python (e.g. SimpleNamespace(...), LightColor.red).
+    # any non-literal Python (e.g. Point(x=0.5), LightColor.red).
     params = ", ".join(
         f"{p.name} = {{= {p.default} =}}" for p in reactor.parameters
     )

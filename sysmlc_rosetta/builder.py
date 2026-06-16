@@ -227,7 +227,7 @@ class RosettaBuilder:
             preamble=tuple(self._needs.preamble_lines()),
         )
         if self_defaulted:
-            program = _finalize(program, self._needs, None)
+            program = finalize(program, self._needs, None)
         return program
 
     def _with_constraint_checks(self, machine: Reactor) -> Reactor:
@@ -429,6 +429,9 @@ class RosettaBuilder:
         attrs = definition.owned_attributes.collect()
         if not attrs:
             lines.append("    pass")
+        # NOTE: a field whose type is itself a composite is annotated with
+        # that type's name via py_type(), but is NOT recursively registered
+        # here. No current model nests composites; revisit if one does.
         for attr in attrs:
             assert attr.name is not None
             default_expr = feature_value(attr)
@@ -1153,7 +1156,7 @@ class RosettaBuilder:
         ]
 
 
-def _finalize(
+def finalize(
     program: LfProgram,
     needs: PreambleNeeds,
     external: tuple[str, frozenset[str]] | None,
@@ -1202,4 +1205,4 @@ def build_program(
         state_def_qn, RosettaBuilder(name, needs=needs)
     )
     assert isinstance(result, LfProgram)
-    return _finalize(result, needs, external)
+    return finalize(result, needs, external)

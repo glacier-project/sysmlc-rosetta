@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from sysmlc.backends.rosetta.builder import (
     OUTPUT_PORT,
     RosettaBuilder,
-    _finalize,
+    finalize,
 )
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.program import (
@@ -270,7 +270,7 @@ def build_part_program(
         main=main,
         target_options=target_options,
     )
-    return _finalize(program, needs, external)
+    return finalize(program, needs, external)
 
 
 def _validate_via_ports(

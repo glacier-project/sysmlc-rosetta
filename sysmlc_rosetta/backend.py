@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, override
 import syside as _syside
 
 from sysmlc.backends.base import Backend, OutputOptions
-from sysmlc.backends.rosetta.builder import _finalize, build_program
+from sysmlc.backends.rosetta.builder import build_program, finalize
 from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.parts import build_part_program, compose_exhibits
 from sysmlc.backends.rosetta.program import LfProgram
@@ -104,7 +104,7 @@ class RosettaBackend(Backend):
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
         )
-        return _finalize(program, needs, external)
+        return finalize(program, needs, external)
 
     def build_part(
         self,
