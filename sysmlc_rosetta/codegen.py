@@ -52,6 +52,33 @@ _FUNCTIONS: Final[dict[str, tuple[str, bool]]] = {
     "TrigFunctions::tan": ("math.tan", True),
 }
 
+_SCALAR_PY: Final[dict[str, str]] = {
+    "Real": "float",
+    "Rational": "float",
+    "Integer": "int",
+    "Natural": "int",
+    "Boolean": "bool",
+    "String": "str",
+}
+
+
+def py_type(attr: syside.AttributeUsage) -> str:
+    """Map a declared attribute's type to a Python annotation.
+
+    SysML scalars map to Python builtins; a nested composite maps to its
+    own dataclass name; anything unmapped falls back to ``object``.
+    """
+    for definition in attr.attribute_definitions.collect():
+        if definition.name in _SCALAR_PY:
+            return _SCALAR_PY[definition.name]
+        if (
+            isinstance(definition, syside.AttributeDefinition)
+            and definition.owned_attributes.collect()
+        ):
+            assert definition.name is not None
+            return definition.name
+    return "object"
+
 
 class PreambleNeeds:
     """Collects and renders everything the generated LF preamble declares.
