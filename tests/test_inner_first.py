@@ -11,6 +11,7 @@ from sysmlc.backends.quake.backend import QuakeBackend
 from sysmlc.backends.quake.serialize import to_yaml as quake_to_yaml
 from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
 from sysmlc.backends.rosetta.serialize import to_lf
+from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
@@ -173,3 +174,13 @@ def test_par_deep_inner_first_matches_quake(tmp_path: Path) -> None:
     # Quake agrees: a2 leaf present, aborted absent.
     assert "outer::region::regA::a2" in quake
     assert not any("aborted" in c for c in quake)
+
+
+# ---------------------------------------------------------------------------
+# MNameClash: state named `Ev_consumed` collides with the generated port
+# ---------------------------------------------------------------------------
+
+
+def test_consumed_name_collision_is_rejected() -> None:
+    with pytest.raises(UnsupportedConstructError, match="collides"):
+        build_program(load_model(MODEL_DIR), "InnerFirst::MNameClash")

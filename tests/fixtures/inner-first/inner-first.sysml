@@ -97,6 +97,19 @@ package InnerFirst {
         transition first outer accept Ev then aborted;
     }
 
+    // A state literally named `Ev_consumed` clashes with the generated flag.
+    state def MNameClash {
+        entry; then outer;
+        state outer {
+            entry; then inner;
+            state inner;
+            state Ev_consumed;
+            transition first inner accept Ev then Ev_consumed;
+        }
+        state aborted;
+        transition first outer accept Ev then aborted;
+    }
+
     // Control: BarrierFault-style sibling composites sharing a signal (NOT a
     // conflict — the handlers live in sibling, never-co-active modes).
     state def MSibling {

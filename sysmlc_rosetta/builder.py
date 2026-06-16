@@ -737,6 +737,7 @@ class RosettaBuilder:
             COMPLETED_PORT,
             *inputs,
             *self._exported.get(scope, {}),
+            *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
             *(f"{sig}_act" for sig in sent),
             *(f"c_{_simple(kid.name)}" for kid in kids),
         }
