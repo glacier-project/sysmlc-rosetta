@@ -105,3 +105,23 @@ def test_deep_inner_first_matches_quake(tmp_path: Path) -> None:
     assert rosetta[-1] == "outer.mid.innerB"
     assert rosetta[-1].replace(".", "::") in quake
     assert "aborted" not in quake
+
+
+def test_parallel_structural_ors_regions() -> None:
+    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::MPar"))
+    assert "reaction(Ev, c_regA.Ev_consumed) -> reset(aborted)" in lf
+    assert "if not (c_regA.Ev_consumed.is_present):" in lf
+
+
+@pytest.mark.lf
+def test_parallel_inner_first_matches_quake(tmp_path: Path) -> None:
+    states = run_machine(
+        tmp_path,
+        MODEL_DIR,
+        "InnerFirst::MPar",
+        drivers=EV_AT_100MS,
+        timeout="1 sec",
+    )
+    # regA consumed Ev (a1 -> a2); the parallel group interrupt is suppressed.
+    assert any(s.startswith("region.regA.a2") for s in states)
+    assert "aborted" not in states

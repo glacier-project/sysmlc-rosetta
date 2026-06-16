@@ -993,6 +993,11 @@ class RosettaBuilder:
                     self._port_reemit(inst, sig)
                     for sig in self._exported.get(region.name, {})
                 ]
+                reactions += [
+                    self._port_reemit(inst, f"{sig}_consumed")
+                    for sig in self._consumed.get(region.name, {})
+                    if sig in self._consumed.get(scope, {})
+                ]
                 reactions += self._exit_resolutions(
                     inst, region.name, exit_stmts, scope, sent
                 )
