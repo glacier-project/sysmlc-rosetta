@@ -107,6 +107,17 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   exit action and switch modes. The active substates' own exit actions do
   NOT run (they could not touch attributes anyway); contained machines are
   simply deactivated.
+- **Cross-level priority (inner-first).** When one signal enables both a
+  transition inside a composite/parallel state `C` and a group interrupt on
+  `C` itself, rosetta fires only the innermost — matching quake/sismic (UML
+  SCXML inner-first). The consuming descendant raises a per-signal
+  `<sig>_consumed` output inside its firing branch; intermediate scopes
+  re-emit it upward (like `current_state`/`exit_<k>`); `C`'s group-interrupt
+  reaction reads its boundary children's flags (a composite reads its own
+  reactor's `<sig>_consumed`; a parallel state ORs the flags from its
+  consuming regions) and skips its `reset()` when any is present. Plumbing
+  is emitted only for detected conflicts, so conflict-free models are
+  byte-identical to their pre-1A output.
 - **Deep exit** — a transition from inside a composite to a state in an
   enclosing scope raises a dedicated child output (`exit_0`, one per
   distinct target); each enclosing scope either resolves the target (mode
