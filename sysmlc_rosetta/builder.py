@@ -580,9 +580,12 @@ class RosettaBuilder:
         if scope in self._needs_done:
             modes.append(self._done_mode(is_root))
         ported = tuple(self._exported.get(scope, {}))
+        consumed = tuple(
+            f"{sig}_consumed" for sig in self._consumed.get(scope, {})
+        )
         if is_root:
             parameters, state_vars = self._attribute_split()
-            outputs: tuple[str, ...] = (OUTPUT_PORT, *ported)
+            outputs: tuple[str, ...] = (OUTPUT_PORT, *ported, *consumed)
             reactions = self._root_reactions(
                 container, sent, self._scope_ports("")
             )
@@ -590,7 +593,13 @@ class RosettaBuilder:
         else:
             parameters, state_vars = [], []
             exit_ports = tuple(self._exit_ports.get(scope, {}).values())
-            outputs = (COMPLETED_PORT, OUTPUT_PORT, *exit_ports, *ported)
+            outputs = (
+                COMPLETED_PORT,
+                OUTPUT_PORT,
+                *exit_ports,
+                *ported,
+                *consumed,
+            )
             reactions = []
             name = self._reactor_name(scope)
         sent_self = [
@@ -883,7 +892,22 @@ class RosettaBuilder:
                 *exit_log,
                 *self._statements(fact.exit_action, group_gen),
             ]
-            body, targets = self._dispatch(group, group_exit, scope, group_gen)
+            consumed_flag = (
+                f"{signal}_consumed"
+                if signal in self._consumed.get(scope, {})
+                else None
+            )
+            body, targets = self._dispatch(
+                group, group_exit, scope, group_gen, consumed=consumed_flag
+            )
+            guard_srcs = self._interrupt_guard_sources(fact, signal)
+            if guard_srcs:
+                cond = " or ".join(f"{src}.is_present" for src in guard_srcs)
+                body = [
+                    f"if not ({cond}):",
+                    *(f"{_PY_INDENT}{line}" for line in body),
+                ]
+                triggers = (*triggers, *guard_srcs)
             reactions.append(
                 self._reaction(
                     triggers,
@@ -922,6 +946,11 @@ class RosettaBuilder:
             reactions += [
                 self._port_reemit(inst, sig)
                 for sig in self._exported.get(fact.name, {})
+            ]
+            reactions += [
+                self._port_reemit(inst, f"{sig}_consumed")
+                for sig in self._consumed.get(fact.name, {})
+                if sig in self._consumed.get(scope, {})
             ]
             reactions += self._exit_resolutions(
                 inst, fact.name, exit_stmts, scope, sent
@@ -1090,6 +1119,23 @@ class RosettaBuilder:
         port = ports.setdefault(target, f"exit_{len(ports)}")
         return port, f"{port}.set(True)"
 
+    def _interrupt_guard_sources(
+        self, fact: StateFact, signal: str
+    ) -> tuple[str, ...]:
+        """Child-port refs a guarded group interrupt reads, or ``()``.
+
+        For a conflict on ``(fact, signal)`` the boundary children are
+        ``fact`` itself (a composite) or its consuming regions (parallel);
+        each exposes a ``{signal}_consumed`` output.
+        """
+        boundaries = self._guarded_interrupts.get(fact.name, {}).get(signal)
+        if not boundaries:
+            return ()
+        return tuple(
+            f"c_{_simple(boundary)}.{signal}_consumed"
+            for boundary in boundaries
+        )
+
     def _scope_ports(self, scope: str) -> tuple[str, ...]:
         """Peer-accepted signals a scope sends (so its sends set ports)."""
         return tuple(
@@ -1134,17 +1180,22 @@ class RosettaBuilder:
         exit_stmts: list[str],
         scope: str,
         gen: LfPythonCodeGen,
+        consumed: str | None = None,
     ) -> tuple[list[str], tuple[str, ...]]:
         """Render a same-trigger group as a first-match if/elif dispatch.
 
         Declaration order is firing priority; a guardless branch always
         fires, so it closes the chain (as ``else`` when guards precede it).
+        When ``consumed`` is set (a ``{sig}_consumed`` output), each firing
+        branch raises it so an enclosing group interrupt on the same signal
+        can yield to this inner transition (UML/SCXML inner-first).
 
         Args:
             group: The transitions sharing the same trigger.
             exit_stmts: Rendered exit statements of the state being left.
             scope: The assembling scope (resolves targets and exit ports).
             gen: The code generator for guard and statement rendering.
+            consumed: The consumption-flag output name, or None.
         """
         body: list[str] = []
         effects: dict[str, None] = {}
@@ -1156,6 +1207,8 @@ class RosettaBuilder:
                 + self._statements(transition.effect, gen)
                 + [set_line]
             )
+            if consumed is not None:
+                branch = [*branch, f"{consumed}.set(True)"]
             if transition.guard is None:
                 if index == 0:
                     body += branch
@@ -1167,6 +1220,8 @@ class RosettaBuilder:
             guard = gen.render_expression(transition.guard)
             body.append(f"{keyword} {guard}:")
             body += [f"{_PY_INDENT}{line}" for line in branch]
+        if consumed is not None:
+            effects[consumed] = None
         return body, tuple(effects)
 
     def _done_mode(self, is_root: bool) -> Mode:
