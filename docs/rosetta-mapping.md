@@ -28,11 +28,15 @@ sysmlc rosetta build models/showcase/microwave -e Microwave::Microwave -o out/
 | `assert constraint` | Python `assert` checks woven into the machine reactor |
 | `send` effect | self-scheduled `logical action` `<Sig>_act` |
 | `then done` | `request_stop()` at the root; `completed` output in a child |
-| enums / item defs | Python `Enum` / `@dataclass` classes in the file preamble |
+| enums / item defs / composite attribute defs | Python `Enum` / `@dataclass` classes in a generated `<basename>_types.py` companion module |
 
-Everything renders into **one `.lf` file**: preamble, child reactor classes
-(innermost first — lfc wants definitions before use), the machine reactor,
-and `main` last. Importing the file from a harness ignores its `main`.
+The `.lf` carries the reactor classes (innermost first — lfc wants
+definitions before use), the machine reactor, and `main` last; importing the
+file from a harness ignores its `main`. **Generated type definitions live in
+a sibling `<basename>_types.py` companion module** (one per build, named after
+the artifact), shipped to the compiled program via the LF `files:` target
+property; the `.lf` preamble just *imports* them. A model with no generated
+types emits a bare `target Python` and no companion module. See §9.
 
 ## 2. States and hierarchy
 
@@ -160,7 +164,7 @@ rejected today; scope-local support is scheduled, §11):
 | `in attribute setpoint : Real default 21.0` | reactor **parameter** `setpoint = {= 21.0 =}` (override at `new`) |
 | `attribute temperature : Real := 18.0` (also `inout`) | **state variable** `state temperature = {= 18.0 =}` |
 | `out attribute …` | rejected (scheduled — follow-up bundle, §11) |
-| composite attribute (`pt : Point`) | `SimpleNamespace(x=…)` initializer; usage-local `:>>` redefinitions win over the type's defaults |
+| composite attribute (`pt : Point`) | `Point(x=…)` dataclass initializer (the `Point` dataclass lives in the companion module, §9); usage-local `:>>` redefinitions win over the type's defaults |
 | quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`) |
 
 References render as `self.<name>` inside reaction bodies. Initializers
@@ -223,12 +227,26 @@ is visible — pin sequences accordingly in tests.
 
 ## 9. Enumerations, payload classes, functions
 
-- An enum def referenced anywhere renders as a preamble
+Generated types (enums, sent-item dataclasses, composite attribute-def
+dataclasses) are emitted into a sibling **`<basename>_types.py` companion
+module**, NOT inline in the preamble. The `.lf` preamble holds only
+`from <basename>_types import <names>` (plus stdlib/`--python` imports), and
+the `.lf` target header lists the module in `files:` so `lfc` copies it into
+`src-gen` (importable at runtime with no `PYTHONPATH`). The module is
+generated whenever ≥1 type exists; a type-less model emits neither the module
+nor a `files:` entry. The same module is what a `--python` file imports (e.g.
+`from furutaSystem_types import PendulumState`), giving both sides one shared,
+typed definition — no `SimpleNamespace`, no duck-typing.
+
+- An enum def referenced anywhere renders as a companion-module
   `class LightColor(Enum):` with literals valued by **name**
   (`red = "red"`); literals render as `LightColor.red`.
-- Item defs that the machine **sends** render as preamble `@dataclass`
-  payload classes (untyped fields). Harnesses drive inputs with
-  `SimpleNamespace` stand-ins (payloads are duck-typed across files).
+- Item defs that the machine **sends**, and composite `attribute def`s used as
+  attribute values, render as companion-module `@dataclass` classes. Fields
+  are typed by mapping SysML scalars (`Real`→`float`, `Integer`→`int`,
+  `Boolean`→`bool`, `String`→`str`, else `object`) and carry the model's
+  declared default, else `None` (every field defaulted, so field order is
+  unconstrained).
 - Standard-library function calls in expressions are whitelisted:
   `abs`, `max`, `min` and `sin`/`cos`/`tan` (adding `import math`).
   Unlisted functions are rejected; extend `_FUNCTIONS` in
@@ -508,10 +526,21 @@ The CLI:
 4. Emits `from <module> import <name>` in the `.lf` preamble for each used
    name, and calls the function as `step(self.x, 0.1)` — a bare
    unqualified call.
-5. **Copies `plant.py` next to every generated `.lf`** so the import
-   resolves at `lfc` compile time.
+5. **Copies `plant.py` next to the generated `.lf`** and lists it in the
+   `.lf`'s `files:` target property (alongside the companion types module),
+   so `lfc` copies it into `src-gen` and the binary imports it at runtime.
 6. **`--python` is rosetta-only** — passing it with another backend raises a
    CLI error immediately.
+7. A `calc def` with **no backing function** in the `--python` module fails
+   loud, naming the function and the module (not the generic "unsupported
+   function" error).
+
+Functions that exchange a structured type (e.g. `step(x : PendulumState) →
+PendulumState`) import that type from the generated companion module
+(`from <basename>_types import PendulumState`); the model is the single source
+of the type, so there is no drift between the SysML `attribute def` and the
+Python side. Construct the type by name (`PendulumState(theta=…, …)`) — the
+module is on the path at runtime via `files:`.
 
 **Purity / determinism contract.** An external function MUST be a pure,
 deterministic function of its inputs — no `random`, no wall-clock time, no
@@ -520,11 +549,17 @@ reaction scheduling; a side-effecting or non-deterministic function breaks
 that guarantee. This contract is the model author's responsibility; the
 toolchain does not enforce it.
 
-**Deployment (`PYTHONPATH`).** The compiled LF Python binary runs
-`from <module> import <name>` inside the generated `src/` directory.
-The `lf run` test harness sets `PYTHONPATH` to `src/` (where the module was
-copied by the CLI). Users compiling the generated project manually must
-place the external module on `PYTHONPATH` before running the binary.
+**Deployment (`files:`, not `PYTHONPATH`).** The `--python` module and the
+generated companion types module are both listed in the `.lf`'s `files:`
+target property, so `lfc` copies them into `src-gen` and the compiled binary
+imports them with **no `PYTHONPATH`**. (`lfc` 0.11 honors `files:` declared on
+an *imported* reactor file too — verified in `spikes/files-companion` — so a
+harness importing the machine needs no `files:` of its own.) The compiled
+project is therefore self-sufficient: `lfc Main.lf && ./bin/Main` works with a
+clean environment, proven by
+`tests/.../test_run.py::test_part_runs_self_sufficiently_without_pythonpath`.
+The DEBUG-observation `sitecustomize.py` still rides on `PYTHONPATH` (that is
+the run enabling logging, not an import requirement).
 
 ## 13. Parts → reactors and the generated main reactor (Plan 2a)
 
