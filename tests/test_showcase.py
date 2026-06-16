@@ -155,24 +155,46 @@ def test_vending_dispense_constructs_payload_class() -> None:
     )
 
 
-# -- furuta-pendulum: function calls + payload floats + parameters --
+# -- furuta-pendulum: external calc-defs + port-based signals --
+
+_FURUTA_PHYSICS = frozenset(
+    {
+        "step",
+        "swingup_torque",
+        "catch_torque",
+        "stabilize_torque",
+        "restrict_angle",
+    }
+)
 
 
-def test_pendulum_whitelisted_calls_and_math_import() -> None:
-    program = _build("furuta-pendulum", "FurutaPendulum::PendulumController")
-    assert "import math" in program.preamble
-    assert not any("class AngleReading" in line for line in program.preamble)
+def _build_ctrl() -> LfProgram:
+    """Build PendulumController with the physics module's calc-def names."""
+    return build_program(
+        load_model(SHOWCASE_DIR / "furuta-pendulum"),
+        "FurutaPendulum::PendulumController",
+        external=("furuta_physics", _FURUTA_PHYSICS),
+    )
+
+
+def test_pendulum_external_calcs_imported() -> None:
+    # swingup_torque / catch_torque / stabilize_torque all appear as external
+    # calc defs; the backend must import them from the physics module.
+    program = _build_ctrl()
+    preamble_text = "\n".join(program.preamble)
+    assert "swingup_torque" in preamble_text
+    assert "catch_torque" in preamble_text
+    assert "stabilize_torque" in preamble_text
+
+
+def test_pendulum_swingup_has_angle_guard() -> None:
+    # The swingUp mode must have an AngleReading reaction whose body contains
+    # the 0.1-radian guard (REGION1 constant from furuta_physics.py).
+    program = _build_ctrl()
     swing = _mode(program, "swingUp")
-    # [0] entry; [1] the AngleReading-triggered reaction
+    # reactions[0] = entry; reactions[1] = AngleReading-triggered guard+default
     reading = swing.reactions[1]
-    assert reading.body[0] == "reading = AngleReading.value"
-    assert "if abs(reading.theta) < self.catchAngle:" in reading.body
-
-
-def test_pendulum_parameters() -> None:
-    program = _build("furuta-pendulum", "FurutaPendulum::PendulumController")
-    names = [p.name for p in program.reactor.parameters]
-    assert names == ["catchAngle", "dropAngle"]
+    assert any("< 0.1" in line for line in reading.body)
 
 
 # -- microwave: hierarchy + parallel (slice 6) --
