@@ -64,10 +64,10 @@ class PreambleNeeds:
 
     def __init__(self) -> None:
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
-        self.item_defs: dict[str, syside.Definition] = {}
+        self.dataclass_blocks: dict[str, tuple[str, ...]] = {}
         self.uses_math = False
-        self.uses_namespace = False
         self.uses_logging = False
+        self.types_module: str | None = None
         self.external_module: str | None = None
         self.external_names: frozenset[str] = frozenset()
         self.used_external: set[str] = set()
@@ -104,22 +104,23 @@ class PreambleNeeds:
         self.enum_defs[owner.name] = owner
         return f"{owner.name}.{literal.name}"
 
-    def register_item(self, item: syside.Definition) -> None:
-        """Register a sent item def for payload-class generation.
+    def register_dataclass(self, name: str, lines: tuple[str, ...]) -> None:
+        """Register a fully-rendered dataclass block by type name.
 
-        Raises:
-            UnsupportedConstructError: If two different definitions share
-                the same simple name.
+        Idempotent for identical blocks; a different block under the same
+        name is a name collision and fails loud.
         """
-        assert item.name is not None
-        known = self.item_defs.get(item.name)
-        if known is not None and known != item:
+        known = self.dataclass_blocks.get(name)
+        if known is not None and known != lines:
             raise UnsupportedConstructError(
-                f"two item definitions share the simple name {item.name!r};"
-                " rename one.",
-                node=item,
+                f"two types share the simple name {name!r}; rename one."
             )
-        self.item_defs[item.name] = item
+        self.dataclass_blocks[name] = lines
+
+    @property
+    def has_types(self) -> bool:
+        """Whether any generated type (enum or dataclass) was registered."""
+        return bool(self.enum_defs or self.dataclass_blocks)
 
     def register_external(self, *, module: str, names: frozenset[str]) -> None:
         """Record the --python module and the function names it provides."""
@@ -145,49 +146,31 @@ class PreambleNeeds:
             lines.insert(0, "from enum import Enum")
         return lines
 
-    def _payload_class_lines(self) -> list[str]:
-        """Render registered (sent) item defs as payload dataclasses.
-
-        Returns:
-            Lines of Python source: a ``from dataclasses import dataclass``
-            header (when any items are registered) followed by one
-            ``@dataclass`` class block per item def, sorted by name.
-        """
-        lines: list[str] = []
-        for name in sorted(self.item_defs):
-            attrs = self.item_defs[name].owned_attributes.collect()
-            lines.append("@dataclass")
-            lines.append(f"class {name}:")
-            if not attrs:
-                lines.append("    pass")
-            for attr in attrs:
-                assert attr.name is not None
-                # Fields are intentionally untyped (payloads are duck-typed;
-                # SysML scalar types are not mapped to Python types yet).
-                lines.append(f"    {attr.name}: object = None")
-        if lines:
-            lines.insert(0, "from dataclasses import dataclass")
+    def companion_module_lines(self) -> list[str]:
+        """Render the ``<basename>_types.py`` module: enums + dataclasses."""
+        lines = self._enum_class_lines()
+        if self.dataclass_blocks:
+            lines.append("from dataclasses import dataclass")
+            for name in sorted(self.dataclass_blocks):
+                lines.extend(self.dataclass_blocks[name])
         return lines
 
     def preamble_lines(self) -> list[str]:
-        """Assemble the LF preamble: imports, enum classes, payloads.
-
-        Imports precede the class blocks that rely on them.  Line order is
-        pinned by golden tests: math import, SimpleNamespace import,
-        external-module imports, enum classes, payload dataclasses.
-        """
+        """Assemble the LF preamble: stdlib imports + type/function imports."""
         lines: list[str] = []
         if self.uses_logging:
             lines.append("import logging")
         if self.uses_math:
             lines.append("import math")
-        if self.uses_namespace:
-            lines.append("from types import SimpleNamespace")
         for name in sorted(self.used_external):
             assert self.external_module is not None
             lines.append(f"from {self.external_module} import {name}")
-        lines += self._enum_class_lines()
-        lines += self._payload_class_lines()
+        names = sorted(self.enum_defs) + sorted(self.dataclass_blocks)
+        if names:
+            assert self.types_module is not None, (
+                "types_module must be set before preamble assembly"
+            )
+            lines.append(f"from {self.types_module} import {', '.join(names)}")
         return lines
 
 
