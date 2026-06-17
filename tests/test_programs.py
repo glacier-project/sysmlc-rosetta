@@ -442,3 +442,25 @@ def test_part_program_sets_types_module_and_files() -> None:
     # files: must still include the --python module.
     files = dict(prog.target_options).get("files")
     assert files == '["bump.py"]'
+
+
+def test_dispatch_fired_sets_flag_per_branch() -> None:
+    from sysmlc.backends.rosetta.builder import RosettaBuilder
+    from sysmlc.semantics.statemachine.driver import StateMachineDriver
+
+    model = load_model(FIXTURES_DIR / "rtc")
+    b = RosettaBuilder("TwoSignals")
+    StateMachineDriver(model).run("Rtc::TwoSignals", b)
+    gen = b._scope_codegen("")
+    group = [
+        t
+        for t in b._scope_transitions[""]
+        if t.source == "idle"
+        and t.trigger is not None
+        and t.trigger.signal_name == "A"
+    ]
+    body, _ = b._dispatch(group, [], "", gen, fired="idle_fired")
+    assert any("self.idle_fired = True" in line for line in body)
+    # Without `fired`, no flag write appears.
+    body2, _ = b._dispatch(group, [], "", gen)
+    assert not any("idle_fired" in line for line in body2)

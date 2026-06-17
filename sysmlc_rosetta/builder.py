@@ -1193,6 +1193,7 @@ class RosettaBuilder:
         scope: str,
         gen: LfPythonCodeGen,
         consumed: str | None = None,
+        fired: str | None = None,
     ) -> tuple[list[str], tuple[str, ...]]:
         """Render a same-trigger group as a first-match if/elif dispatch.
 
@@ -1208,6 +1209,8 @@ class RosettaBuilder:
             scope: The assembling scope (resolves targets and exit ports).
             gen: The code generator for guard and statement rendering.
             consumed: The consumption-flag output name, or None.
+            fired: A per-mode single-fire flag; each firing branch sets
+                `self.<fired> = True`, or None.
         """
         body: list[str] = []
         effects: dict[str, None] = {}
@@ -1221,6 +1224,8 @@ class RosettaBuilder:
             )
             if consumed is not None:
                 branch = [*branch, f"{consumed}.set(True)"]
+            if fired is not None:
+                branch = [*branch, f"self.{fired} = True"]
             if transition.guard is None:
                 if index == 0:
                     body += branch
