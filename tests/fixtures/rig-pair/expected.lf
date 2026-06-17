@@ -62,6 +62,7 @@ reactor PlantTest {
   output current_state
   output Go
   state verdict = {= 0 =}
+  state waiting_fired = {= False =}
   reaction(startup) {=
     assert self.verdict == 0, "SysML constraint testPassed violated"
   =}
@@ -79,12 +80,17 @@ reactor PlantTest {
     timer t_waiting(1 sec)
     reaction(reset, startup) -> current_state {=
       current_state.set("waiting")
-    =}
-    reaction(t_waiting) -> reset(fail) {=
-      fail.set()
+      self.waiting_fired = False
     =}
     reaction(Done) -> reset(done) {=
-      done.set()
+      if not self.waiting_fired:
+          done.set()
+          self.waiting_fired = True
+    =}
+    reaction(t_waiting) -> reset(fail) {=
+      if not self.waiting_fired:
+          fail.set()
+          self.waiting_fired = True
     =}
   }
   mode fail {

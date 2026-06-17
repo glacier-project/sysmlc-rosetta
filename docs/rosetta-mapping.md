@@ -131,6 +131,17 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   Scheduled to graduate via a synthesized entry dispatch (§11).
 - An eventless self-loop with no event, timer, or effect is rejected as
   unstable.
+- **Run-to-completion / declaration-order single-fire.** When several enabled
+  transitions leave one state at the same logical tag (distinct signals, or a
+  signal and an `after`), rosetta fires **exactly one**, chosen by **textual
+  declaration order** — the first-listed outgoing transition whose trigger is
+  present and whose guard holds. The mechanism is a per-mode `<state>_fired`
+  flag (cleared on mode entry) that the firing reaction sets and later
+  reactions at the same tag read. The losing transitions are **dropped, not
+  deferred** to a next macrostep: this differs from strict run-to-completion,
+  but is equivalent for every case where the winner's target does not
+  re-handle the loser event. A state name colliding with a generated
+  `<state>_fired` flag is rejected.
 
 ## 4. Triggers and signals
 

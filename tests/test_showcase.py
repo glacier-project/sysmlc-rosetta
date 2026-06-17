@@ -39,8 +39,12 @@ def test_traffic_light_enum_class_in_companion_module() -> None:
 
 def test_traffic_light_enum_literals_in_bodies_and_init() -> None:
     program = _build("traffic-light", "TrafficLight::TrafficLightBehavior")
-    (color, _requested) = program.reactor.state_vars
-    assert color.name == "color"
+    # showGreen is a multi-trigger state (PedestrianRequest + timer), so it
+    # gets a showGreen_fired flag alongside color and requested.
+    state_var_names = [v.name for v in program.reactor.state_vars]
+    assert "color" in state_var_names
+    assert "showGreen_fired" in state_var_names
+    color = next(v for v in program.reactor.state_vars if v.name == "color")
     assert color.init == "LightColor.red"
     entry = _mode(program, "showGreen").reactions[0]
     assert "self.color = LightColor.green" in entry.body
@@ -75,10 +79,13 @@ def test_stopwatch_self_loop_timer() -> None:
     (timer,) = running.timers
     assert timer.offset == "1 sec"
     # [0] entry; [1] the timer self-loop reaction
+    # running is multi-trigger (timer + StopCmd), so the timer reaction body
+    # is wrapped with if not self.running_fired: and content is indented.
     tick = running.reactions[1]
     assert tick.triggers == (timer.name,)
-    assert "self.elapsed = self.elapsed + 1" in tick.body
-    assert "running.set()" in tick.body
+    assert tick.body[0] == "if not self.running_fired:"
+    assert "    self.elapsed = self.elapsed + 1" in tick.body
+    assert "    running.set()" in tick.body
     assert tick.effects == ("reset(running)",)
 
 
@@ -361,16 +368,22 @@ def test_batch_reactor_parallel_regions_and_payload_guard() -> None:
     (guard_reaction,) = [
         r for r in watching.reactions if "PressureReading" in r.triggers
     ]
+    # watching is multi-trigger (PressureReading + timer), so the reaction body
+    # has a prelude payload read, then the fired guard, then the nested guard.
     assert guard_reaction.body[0] == "reading = PressureReading.value"
-    assert guard_reaction.body[1] == "if reading.bar >= 9.0:"
+    assert guard_reaction.body[1] == "if not self.watching_fired:"
+    assert guard_reaction.body[2] == "    if reading.bar >= 9.0:"
 
 
 def test_batch_reactor_saturating_dynamics_use_whitelist() -> None:
     program = _build("batch-reactor", "BatchReactor::BatchReactorBehavior")
     filling = _mode(program, "filling")
+    # filling is multi-trigger (after + Abort), so the timer reaction body is
+    # wrapped: body[0] is the fired guard, content is indented.
     timer_reaction = filling.reactions[1]
+    assert timer_reaction.body[0] == "if not self.filling_fired:"
     assert (
-        "self.level = min(self.level + self.inflowRate, self.tankCapacity)"
+        "    self.level = min(self.level + self.inflowRate, self.tankCapacity)"
         in timer_reaction.body
     )
 
@@ -428,8 +441,11 @@ def test_charging_station_auth_dispatch_and_timeout() -> None:
     )
     authorizing = _mode(program, "authorizing")
     (auth,) = [r for r in authorizing.reactions if "AuthResult" in r.triggers]
+    # authorizing is multi-trigger (AuthResult + after timeout), so the
+    # reaction body has: prelude payload read, fired guard, then nested guard.
     assert auth.body[0] == "r = AuthResult.value"
-    assert auth.body[1] == "if r.code == 1:"
+    assert auth.body[1] == "if not self.authorizing_fired:"
+    assert auth.body[2] == "    if r.code == 1:"
     # The timeout is an attribute-duration logical action scheduled on
     # entry.
     (action,) = authorizing.actions
