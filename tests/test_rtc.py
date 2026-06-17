@@ -140,3 +140,37 @@ def test_after_beats_signal_when_declared_first(tmp_path: Path) -> None:
     )
     assert rosetta[-1] == "timeoutWon"  # after declared first wins
     assert "sigWon" not in rosetta  # signal effect did NOT run
+
+
+EV_AT_100MS = (
+    "  timer fire(100 msec)\n"
+    "  reaction(fire) -> m.Ev {=\n"
+    "    m.Ev.set(True)\n"
+    "  =}"
+)
+
+
+def test_compose_1a_1b_structural() -> None:
+    lf = to_lf(build_program(load_model(MODEL_DIR), "Rtc::Compose1A1B"))
+    # `outer` is multi-trigger (Ev interrupt + after) -> gains a fired flag.
+    assert "state outer_fired = {= False =}" in lf
+    # The interrupt reaction keeps the 1A consumed guard AND the 1B fired wrap.
+    assert "c_outer.Ev_consumed" in lf
+    assert "if not self.outer_fired:" in lf
+
+
+@pytest.mark.lf
+def test_compose_1a_1b_inner_first_preserved(tmp_path: Path) -> None:
+    states = run_machine(
+        tmp_path,
+        MODEL_DIR,
+        "Rtc::Compose1A1B",
+        drivers=EV_AT_100MS,
+        timeout="1 sec",
+    )
+    quake = _sismic_config("Rtc::Compose1A1B", ["Ev"])
+    # Inner-first: ends in outer.innerB; the outer interrupt is suppressed.
+    assert states[-1] == "outer.innerB"
+    assert "aborted" not in states
+    assert "outer::innerB" in quake
+    assert not any("aborted" in c for c in quake)

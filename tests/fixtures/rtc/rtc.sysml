@@ -171,4 +171,24 @@ package Rtc {
             accept B
             then other;
     }
+
+    item def Ev;
+
+    // `outer` has BOTH a group interrupt on Ev (1A: inner `inner -> innerB`
+    // wins) AND a distinct after timeout.  At a tag where only Ev fires and
+    // the inner consumes it, the outer interrupt is suppressed (1A); the
+    // after path is unaffected.  Confirms the _fired guard composes with the
+    // _consumed guard without breaking inner-first.
+    state def Compose1A1B {
+        entry; then outer;
+        state outer {
+            entry; then inner;
+            state inner; state innerB;
+            transition first inner accept Ev then innerB;
+        }
+        state aborted;
+        state timedOut;
+        transition first outer accept Ev then aborted;
+        transition first outer accept after 5 [s] then timedOut;
+    }
 }
