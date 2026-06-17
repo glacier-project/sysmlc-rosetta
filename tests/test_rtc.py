@@ -38,8 +38,8 @@ def test_multi_trigger_reactions_in_declaration_order() -> None:
 
 
 def test_single_trigger_has_no_fired_flag() -> None:
-    # `stopped` accepts StartCmd + ResetCmd -> multi; but a single-trigger
-    # state must not gain the flag.  Use a known single-trigger machine.
+    # A single-trigger state must not gain the _fired flag (it stays
+    # byte-identical); SingleTrigger's `idle` accepts only A.
     lf = to_lf(build_program(load_model(MODEL_DIR), "Rtc::SingleTrigger"))
     assert "_fired" not in lf
 
