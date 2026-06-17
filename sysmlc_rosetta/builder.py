@@ -841,7 +841,10 @@ class RosettaBuilder:
         multi = len(signal_groups) + len(afters) >= 2
         fired_flag = f"{simple}_fired" if multi else None
         if fired_flag is not None:
-            extra_state.append(StateVar(fired_flag, "False"))
+            # Child-scope reactors are instantiated inside a parent `reset`
+            # mode; lfc 0.11 requires their state vars be `reset state` (the
+            # join-flag rule). Root-scope ("") flags stay plain `state`.
+            extra_state.append(StateVar(fired_flag, "False", reset=scope != ""))
         pos = {id(t): i for i, t in enumerate(outgoing)}
         ordered: list[tuple[int, Reaction]] = []
 
