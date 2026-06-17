@@ -721,6 +721,24 @@ class RosettaBuilder:
                     )
         return regions
 
+    def _multi_trigger_states(self, scope: str) -> set[str]:
+        """Simple names of states with >=2 distinct trigger groups in scope."""
+        signals: dict[str, set[str | None]] = {}
+        afters: dict[str, int] = {}
+        for t in self._scope_transitions.get(scope, []):
+            trigger = t.trigger
+            if trigger is None:
+                continue
+            if trigger.kind is TriggerKind.SIGNAL:
+                signals.setdefault(t.source, set()).add(trigger.signal_name)
+            elif trigger.kind is TriggerKind.AFTER:
+                afters[t.source] = afters.get(t.source, 0) + 1
+        out: set[str] = set()
+        for source in set(signals) | set(afters):
+            if len(signals.get(source, set())) + afters.get(source, 0) >= 2:
+                out.add(_simple(source))
+        return out
+
     def _check_names(
         self,
         scope: str,
@@ -740,13 +758,15 @@ class RosettaBuilder:
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
             *(f"{sig}_act" for sig in sent),
             *(f"c_{_simple(kid.name)}" for kid in kids),
+            *(f"{name}_fired" for name in self._multi_trigger_states(scope)),
         }
         for fact in kids:
             if _simple(fact.name) in reserved:
                 raise UnsupportedConstructError(
                     f"state name {_simple(fact.name)!r} collides with a name "
-                    "rosetta generates (done, current_state, completed, or a "
-                    "signal port/action); rename the state."
+                    "rosetta generates (done, current_state, completed, a "
+                    "signal port/action, or a <state>_fired single-fire flag); "
+                    "rename the state."
                 )
 
     # -- mode assembly --

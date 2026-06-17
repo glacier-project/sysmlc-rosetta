@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.serialize import to_lf
+from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
 
@@ -31,3 +34,8 @@ def test_single_trigger_has_no_fired_flag() -> None:
     # state must not gain the flag.  Use a known single-trigger machine.
     lf = to_lf(build_program(load_model(MODEL_DIR), "Rtc::SingleTrigger"))
     assert "_fired" not in lf
+
+
+def test_fired_name_collision_is_rejected() -> None:
+    with pytest.raises(UnsupportedConstructError, match="collides"):
+        build_program(load_model(MODEL_DIR), "Rtc::NameClashFired")
