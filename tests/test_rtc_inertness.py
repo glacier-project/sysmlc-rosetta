@@ -118,6 +118,7 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         timeout=120,
         env=env,
     )
+    assert run.returncode == 0, run.stderr
     fires: dict[tuple[str, str, str, str], list[str]] = defaultdict(list)
     for ln in run.stdout.splitlines():
         if not ln.startswith("FIRE|"):
@@ -125,6 +126,7 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         head, _, tag = ln.partition(" @ ")
         _, reactor, mode, trig, inst = head.split("|", 4)
         fires[(inst, reactor, mode, tag)].append(trig)
+    assert fires, "no FIRE lines captured — injection or run failed"
     collisions = {
         key: sorted({t for t in trigs if _is_transition_trig(t)})
         for key, trigs in fires.items()
