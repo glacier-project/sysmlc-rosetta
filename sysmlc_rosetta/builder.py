@@ -818,13 +818,22 @@ class RosettaBuilder:
             actions.require_inline_one_shot(fact.do_action)
             entry_body += self._statements(fact.do_action, gen)
 
+        multi = len(signal_groups) + len(afters) >= 2
+        fired_flag = f"{simple}_fired" if multi else None
+        if fired_flag is not None:
+            extra_state.append(StateVar(fired_flag, "False"))
+        pos = {id(t): i for i, t in enumerate(outgoing)}
+        ordered: list[tuple[int, Reaction]] = []
+
         # Timer/action names are state-qualified: lfc flattens mode-local
         # declarations into one per-reactor C struct, so identical names in
         # two modes collide ("duplicate member" compile errors).
         for index, transition in enumerate(afters):
             assert transition.trigger is not None
             after = transition.trigger.after
-            body, targets = self._dispatch([transition], exit_stmts, scope, gen)
+            body, targets = self._dispatch(
+                [transition], exit_stmts, scope, gen, fired=fired_flag
+            )
             if isinstance(after, float):
                 trigger_name = (
                     f"t_{simple}" if len(afters) == 1 else f"t_{simple}_{index}"
@@ -843,13 +852,21 @@ class RosettaBuilder:
                     f"{trigger_name}.schedule(int(({delay}) * 1e9))"
                 )
                 entry_effects.append(trigger_name)
-            reactions.append(
-                self._reaction(
-                    (trigger_name,),
-                    targets,
-                    tuple(body),
-                    sent,
-                    self._scope_ports(scope),
+            if fired_flag is not None:
+                body = [
+                    f"if not self.{fired_flag}:",
+                    *(f"{_PY_INDENT}{line}" for line in body),
+                ]
+            ordered.append(
+                (
+                    pos[id(transition)],
+                    self._reaction(
+                        (trigger_name,),
+                        targets,
+                        tuple(body),
+                        sent,
+                        self._scope_ports(scope),
+                    ),
                 )
             )
 
@@ -899,7 +916,12 @@ class RosettaBuilder:
                 else None
             )
             body, targets = self._dispatch(
-                group, group_exit, scope, group_gen, consumed=consumed_flag
+                group,
+                group_exit,
+                scope,
+                group_gen,
+                consumed=consumed_flag,
+                fired=fired_flag,
             )
             guard_srcs = self._interrupt_guard_sources(fact, signal)
             if guard_srcs:
@@ -915,15 +937,28 @@ class RosettaBuilder:
                 # flag somehow arrived alone the body degrades to a no-op
                 # (reset() is gated behind ``if not (...is_present)``).
                 triggers = (*triggers, *guard_srcs)
-            reactions.append(
-                self._reaction(
-                    triggers,
-                    targets,
-                    tuple(prelude + body),
-                    sent,
-                    self._scope_ports(scope),
+            if fired_flag is not None:
+                body = [
+                    f"if not self.{fired_flag}:",
+                    *(f"{_PY_INDENT}{line}" for line in body),
+                ]
+            ordered.append(
+                (
+                    min(pos[id(t)] for t in group),
+                    self._reaction(
+                        triggers,
+                        targets,
+                        tuple(prelude + body),
+                        sent,
+                        self._scope_ports(scope),
+                    ),
                 )
             )
+
+        ordered.sort(key=lambda item: item[0])
+        reactions.extend(reaction for _, reaction in ordered)
+        if fired_flag is not None:
+            entry_body.append(f"self.{fired_flag} = False")
 
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
