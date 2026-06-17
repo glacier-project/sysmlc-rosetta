@@ -2,7 +2,7 @@ from pathlib import Path
 
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.sysml.loading import load_model
-from tests.recording import RecordingBuilder
+from tests.test_recording import RecordingBuilder
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 

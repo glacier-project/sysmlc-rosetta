@@ -15,7 +15,7 @@ from sysmlc.semantics.statemachine.facts import (
 )
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.sm_examples import SM_EXAMPLES_DIR
+from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 
 def _leaf(name: str, parent: str = "Machine") -> StateFact:

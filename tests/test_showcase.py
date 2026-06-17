@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
-from tests.backends.showcase import SHOWCASE_DIR
+from tests.backends.test_showcase import SHOWCASE_DIR
 
 if TYPE_CHECKING:
     from sysmlc.backends.rosetta.program import LfProgram, Mode

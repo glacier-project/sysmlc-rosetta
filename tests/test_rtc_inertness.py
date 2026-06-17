@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 import pytest
 
-from tests.backends.showcase import SHOWCASE_DIR
+from tests.backends.test_showcase import SHOWCASE_DIR
 
 pytestmark = [
     pytest.mark.lf,

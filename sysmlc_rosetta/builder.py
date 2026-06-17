@@ -1349,11 +1349,11 @@ def finalize(
 ) -> LfProgram:
     """Attach the companion module + ``files:`` to a built program."""
     companion = needs.companion_module_lines()
-    fo = files_option(
+    file_opt = files_option(
         needs.types_module if companion else None,
         external[0] if external is not None else None,
     )
-    options = program.target_options + ((fo,) if fo else ())
+    options = program.target_options + ((file_opt,) if file_opt else ())
     return replace(
         program,
         target_options=options,

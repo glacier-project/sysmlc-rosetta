@@ -19,7 +19,7 @@ from sysmlc.sysml.queries import (
     rig_definitions,
 )
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.showcase import SHOWCASE_DIR
+from tests.backends.test_showcase import SHOWCASE_DIR
 
 
 def test_rig_definitions_finds_the_rig() -> None:

@@ -14,20 +14,20 @@ sysmlc rosetta build models/showcase/microwave -e Microwave::Microwave -o out/
 
 ## 1. The big picture
 
-| SysML | Lingua Franca |
-|---|---|
-| `state def M` | reactor class `M` + a trivial `main reactor` instantiating it |
-| leaf `state s` | a `mode s` of its scope's reactor |
-| composite `state c { … }` | child reactor class `M_c`, instantiated inside mode `c` |
-| `state p parallel { region r1; region r2 }` | one reactor class per region, sibling instances inside mode `p` |
-| parallel **root** machine | region instances wired at reactor scope (no modes) |
-| transition | a reaction switching modes via `reset(<target>)` |
-| `accept Sig` trigger | input port `Sig` (one per signal simple name) |
-| `accept after t` | mode-local `timer` (literal) or scheduled `logical action` (attribute duration) |
-| `attribute` | LF state variable (or reactor parameter when `in`) |
-| `assert constraint` | Python `assert` checks woven into the machine reactor |
-| `send` effect | self-scheduled `logical action` `<Sig>_act` |
-| `then done` | `request_stop()` at the root; `completed` output in a child |
+| SysML                                        | Lingua Franca                                                                              |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `state def M`                                | reactor class `M` + a trivial `main reactor` instantiating it                              |
+| leaf `state s`                               | a `mode s` of its scope's reactor                                                          |
+| composite `state c { … }`                    | child reactor class `M_c`, instantiated inside mode `c`                                    |
+| `state p parallel { region r1; region r2 }`  | one reactor class per region, sibling instances inside mode `p`                            |
+| parallel **root** machine                    | region instances wired at reactor scope (no modes)                                         |
+| transition                                   | a reaction switching modes via `reset(<target>)`                                           |
+| `accept Sig` trigger                         | input port `Sig` (one per signal simple name)                                              |
+| `accept after t`                             | mode-local `timer` (literal) or scheduled `logical action` (attribute duration)            |
+| `attribute`                                  | LF state variable (or reactor parameter when `in`)                                         |
+| `assert constraint`                          | Python `assert` checks woven into the machine reactor                                      |
+| `send` effect                                | self-scheduled `logical action` `<Sig>_act`                                                |
+| `then done`                                  | `request_stop()` at the root; `completed` output in a child                                |
 | enums / item defs / composite attribute defs | Python `Enum` / `@dataclass` classes in a generated `<basename>_types.py` companion module |
 
 The `.lf` carries the reactor classes (innermost first — lfc wants
@@ -181,13 +181,13 @@ but not yet part of event identity.
 Declared on the state def (root scope only — state-scoped attributes are
 rejected today; scope-local support is scheduled, §11):
 
-| Declaration | LF |
-|---|---|
-| `in attribute setpoint : Real default 21.0` | reactor **parameter** `setpoint = {= 21.0 =}` (override at `new`) |
-| `attribute temperature : Real := 18.0` (also `inout`) | **state variable** `state temperature = {= 18.0 =}` |
-| `out attribute …` | rejected (scheduled — follow-up bundle, §11) |
-| composite attribute (`pt : Point`) | `Point(x=…)` dataclass initializer (the `Point` dataclass lives in the companion module, §9); usage-local `:>>` redefinitions win over the type's defaults |
-| quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`) |
+| Declaration                                               | LF                                                                                                                                                         |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `in attribute setpoint : Real default 21.0`               | reactor **parameter** `setpoint = {= 21.0 =}` (override at `new`)                                                                                          |
+| `attribute temperature : Real := 18.0` (also `inout`)     | **state variable** `state temperature = {= 18.0 =}`                                                                                                        |
+| `out attribute …`                                         | rejected (scheduled — follow-up bundle, §11)                                                                                                               |
+| composite attribute (`pt : Point`)                        | `Point(x=…)` dataclass initializer (the `Point` dataclass lives in the companion module, §9); usage-local `:>>` redefinitions win over the type's defaults |
+| quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`)                                                                                                                                         |
 
 References render as `self.<name>` inside reaction bodies. Initializers
 and parameter defaults always render inside `{= … =}` (lfc parses bare
@@ -213,7 +213,7 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 1. in a dedicated `reaction(startup)` — so invalid initial **or
    overridden** values abort the program immediately (exit code 1, the
    constraint name in the traceback), and
-2. at the end of every reaction body that assigns to a machine attribute.
+1. at the end of every reaction body that assigns to a machine attribute.
 
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are rejected
@@ -328,12 +328,12 @@ A signal a machine sends is no longer always a self-event. Knowing what the
 *peer* accepts (gathered by a signal-interface scan over each machine), each
 sent signal classifies:
 
-| Sent signal is…             | Generated form                              |
-|-----------------------------|---------------------------------------------|
-| accepted locally only       | self-event `Sig_act.schedule(0, …)` (today) |
-| peer-accepted only          | `output Sig` port; send → `Sig.set(payload)`|
-| locally **and** peer-accepted | **both statements** (overlap case)        |
-| accepted by nobody          | void self-event — status quo                |
+| Sent signal is…               | Generated form                               |
+| ----------------------------- | -------------------------------------------- |
+| accepted locally only         | self-event `Sig_act.schedule(0, …)` (today)  |
+| peer-accepted only            | `output Sig` port; send → `Sig.set(payload)` |
+| locally **and** peer-accepted | **both statements** (overlap case)           |
+| accepted by nobody            | void self-event — status quo                 |
 
 Bare sends render `Sig.set(True)`; payload sends `Sig.set(Sig(…))`. Because
 the LF input/output port named `Sig` shadows the preamble payload dataclass
@@ -428,34 +428,34 @@ Planned order: ~~testbench increment~~ (done, §10) → follow-up bundle
 (cross-scope sends, `out attribute`, `accept at`) → small bundle →
 state-scoped attributes → `accept when` → deep entry → Tier 3.
 
-| Construct | Agreed mapping | Increment |
-|---|---|---|
-| intra-machine cross-scope sends | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (reuses the rig's outward-ported send machinery, pointed inward) | follow-up bundle |
-| `out attribute` | output port, set on every assignment; doubles as plant observation for testbenches | follow-up bundle |
-| `accept at` | absolute logical time from startup (timer / scheduled action) | follow-up bundle |
-| leaf regions | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works) | small bundle |
-| transitions sourced at a region | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, ALL regions' exit actions run in declaration order, then the parallel state's exit, then the effect, then the switch. The parallel-state-sourced group interrupt adopts the same exit-all convention, making the two spellings equivalent. Substate exits inside regions still do not run (they live in child reactors) | small bundle |
-| payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist | small bundle |
-| state-scoped attributes / constraints | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility stays Tier-3 | own increment |
-| `accept when` | change events via the constraint-weave pattern: a self-event scheduled after every attribute-assigning reaction plus an entry-time check, evaluated in the source mode; root-scope attributes first | own increment |
-| deep entry into a substate from outside | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order is preserved. Needs an lfc experiment phase first (tag timing of port-set-plus-mode-switch; suppressing the initial mode's transient entry) | own increment (last) |
+| Construct                                  | Agreed mapping                                                                                                                                                                                                                                                                                                                                                                                                                           | Increment            |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| intra-machine cross-scope sends            | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (reuses the rig's outward-ported send machinery, pointed inward)                                                                                                                                                                                                                                                                      | follow-up bundle     |
+| `out attribute`                            | output port, set on every assignment; doubles as plant observation for testbenches                                                                                                                                                                                                                                                                                                                                                       | follow-up bundle     |
+| `accept at`                                | absolute logical time from startup (timer / scheduled action)                                                                                                                                                                                                                                                                                                                                                                            | follow-up bundle     |
+| leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                                                                                                                                     | small bundle         |
+| transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, ALL regions' exit actions run in declaration order, then the parallel state's exit, then the effect, then the switch. The parallel-state-sourced group interrupt adopts the same exit-all convention, making the two spellings equivalent. Substate exits inside regions still do not run (they live in child reactors) | small bundle         |
+| payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                                                                                                                                          | small bundle         |
+| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility stays Tier-3                                                                                                                                                                       | own increment        |
+| `accept when`                              | change events via the constraint-weave pattern: a self-event scheduled after every attribute-assigning reaction plus an entry-time check, evaluated in the source mode; root-scope attributes first                                                                                                                                                                                                                                      | own increment        |
+| deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order is preserved. Needs an lfc experiment phase first (tag timing of port-set-plus-mode-switch; suppressing the initial mode's transient entry)                                                                                                                                         | own increment (last) |
 
 ### Stays rejected
 
-| Construct | Why |
-|---|---|
-| `in ref` equipment references | Tier-3: equipment becomes a connected reactor |
-| nested-parallel regions (a region that is itself `parallel`) | wrap it in a composite state |
-| long-running / non-inline `do` bodies | only inline one-shot bodies fuse into entry |
-| unstable eventless self-loops | would never stabilize — a model error |
-| state names colliding with generated names (`done`, `current_state`, `completed`, ports) | rename the state; plain generated names keep the LF readable |
-| mixed payload names for one signal | use one name — a model error |
-| duplicate enum / item simple names | rename one — preamble classes are keyed by simple name |
-| `in` attribute without a default | LF reactor parameters require one |
-| a signal sent by **both** machines of a rig (bidirectional same name) | LF port direction clashes; neither side can keep the matching input — split the name per direction |
-| a rig not exhibiting **exactly two named** state defs (fewer/more, anonymous, or a non-exhibit member) | a rig composes exactly two machines; name both exhibits |
-| the **same state def exhibited twice** in one rig | a rig composes two distinct machines |
-| cross-machine reactor / enum / payload **name collisions** across a rig's two families | the merged program and preamble are keyed by simple name — rename a state, machine, or item |
+| Construct                                                                                              | Why                                                                                                |
+| ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `in ref` equipment references                                                                          | Tier-3: equipment becomes a connected reactor                                                      |
+| nested-parallel regions (a region that is itself `parallel`)                                           | wrap it in a composite state                                                                       |
+| long-running / non-inline `do` bodies                                                                  | only inline one-shot bodies fuse into entry                                                        |
+| unstable eventless self-loops                                                                          | would never stabilize — a model error                                                              |
+| state names colliding with generated names (`done`, `current_state`, `completed`, ports)               | rename the state; plain generated names keep the LF readable                                       |
+| mixed payload names for one signal                                                                     | use one name — a model error                                                                       |
+| duplicate enum / item simple names                                                                     | rename one — preamble classes are keyed by simple name                                             |
+| `in` attribute without a default                                                                       | LF reactor parameters require one                                                                  |
+| a signal sent by **both** machines of a rig (bidirectional same name)                                  | LF port direction clashes; neither side can keep the matching input — split the name per direction |
+| a rig not exhibiting **exactly two named** state defs (fewer/more, anonymous, or a non-exhibit member) | a rig composes exactly two machines; name both exhibits                                            |
+| the **same state def exhibited twice** in one rig                                                      | a rig composes two distinct machines                                                               |
+| cross-machine reactor / enum / payload **name collisions** across a rig's two families                 | the merged program and preamble are keyed by simple name — rename a state, machine, or item        |
 
 ## 12. Function-call layer (Plan 1)
 
@@ -465,14 +465,14 @@ A whitelist of standard-library functions is resolved in **expression
 positions** — guards and assignment RHS — via `_FUNCTIONS` in
 `sysmlc/backends/rosetta/codegen.py`:
 
-| SysML qualified name | Python rendering |
-|---|---|
-| `NumericalFunctions::abs` | `abs(…)` |
-| `NumericalFunctions::max` | `max(…)` |
-| `NumericalFunctions::min` | `min(…)` |
-| `TrigFunctions::sin` | `math.sin(…)` (adds `import math`) |
-| `TrigFunctions::cos` | `math.cos(…)` |
-| `TrigFunctions::tan` | `math.tan(…)` |
+| SysML qualified name      | Python rendering                   |
+| ------------------------- | ---------------------------------- |
+| `NumericalFunctions::abs` | `abs(…)`                           |
+| `NumericalFunctions::max` | `max(…)`                           |
+| `NumericalFunctions::min` | `min(…)`                           |
+| `TrigFunctions::sin`      | `math.sin(…)` (adds `import math`) |
+| `TrigFunctions::cos`      | `math.cos(…)`                      |
+| `TrigFunctions::tan`      | `math.tan(…)`                      |
 
 Unlisted functions are rejected; extend `_FUNCTIONS` as new cases demand.
 
@@ -498,8 +498,7 @@ registry (see below).
 **Functions cannot be bare `do` effects.** A SysML `calc def` can only be
 invoked in an expression position; syside rejects a standalone
 `do log(...)` statement effect with
-`perform-action-usage-reference: A perform action must reference an action
-usage`. IO/observation must therefore be backend-generated, not a
+`perform-action-usage-reference: A perform action must reference an action usage`. IO/observation must therefore be backend-generated, not a
 user-written `do` call.
 
 ### The `sysmlc` utility library
@@ -541,24 +540,23 @@ sysmlc rosetta build models/furuta -e Furuta::Plant -o out/ --python plant.py
 The CLI:
 
 1. Parses `plant.py` with `ast.parse` and collects top-level `def` names.
-2. Passes `(module_stem, names)` into the build; codegen registers them on
+1. Passes `(module_stem, names)` into the build; codegen registers them on
    `PreambleNeeds.register_external`.
-3. Matches the invoked `calc def` **by simple name** (e.g. `step`) against
+1. Matches the invoked `calc def` **by simple name** (e.g. `step`) against
    the registered set; adds each hit to `used_external`.
-4. Emits `from <module> import <name>` in the `.lf` preamble for each used
+1. Emits `from <module> import <name>` in the `.lf` preamble for each used
    name, and calls the function as `step(self.x, 0.1)` — a bare
    unqualified call.
-5. **Copies `plant.py` next to the generated `.lf`** and lists it in the
+1. **Copies `plant.py` next to the generated `.lf`** and lists it in the
    `.lf`'s `files:` target property (alongside the companion types module),
    so `lfc` copies it into `src-gen` and the binary imports it at runtime.
-6. **`--python` is rosetta-only** — passing it with another backend raises a
+1. **`--python` is rosetta-only** — passing it with another backend raises a
    CLI error immediately.
-7. A `calc def` with **no backing function** in the `--python` module fails
+1. A `calc def` with **no backing function** in the `--python` module fails
    loud, naming the function and the module (not the generic "unsupported
    function" error).
 
-Functions that exchange a structured type (e.g. `step(x : PendulumState) →
-PendulumState`) import that type from the generated companion module
+Functions that exchange a structured type (e.g. `step(x : PendulumState) → PendulumState`) import that type from the generated companion module
 (`from <basename>_types import PendulumState`); the model is the single source
 of the type, so there is no drift between the SysML `attribute def` and the
 Python side. Construct the type by name (`PendulumState(theta=…, …)`) — the
@@ -590,13 +588,13 @@ part assembler (`sysmlc/backends/rosetta/parts.py`, `build_part_program`)
 walks the part graph (`sysmlc/semantics/parts/graph.py`) and emits one reactor
 class per part def plus an explicit `main reactor`.
 
-| SysML | LF |
-|---|---|
-| `part def Foo { exhibit state : Beh; }` | `reactor Foo { … }` (the inlined machine `Beh`, named after the part def) |
-| nested `part f : Foo;` in a usage | `f = new Foo()` inside `main reactor` |
-| top-level **part usage** `part sys { … }` | the `main reactor` |
-| `connect a.pa to b.pb;` | LF connections for the signals that cross those ports (§13.1) |
-| CLI `--fast` / `--timeout "5 sec"` | `target Python { fast: true, timeout: 5 sec, }` header |
+| SysML                                     | LF                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `part def Foo { exhibit state : Beh; }`   | `reactor Foo { … }` (the inlined machine `Beh`, named after the part def) |
+| nested `part f : Foo;` in a usage         | `f = new Foo()` inside `main reactor`                                     |
+| top-level **part usage** `part sys { … }` | the `main reactor`                                                        |
+| `connect a.pa to b.pb;`                   | LF connections for the signals that cross those ports (§13.1)             |
+| CLI `--fast` / `--timeout "5 sec"`        | `target Python { fast: true, timeout: 5 sec, }` header                    |
 
 A part def with **1 exhibit** inlines that machine; **≥2 exhibits** compose
 into a reactor that instantiates each exhibit as a named child and same-name
@@ -617,7 +615,9 @@ part def Tester { port commPort; exhibit state : TesterBehavior; }  // sends Pin
 part pingSystem { part plant : Plant; part tb : Tester;
                   connect plant.commPort to tb.commPort; }
 ```
+
 →
+
 ```
 main reactor {
   plant = new Plant()

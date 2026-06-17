@@ -9,7 +9,7 @@ from sysmlc.backends.rosetta.backend import RosettaBackend
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.errors import SerializationError
 from sysmlc.sysml.loading import load_model
-from tests.backends.sm_examples import SM_EXAMPLES_DIR
+from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path

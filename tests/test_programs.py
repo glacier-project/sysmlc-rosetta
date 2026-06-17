@@ -8,7 +8,7 @@ from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.sm_examples import SM_EXAMPLES_DIR
+from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from sysmlc.backends.rosetta.program import LfProgram, Mode

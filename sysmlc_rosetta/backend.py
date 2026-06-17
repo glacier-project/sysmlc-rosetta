@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class RosettaBackend(Backend):
-    """Lingua Franca backend for generating Lingua Franca programs from SysML."""
+    """Lingua Franca backend for generating LF programs from SysML."""
 
     def __init__(self) -> None:
         super().__init__(
