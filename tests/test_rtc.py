@@ -14,7 +14,7 @@ from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.rosetta.test_run import run_machine
+from tests.backends.rosetta.lf_harness import run_machine
 
 MODEL_DIR = FIXTURES_DIR / "rtc"  # created in Task 5
 
