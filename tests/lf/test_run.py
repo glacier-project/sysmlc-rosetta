@@ -25,7 +25,7 @@ from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.rosetta.lf_harness import (
+from tests.backends.rosetta.test_lf_harness import (
     compile_harness,
     run_machine,
     run_part,
