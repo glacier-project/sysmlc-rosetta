@@ -36,12 +36,9 @@ if TYPE_CHECKING:
 
     from sysmlc.values import ValueNode
 
-pytestmark = [
-    pytest.mark.lf,
-    pytest.mark.skipif(
-        shutil.which("lfc") is None, reason="lfc is not on PATH"
-    ),
-]
+# lfc-missing skipping is centralised in tests/conftest.py
+# (pytest_collection_modifyitems), which skips any lf-marked test.
+pytestmark = pytest.mark.lf
 
 HARNESS = """target Python {{
   fast: true,

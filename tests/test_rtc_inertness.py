@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import sys
 from collections import defaultdict
@@ -25,12 +24,7 @@ import pytest
 
 from tests.backends.test_showcase import SHOWCASE_DIR
 
-pytestmark = [
-    pytest.mark.lf,
-    pytest.mark.skipif(
-        shutil.which("lfc") is None, reason="lfc is not on PATH"
-    ),
-]
+pytestmark = pytest.mark.lf
 
 REACTOR_RE = re.compile(r"^reactor (\w+) \{")
 MODE_RE = re.compile(r"^\s*(?:initial )?mode (\w+) \{")
