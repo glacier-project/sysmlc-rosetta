@@ -62,6 +62,7 @@ def test_multi_exhibit_part_builds_composite_reactor() -> None:
     )
     names = {r.name for r in prog.reactors}
     assert {"PlantBehavior", "TesterBehavior", "Rig"} <= names
+    assert prog.main is not None
     insts = {(i.name, i.reactor) for i in prog.main.instantiations}
     assert ("rig", "Rig") in insts
 

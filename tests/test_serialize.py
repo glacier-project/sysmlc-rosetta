@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from sysmlc.backends.rosetta.program import (
@@ -15,7 +17,7 @@ from sysmlc.backends.rosetta.program import (
 from sysmlc.backends.rosetta.serialize import render_duration, to_lf
 
 
-def make_reactors(**kwargs) -> tuple[Reactor, ...]:
+def make_reactors(**kwargs: Any) -> tuple[Reactor, ...]:
     """Wrap a single machine reactor for ``LfProgram.reactors``."""
     return (Reactor(**kwargs),)
 
@@ -32,11 +34,13 @@ def make_reactors(**kwargs) -> tuple[Reactor, ...]:
         (0.0, "0 sec"),
     ],
 )
-def test_render_duration_picks_largest_exact_unit(seconds, expected) -> None:
+def test_render_duration_picks_largest_exact_unit(
+    seconds: float, expected: str
+) -> None:
     assert render_duration(seconds) == expected
 
 
-def test_to_lf_renders_full_program():
+def test_to_lf_renders_full_program() -> None:
     program = LfProgram(
         reactors=make_reactors(
             name="Machine",

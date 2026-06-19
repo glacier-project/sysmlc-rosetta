@@ -37,6 +37,8 @@ from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from sysmlc.values import ValueNode
+
 
 # lfc-missing skipping is centralised in tests/conftest.py
 # (pytest_collection_modifyitems), which skips any lf-marked test.
@@ -615,7 +617,7 @@ def test_milling_workcell_rig_verdict(tmp_path: Path) -> None:
     assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
-_REACTOR_VALUES = {
+_REACTOR_VALUES: dict[str, ValueNode] = {
     "batchTarget": 1,
     "inflowRate": 60.0,
     "heatRate": 65.0,

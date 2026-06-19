@@ -18,8 +18,12 @@ import math
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # ---------------------------------------------------------------------------
 # Module import by file path
@@ -39,12 +43,14 @@ _MODEL_DIR = str(_PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum")
 _PHYSICS_FILE = str(_MODULE_PATH)
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "furuta_physics", _MODULE_PATH
     )
+    assert spec is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules["furuta_physics"] = mod
+    assert spec.loader is not None
     spec.loader.exec_module(mod)
     return mod
 
@@ -58,7 +64,7 @@ _fp = _load_module()
 
 
 @pytest.fixture(scope="session")
-def generated_types(tmp_path_factory):
+def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     """Generate furutaSystem_types.py by building the furuta part.
 
     Puts the output dir on sys.path so that the runtime
@@ -102,7 +108,7 @@ def generated_types(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 
-def test_step_is_deterministic_and_pure(generated_types):
+def test_step_is_deterministic_and_pure(generated_types: ModuleType) -> None:
     """step() called twice on identical inputs gives identical outputs.
 
     Also verifies the input object is NOT mutated and the return type
@@ -141,7 +147,9 @@ def test_step_is_deterministic_and_pure(generated_types):
 # ---------------------------------------------------------------------------
 
 
-def test_stabilizer_holds_inverted_equilibrium(generated_types):
+def test_stabilizer_holds_inverted_equilibrium(
+    generated_types: ModuleType,
+) -> None:
     """stabilize_torque closes the loop and actually balances the pendulum.
 
     Start near the upright position (theta ≈ 0.05 rad) with no velocity.
@@ -187,7 +195,7 @@ def test_stabilizer_holds_inverted_equilibrium(generated_types):
 # ---------------------------------------------------------------------------
 
 
-def test_swingup_adds_energy(generated_types):
+def test_swingup_adds_energy(generated_types: ModuleType) -> None:
     """swingup_torque pumps energy toward upright from hanging-down rest.
 
     Start hanging straight down (theta = pi, d_theta = 0).
@@ -244,7 +252,7 @@ def test_swingup_adds_energy(generated_types):
         (-3 * math.pi / 2, math.pi / 2),
     ],
 )
-def test_restrict_angle(theta, expected):
+def test_restrict_angle(theta: float, expected: float) -> None:
     result = _fp.restrict_angle(theta)
     assert math.isclose(result, expected, abs_tol=1e-9), (
         f"restrict_angle({theta:.4f}) = {result:.6f}, expected {expected:.6f}"
