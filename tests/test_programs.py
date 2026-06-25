@@ -447,6 +447,7 @@ def test_part_program_sets_types_module_and_files() -> None:
 def test_dispatch_fired_sets_flag_per_branch() -> None:
     from sysmlc.backends.rosetta.builder import RosettaBuilder
     from sysmlc.semantics.statemachine.driver import StateMachineDriver
+    from sysmlc.semantics.statemachine.facts import SignalTrigger
 
     model = load_model(FIXTURES_DIR / "rtc")
     b = RosettaBuilder("TwoSignals")
@@ -456,7 +457,7 @@ def test_dispatch_fired_sets_flag_per_branch() -> None:
         t
         for t in b._scope_transitions[""]
         if t.source == "idle"
-        and t.trigger is not None
+        and isinstance(t.trigger, SignalTrigger)
         and t.trigger.signal_name == "A"
     ]
     body, _ = b._dispatch(group, [], "", gen, fired="idle_fired")
