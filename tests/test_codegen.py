@@ -160,11 +160,9 @@ def test_assignment_from_builtin_call_renders() -> None:
 
 
 def test_external_call_renders_with_import() -> None:
-    action = _only_effect(
-        "sm14-call-effect", "SM14::MachineCallEffect", "ticking"
-    )
+    action = _only_effect("sm15-external", "SM15::Ramp", "run")
     needs = PreambleNeeds()
     needs.register_external(module="furuta_plant", names=frozenset({"step"}))
-    gen = LfPythonCodeGen(frozenset({"theta"}), needs=needs)
-    assert gen.render_action(action) == "self.theta = step(self.theta, 0.1)"
+    gen = LfPythonCodeGen(frozenset({"x"}), needs=needs)
+    assert gen.render_action(action) == "self.x = step(self.x, 0.1)"
     assert "from furuta_plant import step" in needs.preamble_lines()

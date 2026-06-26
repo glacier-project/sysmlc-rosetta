@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 #                                    FeatureReferenceExpression (.referent)
 #   actions.inline_actions(eff)   -> []  (PerformActionUsage not unwrapped)
 #
-# Assignment-from-calc (do assign theta := Plant::step(theta, 0.1)):
+# Assignment-from-calc (do assign x := P::step(x, 0.1)):
 #   t.effect                      -> AssignmentActionUsage
 #   inline_actions(t.effect)[0]   -> AssignmentActionUsage
 #   act.value_expression          -> InvocationExpression
@@ -39,18 +39,6 @@ if TYPE_CHECKING:
 #       -> [FeatureReferenceExpression, LiteralRational, …]
 #   FeatureReferenceExpression.referent -> AttributeUsage (qn resolved)
 # ---------------------------------------------------------------------------
-
-# Maps a fully-qualified SysML function name to the Python call target and a
-# flag indicating whether the generated code needs ``import math``.
-_FUNCTIONS: Final[dict[str, tuple[str, bool]]] = {
-    # qualified SysML function -> (python call target, needs math import)
-    "NumericalFunctions::abs": ("abs", False),
-    "NumericalFunctions::max": ("max", False),
-    "NumericalFunctions::min": ("min", False),
-    "TrigFunctions::sin": ("math.sin", True),
-    "TrigFunctions::cos": ("math.cos", True),
-    "TrigFunctions::tan": ("math.tan", True),
-}
 
 _SCALAR_PY: Final[dict[str, str]] = {
     "Real": "float",
@@ -416,71 +404,29 @@ class LfPythonCodeGen(PythonCodeGen):
         return set_line
 
     @override
-    def _emit(self, expr: syside.Expression, parent_precedence: int = 0) -> str:
-        """Dispatch, additionally handling whitelisted function calls.
-
-        ``OperatorExpression`` is a subclass of ``InvocationExpression`` in
-        syside, so the guard must exclude it explicitly to avoid shadowing the
-        base class's operator handler.  That exclusion also covers
-        ``FeatureChainExpression`` (a subclass of ``OperatorExpression``).
-        ``ConstructorExpression`` shares the same parent
-        (``InstantiationExpression``) but is *not* a subclass of
-        ``InvocationExpression``, so no exclusion is required for it.
-        """
-        if isinstance(expr, syside.InvocationExpression) and not isinstance(
-            expr, syside.OperatorExpression
-        ):
-            return self._emit_invocation(expr)
-        return super()._emit(expr, parent_precedence)
-
     def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
-        """Emit a whitelisted function call; reject anything else.
-
-        A call is an atom (no precedence wrapping needed).
-
-        Args:
-            expr: The ``InvocationExpression`` node to translate.
-
-        Returns:
-            Python source for the call, e.g. ``abs(self.x)`` or
-            ``math.cos(self.x)``.
-
-        Raises:
-            UnsupportedConstructError: If the invoked function is not in
-                rosetta's supported set.
-        """
+        """Emit a shared library call or backend-specific calc-def call."""
+        library_call = self._emit_library_invocation(expr)
+        if library_call is not None:
+            source, needs_math = library_call
+            if needs_math:
+                self._needs.uses_math = True
+            return source
+        external_call = self._emit_external_calculation_invocation(
+            expr,
+            external_module=self._needs.external_module,
+            external_names=self._needs.external_names,
+            used_external=self._needs.used_external,
+        )
+        if external_call is not None:
+            return external_call
         func = expr.function
         qn = None if func is None else func.qualified_name
-        if qn is None or str(qn) not in _FUNCTIONS:
-            if (
-                isinstance(func, syside.CalculationDefinition)
-                and func.name is not None
-            ):
-                if func.name in self._needs.external_names:
-                    self._needs.used_external.add(func.name)
-                    args = ", ".join(
-                        self._emit(argument, 0)
-                        for argument in expr.arguments.collect()
-                    )
-                    return f"{func.name}({args})"
-                if self._needs.external_module is not None:
-                    raise UnsupportedConstructError(
-                        f"calc def {func.name!r} has no backing function in "
-                        f"--python module {self._needs.external_module!r}.",
-                        node=expr,
-                    )
-            raise UnsupportedConstructError(
-                f"function {qn or '<unresolved>'!s} is not in rosetta's "
-                "supported set.",
-                node=expr,
-            )
-        target, needs_math = _FUNCTIONS[str(qn)]
-        if needs_math:
-            self._needs.uses_math = True
-        args = ", ".join(
-            self._emit(argument, 0) for argument in expr.arguments.collect()
+        raise UnsupportedConstructError(
+            f"function {qn or '<unresolved>'!s} is not in rosetta's "
+            "supported set.",
+            node=expr,
         )
-        return f"{target}({args})"
 
     def _require_attribute(self, name: str, node: syside.Element) -> None:
         if name not in self._attribute_names:
