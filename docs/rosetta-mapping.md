@@ -1,4 +1,4 @@
-# rosetta — SysML v2 → Lingua Franca mapping reference
+git a# rosetta — SysML v2 → Lingua Franca mapping reference
 
 How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime. This document
@@ -271,8 +271,8 @@ typed definition — no `SimpleNamespace`, no duck-typing.
   unconstrained).
 - Standard-library function calls in expressions are whitelisted:
   `abs`, `max`, `min` and `sin`/`cos`/`tan` (adding `import math`).
-  Unlisted functions are rejected; extend `_FUNCTIONS` in
-  `sysmlc/backends/rosetta/codegen.py` as needed.
+  Unlisted functions are rejected; extend the shared library-function mapping
+  in `sysmlc/codegen/python.py` as needed.
 
 ## 10. Composing two machines (in-model testing)
 
@@ -433,8 +433,8 @@ design.
 ### Builtin functions in expression positions
 
 A whitelist of standard-library functions is resolved in **expression
-positions** — guards and assignment RHS — via `_FUNCTIONS` in
-`sysmlc/backends/rosetta/codegen.py`:
+positions** — guards and assignment RHS — via the shared library-function
+mapping in `sysmlc/codegen/python.py`:
 
 | SysML qualified name      | Python rendering                   |
 | ------------------------- | ---------------------------------- |
@@ -445,7 +445,7 @@ positions** — guards and assignment RHS — via `_FUNCTIONS` in
 | `TrigFunctions::cos`      | `math.cos(…)`                      |
 | `TrigFunctions::tan`      | `math.tan(…)`                      |
 
-Unlisted functions are rejected; extend `_FUNCTIONS` as new cases demand.
+Unlisted functions are rejected; extend the shared mapping as new cases demand.
 
 ### Assignment-from-call
 
@@ -463,8 +463,8 @@ self.x = max(self.x, 0.0)
 ```
 
 The RHS routes through `_emit_invocation` in `LfPythonCodeGen`, which
-resolves the callee against `_FUNCTIONS` (builtins) or the external
-registry (below).
+resolves the callee against the shared library-function mapping or the
+external registry (below).
 
 **Functions cannot be bare `do` effects.** A SysML `calc def` can only be
 invoked in an expression position; syside rejects a standalone
@@ -521,8 +521,10 @@ The CLI:
 1. **Copies `physics.py` next to the generated `.lf`** and lists it in the
    `.lf`'s `files:` target property (alongside the companion types module),
    so `lfc` copies it into `src-gen` and the binary imports it at runtime.
-1. **`--python` is rosetta-only** — passing it with another backend raises a
-   CLI error immediately.
+1. `--python` is also accepted by quake state-definition builds. Quake
+   serializes the import in the sismic preamble but does not copy the module,
+   because it does not generate a self-contained program like rosetta's `.lf`
+   output.
 1. A `calc def` with **no backing function** in the `--python` module fails
    loud, naming the function and the module (not the generic "unsupported
    function" error).
