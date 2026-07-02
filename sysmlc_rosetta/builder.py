@@ -246,12 +246,15 @@ class RosettaBuilder:
         Each root-scope ``assert constraint`` renders as a Python ``assert``
         placed (1) in a dedicated startup reaction — so a bad initial (or
         overridden) value aborts immediately — and (2) at the end of every
-        reaction body that assigns to a bound attribute.
+        reaction body that assigns to a bound attribute. The negated form
+        ``assert not constraint`` asserts ``not (<expr>)``.
         """
         checks: list[str] = []
         for index, fact in enumerate(self._constraints):
             label = fact.name or f"constraint{index}"
             rendered = self._codegen.render_expression(fact.expression)
+            if fact.is_negated:
+                rendered = f"not ({rendered})"
             checks.append(
                 f'assert {rendered}, "SysML constraint {label} violated"'
             )

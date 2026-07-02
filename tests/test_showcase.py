@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
+from tests.backends.rosetta.conftest import FIXTURES_DIR
 from tests.backends.test_showcase import SHOWCASE_DIR
 
 if TYPE_CHECKING:
@@ -278,6 +279,18 @@ def test_thermostat_constraints_follow_assignments() -> None:
     # The entry reaction announces but assigns nothing: no checks there.
     entry = heating.reactions[0]
     assert not any(line.startswith("assert ") for line in entry.body)
+
+
+def test_negated_constraint_renders_wrapped_assert() -> None:
+    model = load_model(FIXTURES_DIR / "negated-constraint")
+    program = build_program(model, "NegatedConstraint::Machine")
+    (startup_checks,) = [
+        r for r in program.reactor.reactions if r.triggers == ("startup",)
+    ]
+    (check,) = startup_checks.body
+    assert check == (
+        'assert not (self.level > 2.0), "SysML constraint tooHigh violated"'
+    )
 
 
 # -- flagship case studies: milling workcell and batch reactor --
