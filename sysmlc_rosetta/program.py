@@ -143,6 +143,8 @@ class LfProgram:
     target_options: tuple[tuple[str, str], ...] = ()
     types_module_name: str | None = None
     types_module_lines: tuple[str, ...] = ()
+    external_module_name: str | None = None
+    external_module_lines: tuple[str, ...] = ()
 
     @property
     def reactor(self) -> Reactor:
