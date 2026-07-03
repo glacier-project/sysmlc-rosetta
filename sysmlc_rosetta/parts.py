@@ -36,12 +36,7 @@ from sysmlc.backends.rosetta.program import (
 )
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.parts.graph import PartGraph, PartNode, part_graph
-from sysmlc.semantics.parts.routing import (
-    PortSignalRoute,
-    port_signal_routes,
-    validate_connections,
-    validate_via_ports,
-)
+from sysmlc.semantics.parts.routing import PortSignalRoute, validated_routes
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import (
     MachineInterface,
@@ -224,10 +219,6 @@ def build_part_program(
             the generated preamble.
     """
     g = part_graph(model, usage_qn)
-    if not g.parts:
-        raise UnsupportedConstructError(
-            f"part usage {usage_qn!r} composes no parts"
-        )
 
     single_nodes = tuple(p for p in g.parts if len(p.behaviors) == 1)
     multi_nodes = tuple(p for p in g.parts if len(p.behaviors) >= 2)
@@ -244,17 +235,9 @@ def build_part_program(
                 )
 
     # Port-based machinery applies to single-exhibit nodes only.
-    parts = {p.usage_name: p for p in single_nodes}
-    faces = {
-        p.usage_name: machine_interface(model, p.behaviors[0][1])
-        for p in single_nodes
-    }
+    faces, routes = validated_routes(model, g, single_nodes)
 
-    validate_via_ports(single_nodes, faces)
-    validate_connections(g, parts)
-
-    module_name = f"{usage_qn.split('::')[-1]}_types"
-    routes = port_signal_routes(g, faces)
+    module_name = f"{_simple(usage_qn)}_types"
     peer_accepts = _peer_accepts(g, faces)
     reactors, needs = _build_reactors(
         model,
