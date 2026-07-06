@@ -36,6 +36,7 @@ from sysmlc.backends.rosetta.program import (
 )
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.parts.graph import PartGraph, PartNode, part_graph
+from sysmlc.semantics.parts.routing import PortSignalRoute, validated_routes
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import (
     MachineInterface,
@@ -199,8 +200,8 @@ def build_part_program(
       port-based interface validation and signal routing, exactly as before.
     * **Multi-exhibit** (``len(node.behaviors) >= 2``): self-contained
       sub-systems built via :func:`compose_exhibits`.  They do not
-      participate in ``faces`` / ``_validate_via_ports`` / ``_peer_accepts``
-      / ``_route`` (their signals are internal).  A ``connect`` that
+      participate in ``faces`` / ``_peer_accepts`` (their signals are
+      internal).  A ``connect`` that
       references a multi-exhibit part is rejected with
       :class:`~sysmlc.errors.UnsupportedConstructError`.
 
@@ -218,10 +219,6 @@ def build_part_program(
             the generated preamble.
     """
     g = part_graph(model, usage_qn)
-    if not g.parts:
-        raise UnsupportedConstructError(
-            f"part usage {usage_qn!r} composes no parts"
-        )
 
     single_nodes = tuple(p for p in g.parts if len(p.behaviors) == 1)
     multi_nodes = tuple(p for p in g.parts if len(p.behaviors) >= 2)
@@ -238,16 +235,9 @@ def build_part_program(
                 )
 
     # Port-based machinery applies to single-exhibit nodes only.
-    parts = {p.usage_name: p for p in single_nodes}
-    faces = {
-        p.usage_name: machine_interface(model, p.behaviors[0][1])
-        for p in single_nodes
-    }
+    faces, routes = validated_routes(model, g, single_nodes)
 
-    _validate_via_ports(single_nodes, faces)
-    _validate_connections(g, parts)
-
-    module_name = f"{usage_qn.split('::')[-1]}_types"
+    module_name = f"{_simple(usage_qn)}_types"
     peer_accepts = _peer_accepts(g, faces)
     reactors, needs = _build_reactors(
         model,
@@ -262,7 +252,7 @@ def build_part_program(
         instantiations=tuple(
             Instantiation(p.usage_name, p.definition_name) for p in g.parts
         ),
-        connections=_route(g, faces),
+        connections=_lf_connections(routes),
     )
     program = LfProgram(
         reactors=reactors,
@@ -271,41 +261,6 @@ def build_part_program(
         target_options=target_options,
     )
     return finalize(program, needs, external)
-
-
-def _validate_via_ports(
-    nodes: tuple[PartNode, ...],
-    faces: dict[str, MachineInterface],
-) -> None:
-    """Reject a behavior whose ``send/accept via P`` port is undeclared."""
-    for node in nodes:
-        face = faces[node.usage_name]
-        declared = set(node.ports)
-        used = (set(face.sent_via) | set(face.accepted_via)) - {None}
-        for port in sorted(p for p in used if p is not None):
-            if port not in declared:
-                raise UnsupportedConstructError(
-                    f"part def {node.definition_name!r} sends/accepts via "
-                    f"port {port!r}, which it does not declare; declared "
-                    f"ports: {sorted(declared)!r}"
-                )
-
-
-def _validate_connections(g: PartGraph, parts: dict[str, PartNode]) -> None:
-    """Reject a ``connect`` naming an unknown part or undeclared port."""
-    for (ia, pa), (ib, pb) in g.connections:
-        for inst, port in ((ia, pa), (ib, pb)):
-            node = parts.get(inst)
-            if node is None:
-                raise UnsupportedConstructError(
-                    f"connection references part {inst!r}, which is not a "
-                    f"part of {g.name!r}"
-                )
-            if port not in node.ports:
-                raise UnsupportedConstructError(
-                    f"connection references port {port!r}, which is not a "
-                    f"declared port of part def {node.definition_name!r}"
-                )
 
 
 def _peer_accepts(
@@ -414,73 +369,14 @@ def _build_reactors(
     return tuple(reactors), needs
 
 
-def _route(
-    g: PartGraph, faces: dict[str, MachineInterface]
+def _lf_connections(
+    routes: tuple[PortSignalRoute, ...],
 ) -> tuple[Connection, ...]:
-    """Wire each connection's matched ports, both directions.
-
-    A signal crosses ``connect a.pa to b.pb`` only when one end sends it via
-    its port and the other accepts it via its port. A signal that travels both
-    ways over a single connection (same name) is rejected, as in the rig.
-    """
-    connections: list[Connection] = []
-    # (target instance, signal) -> the source instance already wired to it,
-    # so a second source into the same single-channel input is rejected.
-    destinations: dict[tuple[str, str], str] = {}
-
-    def wire(source_inst: str, target_inst: str, sig: str) -> None:
-        key = (target_inst, sig)
-        if key in destinations:
-            raise UnsupportedConstructError(
-                f"signal {sig!r} has two sources ({destinations[key]!r} and "
-                f"{source_inst!r}) into {target_inst!r}; single-channel "
-                "fan-in is forbidden — model it with multiplicity (a bank "
-                "into a multiport), which is deferred to a later increment."
-            )
-        destinations[key] = source_inst
-        connections.append(
-            Connection(f"{source_inst}.{sig}", f"{target_inst}.{sig}")
+    """Map backend-neutral signal routes to LF connections."""
+    return tuple(
+        Connection(
+            f"{route.source}.{route.signal}",
+            f"{route.target}.{route.signal}",
         )
-
-    for (ia, pa), (ib, pb) in g.connections:
-        fa, fb = faces[ia], faces[ib]
-        a_to_b = fa.sent_via.get(pa, frozenset()) & fb.accepted_via.get(
-            pb, frozenset()
-        )
-        b_to_a = fb.sent_via.get(pb, frozenset()) & fa.accepted_via.get(
-            pa, frozenset()
-        )
-        both = a_to_b & b_to_a
-        if both:
-            raise UnsupportedConstructError(
-                f"signal(s) {sorted(both)!r} travel both ways over the "
-                f"connection {ia}.{pa} <-> {ib}.{pb}; bidirectional "
-                "same-name signals are not supported"
-            )
-        for sig in sorted(a_to_b):
-            wire(ia, ib, sig)
-        for sig in sorted(b_to_a):
-            wire(ib, ia, sig)
-        _warn_unwired(ia, pa, fa, fb, pb)
-        _warn_unwired(ib, pb, fb, fa, pa)
-    return tuple(connections)
-
-
-def _warn_unwired(
-    inst: str,
-    port: str,
-    face: MachineInterface,
-    peer: MachineInterface,
-    peer_port: str,
-) -> None:
-    """Warn when a part accepts a signal via a port the peer never sends."""
-    accepted = face.accepted_via.get(port, frozenset())
-    delivered = peer.sent_via.get(peer_port, frozenset())
-    for sig in sorted(accepted - delivered):
-        logger.warning(
-            "part %r accepts %r via %r but its peer never sends it; the "
-            "input port stays unwired",
-            inst,
-            sig,
-            port,
-        )
+        for route in routes
+    )
