@@ -26,11 +26,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 def _resolve_external(
     model: syside.Model,
     scope_qn: str,
     explicit_external: tuple[str, frozenset[str]] | None,
-) -> tuple[tuple[str, frozenset[str]] | None, tuple[str, tuple[str, ...]] | None]:
+) -> tuple[
+    tuple[str, frozenset[str]] | None, tuple[str, tuple[str, ...]] | None
+]:
     if explicit_external is not None:
         return explicit_external, None
 
@@ -40,6 +43,7 @@ def _resolve_external(
 
     module_name, names, source_lines = extracted
     return (module_name, names), (module_name, source_lines)
+
 
 class RosettaBackend(Backend):
     """Lingua Franca backend for generating LF programs from SysML."""

@@ -1,5 +1,4 @@
-"""
-"""
+""" """
 
 from __future__ import annotations
 
@@ -16,12 +15,18 @@ import pytest
 if TYPE_CHECKING:
     from types import ModuleType
 
-import syside 
-from sysmlc.backends.rosetta.textual_representation import extract_textual, write_module
+import syside
+
+from sysmlc.backends.rosetta.textual_representation import (
+    extract_textual,
+    write_module,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SYSMLC = str(_PROJECT_ROOT / ".venv" / "bin" / "sysmlc")
-_MODEL_DIR = str(_PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum_inline")
+_MODEL_DIR = str(
+    _PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum_inline"
+)
 _SYSML_FILE = str(Path(_MODEL_DIR) / "furuta_pendulum_inline.sysml")
 
 
@@ -29,20 +34,22 @@ _SYSML_FILE = str(Path(_MODEL_DIR) / "furuta_pendulum_inline.sysml")
 # Session fixture: generate furutaSystem_types.py once per test session
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
-    """
-    """
+    """ """
     out = tmp_path_factory.mktemp("gen_code")
-    
-    model, diagnostics = syside.load_model([_SYSML_FILE])
-    
-    result = extract_textual(model, "furuta::physics", module_name="furuta_physics_inline")
+
+    model, _ = syside.load_model([_SYSML_FILE])
+
+    result = extract_textual(
+        model, "furuta::physics", module_name="furuta_physics_inline"
+    )
     assert result is not None
-    stem, names, src_lines = result
-    
+    stem, _, src_lines = result
+
     write_module(src_lines, out, stem)
-    
+
     if str(out) not in sys.path:
         sys.path.insert(0, str(out))
 
@@ -50,6 +57,7 @@ def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 
     mod = importlib.import_module("furuta_physics_inline")
     return mod
+
 
 @pytest.fixture(scope="session")
 def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
@@ -91,8 +99,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 
 
 def test_step_is_deterministic_and_pure(
-    generated_types: ModuleType,
-    physics_module: ModuleType
+    generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
     """step() called twice on identical inputs gives identical outputs.
 
@@ -131,9 +138,9 @@ def test_step_is_deterministic_and_pure(
 # Test 2: Stabilizer holds the inverted equilibrium
 # ---------------------------------------------------------------------------
 
+
 def test_stabilizer_holds_inverted_equilibrium(
-    generated_types: ModuleType,
-    physics_module: ModuleType
+    generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
     """stabilize_torque closes the loop and actually balances the pendulum.
 
@@ -149,7 +156,6 @@ def test_stabilizer_holds_inverted_equilibrium(
     x = generated_types.PendulumState(
         theta=0.05, d_theta=0.0, phi=0.0, d_phi=0.0
     )
-    phi0 = x.phi  # freeze arm reference as Stabilize would on entry
     n_steps = 2000
     max_theta_seen = 0.0
 
@@ -181,8 +187,7 @@ def test_stabilizer_holds_inverted_equilibrium(
 
 
 def test_swingup_adds_energy(
-    generated_types: ModuleType,
-    physics_module: ModuleType
+    generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
     """swingup_torque pumps energy toward upright from hanging-down rest.
 
@@ -240,7 +245,9 @@ def test_swingup_adds_energy(
         (-3 * math.pi / 2, math.pi / 2),
     ],
 )
-def test_restrict_angle(physics_module: ModuleType, theta: float, expected: float) -> None:
+def test_restrict_angle(
+    physics_module: ModuleType, theta: float, expected: float
+) -> None:
     result = physics_module.restrict_angle(theta)
     assert math.isclose(result, expected, abs_tol=1e-9), (
         f"restrict_angle({theta:.4f}) = {result:.6f}, expected {expected:.6f}"

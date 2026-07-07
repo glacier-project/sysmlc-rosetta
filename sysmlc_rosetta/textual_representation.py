@@ -1,25 +1,24 @@
-"""
-Support for SysML ``TextualRepresentation`` as an external Python module.
-"""
+"""Support for SysML ``TextualRepresentation`` as an external Python module."""
+
 from __future__ import annotations
 
-import textwrap
 import ast
 import logging
-from pathlib import Path
+import textwrap
 from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import syside
 
 from sysmlc.errors import UnsupportedConstructError
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
 logger = logging.getLogger(__name__)
 _PYTHON_TAG = "python"
 
-def _normalize_body(body: str) -> str:
+
+def _normalize_body(body: str) -> list[str]:
     body = textwrap.dedent(body)
 
     lines = []
@@ -33,17 +32,18 @@ def _normalize_body(body: str) -> str:
 
     return lines
 
+
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
-    for tr in element.textual_representations:
+    for tr in element.textual_representations.collect():
         if tr.language.strip().lower() != _PYTHON_TAG:
             continue
         if code:
             code.extend(("", ""))
         code.extend(_normalize_body(tr.body))
 
-    for child in element.owned_elements:
+    for child in element.owned_elements.collect():
         child_lines = _collect_lines(child)
         if not child_lines:
             continue
@@ -125,11 +125,13 @@ def extract_textual(
 
     return stem, names, full_lines
 
+
 def write_module(
     src_lines: list[str] | tuple[str, ...],
     out_dir: Path,
     module_name: str,
 ) -> Path:
+    """Write the Python file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{module_name}.py"
     path.write_text("\n".join(src_lines) + "\n")
