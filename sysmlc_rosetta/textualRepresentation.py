@@ -24,8 +24,7 @@ def _collect_lines(element: syside.Element) -> list[str]:
     for tr in element.textual_representations:
         if tr.language.strip().lower() != _PYTHON_TAG:
             continue
-        for line in tr.body:
-            code.append(line)
+        code.extend(tr.body.splitlines())
 
     for child in element.owned_elements:
         code.extend(_collect_lines(child))
@@ -35,7 +34,11 @@ def _collect_lines(element: syside.Element) -> list[str]:
 
 def _collect_code(model: syside.Model) -> list[str]:
     code = []
-    for element in model.elements(syside.Element, include_subtypes=True):
+    for element in model.elements(
+        syside.Element,
+        include_subtypes=True,
+        considered_document_kinds=syside.DocumentKind.MODEL,
+    ):
         if getattr(element, "owner", None) is not None:
             continue
         code.extend(_collect_lines(element))
@@ -91,9 +94,9 @@ def extract_textual(
         "# Do not edit — regenerate from the SysML source instead.",
         "",
     ]
-    src_code = header.extend(lines)
+    full_lines = tuple(header) + tuple(lines)
 
-    return stem, names, src_code
+    return stem, names, full_lines
 
 def write_module(
     src_lines: list[str] | tuple[str, ...],

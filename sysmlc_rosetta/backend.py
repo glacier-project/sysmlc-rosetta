@@ -66,7 +66,12 @@ class RosettaBackend(Backend):
         resolved_external, module_info = _resolve_external(
             model, element_qn, external
         )
-        return build_program(model, element_qn, external=resolved_external)
+        return build_program(
+            model,
+            element_qn,
+            external=resolved_external,
+            module_source=module_info,
+        )
 
     def build_composition(
         self,
@@ -130,7 +135,7 @@ class RosettaBackend(Backend):
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
         )
-        return finalize(program, needs, resolved_external)
+        return finalize(program, needs, resolved_external, module_info)
 
     def build_part(
         self,
@@ -157,6 +162,7 @@ class RosettaBackend(Backend):
             usage_qn,
             target_options=target_options,
             external=resolved_external,
+            module_source=module_info,
         )
 
     @override

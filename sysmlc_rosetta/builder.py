@@ -1346,6 +1346,7 @@ def finalize(
     program: LfProgram,
     needs: PreambleNeeds,
     external: tuple[str, frozenset[str]] | None,
+    module_source: tuple[str, tuple[str, ...]] | None = None,
 ) -> LfProgram:
     """Attach the companion module + ``files:`` to a built program."""
     companion = needs.companion_module_lines()
@@ -1354,11 +1355,17 @@ def finalize(
         external[0] if external is not None else None,
     )
     options = program.target_options + ((file_opt,) if file_opt else ())
+    external_module_name = None
+    external_module_lines: tuple[str, ...] = ()
+    if module_source is not None:
+        external_module_name, external_module_lines = module_source
     return replace(
         program,
         target_options=options,
         types_module_name=needs.types_module if companion else None,
         types_module_lines=tuple(companion),
+        external_module_name=external_module_name,
+        external_module_lines=external_module_lines,
     )
 
 
@@ -1367,6 +1374,7 @@ def build_program(
     state_def_qn: str,
     *,
     external: tuple[str, frozenset[str]] | None = None,
+    module_source: tuple[str, tuple[str, ...]] | None = None,
 ) -> LfProgram:
     """Build a Lingua Franca program from a SysML state definition.
 
@@ -1378,6 +1386,9 @@ def build_program(
         state_def_qn: Qualified name of the SysML ``state def`` to translate.
         external: Optional ``(module_stem, names)`` pair identifying a Python
             module that provides external ``calc def`` implementations.
+        module_source: Optional ``(module_name, source_lines)`` pair for a
+            Python module auto-extracted from SysML ``TextualRepresentation``
+            annotations; see :func:`finalize`.
 
     Returns:
         The assembled ``LfProgram``.
@@ -1391,4 +1402,4 @@ def build_program(
         state_def_qn, RosettaBuilder(name, needs=needs)
     )
     assert isinstance(result, LfProgram)
-    return finalize(result, needs, external)
+    return finalize(result, needs, external, module_source)
