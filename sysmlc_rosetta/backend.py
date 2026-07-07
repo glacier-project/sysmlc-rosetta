@@ -11,7 +11,7 @@ from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.parts import build_part_program, compose_exhibits
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.backends.rosetta.textualRepresentation import (
+from sysmlc.backends.rosetta.textual_representation import (
     extract_textual,
     write_module,
 )

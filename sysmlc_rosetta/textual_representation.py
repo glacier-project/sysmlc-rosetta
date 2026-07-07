@@ -3,6 +3,7 @@ Support for SysML ``TextualRepresentation`` as an external Python module.
 """
 from __future__ import annotations
 
+import textwrap
 import ast
 import logging
 from pathlib import Path
@@ -18,22 +19,43 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _PYTHON_TAG = "python"
 
+def _normalize_body(body: str) -> str:
+    body = textwrap.dedent(body)
+
+    lines = []
+    for line in body.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("*"):
+            line = stripped[1:]
+            if line.startswith((" ", "\t")):
+                line = line[1:]
+        lines.append(line)
+
+    return lines
+
 def _collect_lines(element: syside.Element) -> list[str]:
-    code = []
+    code: list[str] = []
 
     for tr in element.textual_representations:
         if tr.language.strip().lower() != _PYTHON_TAG:
             continue
-        code.extend(tr.body.splitlines())
+        if code:
+            code.extend(("", ""))
+        code.extend(_normalize_body(tr.body))
 
     for child in element.owned_elements:
-        code.extend(_collect_lines(child))
+        child_lines = _collect_lines(child)
+        if not child_lines:
+            continue
+        if code:
+            code.extend(("", ""))
+        code.extend(child_lines)
 
     return code
 
 
 def _collect_code(model: syside.Model) -> list[str]:
-    code = []
+    code: list[str] = []
     for element in model.elements(
         syside.Element,
         include_subtypes=True,
@@ -41,7 +63,12 @@ def _collect_code(model: syside.Model) -> list[str]:
     ):
         if getattr(element, "owner", None) is not None:
             continue
-        code.extend(_collect_lines(element))
+        lines = _collect_lines(element)
+        if not lines:
+            continue
+        if code:
+            code.extend(("", ""))
+        code.extend(lines)
     return code
 
 
