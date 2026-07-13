@@ -106,6 +106,58 @@ def _rep_backed_calc_names(model: syside.Model) -> frozenset[str]:
     return frozenset(names)
 
 
+def _register_defs(
+    body: str,
+    element: syside.Element,
+    seen: dict[str, tuple[str, str]],
+) -> None:
+    """Register the body's top-level defs; reject a conflicting name.
+
+    Idempotent for identical implementations; a different body under
+    the same name is a collision and fails loud, mirroring the
+    dataclass registration policy.
+    """
+    qualified_name = str(element.qualified_name)
+    for statement in ast.parse(body).body:
+        if not isinstance(statement, ast.FunctionDef):
+            continue
+        source = ast.unparse(statement)
+        known = seen.get(statement.name)
+        if known is None:
+            seen[statement.name] = (qualified_name, source)
+            continue
+        known_qualified_name, known_source = known
+        if known_source == source:
+            continue
+        raise UnsupportedConstructError(
+            f"two Python rep bodies define {statement.name!r} with "
+            f"different implementations ({known_qualified_name!r} and "
+            f"{qualified_name!r}); the generated module has one flat "
+            "namespace, so the last definition would silently win; "
+            "rename one.",
+            node=element,
+        )
+
+
+def _require_unique_defs(model: syside.Model) -> None:
+    """Reject two rep bodies defining the same function differently.
+
+    The generated module has one flat namespace: a second ``def`` of
+    the same name would silently override the first for every caller,
+    whether the clash is between two calc defs, a scaffolding helper
+    and a calc def, or two scaffolding helpers.
+    """
+    elements: list[syside.Element] = [
+        *iter_elements(model, syside.Package),
+        *iter_elements(model, syside.CalculationDefinition),
+    ]
+    seen: dict[str, tuple[str, str]] = {}
+    for element in elements:
+        for body in _python_rep_bodies(element):
+            _require_valid_python(body, element)
+            _register_defs(body, element, seen)
+
+
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
@@ -164,6 +216,7 @@ def extract_textual(
         )
     stem = module_name or f"{scope_qn.split('::')[-1]}_impl"
     names = _rep_backed_calc_names(model)
+    _require_unique_defs(model)
 
     header = [
         "# Auto-generated from SysML TextualRepresentation bodies.",

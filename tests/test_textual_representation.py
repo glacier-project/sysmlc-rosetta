@@ -68,6 +68,30 @@ def test_def_name_mismatch_names_both_sides() -> None:
         extract_textual(model, "NameMismatch::restrict_angle")
 
 
+def test_conflicting_defs_across_packages_are_rejected() -> None:
+    model = load_model(FIXTURES_DIR / "rep-name-collision")
+    with pytest.raises(
+        UnsupportedConstructError, match="different implementations"
+    ):
+        extract_textual(model, "Collision::step")
+
+
+def test_scaffolding_def_shadowing_a_calc_def_is_rejected() -> None:
+    model = load_model(FIXTURES_DIR / "rep-scaffolding-shadow")
+    with pytest.raises(
+        UnsupportedConstructError, match="different implementations"
+    ):
+        extract_textual(model, "Shadow::gain")
+
+
+def test_identical_duplicate_helpers_stay_allowed() -> None:
+    model = load_model(FIXTURES_DIR / "rep-duplicate-identical")
+    result = extract_textual(model, "DupA::use_sign")
+    assert result is not None
+    _stem, names, _lines = result
+    assert names == frozenset({"use_sign"})
+
+
 def test_sm15_rep_backs_the_calc_call_with_a_generated_module() -> None:
     # Twin of sm15-external: same Ramp machine, but the calc body comes
     # from the rep instead of a --python file, with no external given.
