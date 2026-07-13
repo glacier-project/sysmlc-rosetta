@@ -17,12 +17,33 @@ logger = logging.getLogger(__name__)
 _PYTHON_TAG = "python"
 
 
+def _require_package_or_calc_def(element: syside.Element) -> None:
+    """Reject a Python rep attached to anything but a package or calc def.
+
+    A package rep carries module scaffolding (imports, constants, private
+    helpers); a calc-def rep carries that function's body. A rep attached
+    to any other element (an action, a state, ...) has no place in the
+    generated module: its text would land at module top level and execute
+    at import time.
+    """
+    if isinstance(element, syside.Package | syside.CalculationDefinition):
+        return
+    raise UnsupportedConstructError(
+        "a Python textual representation is attached to an element that "
+        "is neither a package nor a calc def; rosetta collects Python "
+        "bodies from packages (module scaffolding) and calc defs "
+        "(function bodies) only.",
+        node=element,
+    )
+
+
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
     for tr in element.textual_representations.collect():
         if tr.language.strip().lower() != _PYTHON_TAG:
             continue
+        _require_package_or_calc_def(element)
         if code:
             code.extend(("", ""))
         code.extend(tr.body.splitlines())
