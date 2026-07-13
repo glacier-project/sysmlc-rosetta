@@ -192,9 +192,7 @@ class RosettaBackend(Backend):
         for fmt in formats:
             if fmt != "lf":
                 raise SerializationError(f"unsupported format: {fmt!r}")
-        basename = options.basename or (
-            artifact.reactor.name if artifact.reactors else "program"
-        )
+        basename = options.basename or artifact.reactor.name
         options.output_dir.mkdir(parents=True, exist_ok=True)
         path = options.output_dir / f"{basename}.lf"
         path.write_text(self.serialize(artifact, "lf"))

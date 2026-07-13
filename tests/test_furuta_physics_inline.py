@@ -1,5 +1,3 @@
-""" """
-
 from __future__ import annotations
 
 import importlib
@@ -37,7 +35,7 @@ _SYSML_FILE = str(Path(_MODEL_DIR) / "furuta_pendulum_inline.sysml")
 
 @pytest.fixture(scope="session")
 def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
-    """ """
+    """Import the physics module extracted from the inline furuta reps."""
     out = tmp_path_factory.mktemp("gen_code")
 
     model, _ = syside.load_model([_SYSML_FILE])
