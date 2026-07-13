@@ -43,6 +43,25 @@ def test_invalid_python_in_a_rep_body_names_the_calc_def() -> None:
         extract_textual(model, "BadSyntax::broken")
 
 
+def test_extracted_names_are_the_rep_backed_calc_defs_only() -> None:
+    # The scaffolding helper `_twice` is module-internal: only calc defs
+    # back SysML calls, so only their names are importable.
+    model = load_model(FIXTURES_DIR / "rep-package-scaffolding")
+    result = extract_textual(model, "Scaffold::quadruple")
+    assert result is not None
+    _stem, names, _lines = result
+    assert names == frozenset({"quadruple"})
+
+
+def test_def_name_mismatch_names_both_sides() -> None:
+    model = load_model(FIXTURES_DIR / "rep-name-mismatch")
+    with pytest.raises(
+        UnsupportedConstructError,
+        match="defines 'restrictAngle' but the calc def is named",
+    ):
+        extract_textual(model, "NameMismatch::restrict_angle")
+
+
 def test_sm15_rep_backs_the_calc_call_with_a_generated_module() -> None:
     # Twin of sm15-external: same Ramp machine, but the calc body comes
     # from the rep instead of a --python file, with no external given.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,8 +11,8 @@ if TYPE_CHECKING:
 import syside
 
 from sysmlc.errors import UnsupportedConstructError
+from sysmlc.sysml.queries import iter_elements
 
-logger = logging.getLogger(__name__)
 _PYTHON_TAG = "python"
 
 
@@ -53,17 +52,62 @@ def _require_valid_python(body: str, element: syside.Element) -> None:
         ) from error
 
 
+def _python_rep_bodies(element: syside.Element) -> list[str]:
+    """Bodies of the Python textual representations on ``element``."""
+    return [
+        tr.body
+        for tr in element.textual_representations.collect()
+        if tr.language.strip().lower() == _PYTHON_TAG
+    ]
+
+
+def _require_backing_def(
+    bodies: list[str], calc: syside.CalculationDefinition
+) -> None:
+    """Require a body of the calc def to define ``def <calc.name>``.
+
+    The generated preamble imports the calc def's name from the module;
+    without a matching def the import would only fail at run time.
+    """
+    defined: list[str] = []
+    for body in bodies:
+        for statement in ast.parse(body).body:
+            if isinstance(statement, ast.FunctionDef):
+                defined.append(statement.name)
+    if calc.name in defined:
+        return
+    found = ", ".join(repr(name) for name in defined) or "no function"
+    raise UnsupportedConstructError(
+        f"the Python body defines {found} but the calc def is named "
+        f"{calc.name!r}; one def must match the calc def name.",
+        node=calc,
+    )
+
+
+def _rep_backed_calc_names(model: syside.Model) -> frozenset[str]:
+    """Names of the calc defs whose bodies the generated module provides."""
+    names: set[str] = set()
+    for calc in iter_elements(model, syside.CalculationDefinition):
+        bodies = _python_rep_bodies(calc)
+        if not bodies:
+            continue
+        for body in bodies:
+            _require_valid_python(body, calc)
+        _require_backing_def(bodies, calc)
+        assert calc.name is not None
+        names.add(calc.name)
+    return frozenset(names)
+
+
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
-    for tr in element.textual_representations.collect():
-        if tr.language.strip().lower() != _PYTHON_TAG:
-            continue
+    for body in _python_rep_bodies(element):
         _require_package_or_calc_def(element)
-        _require_valid_python(tr.body, element)
+        _require_valid_python(body, element)
         if code:
             code.extend(("", ""))
-        code.extend(tr.body.splitlines())
+        code.extend(body.splitlines())
 
     for child in element.owned_elements.collect():
         child_lines = _collect_lines(child)
@@ -94,30 +138,6 @@ def _collect_code(model: syside.Model) -> list[str]:
     return code
 
 
-def _top_level_names(src: str) -> frozenset[str]:
-    """Return all top-level function and class names from Python source."""
-    try:
-        tree = ast.parse(src)
-    except SyntaxError as exc:
-        logger.warning(
-            "TextualRepresentation body is not valid Python (%s); "
-            "name extraction skipped — the generated preamble import may "
-            "be incomplete.",
-            exc,
-        )
-        return frozenset()
-    return frozenset(
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(
-            node,
-            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
-        )
-        and isinstance(getattr(node, "col_offset", 1), int)
-        and node.col_offset == 0
-    )
-
-
 def extract_textual(
     model: syside.Model,
     scope_qn: str,
@@ -136,7 +156,7 @@ def extract_textual(
             f"processing {scope_qn!r} but all are empty."
         )
     stem = module_name or f"{scope_qn.split('::')[-1]}_impl"
-    names = _top_level_names(src_code)
+    names = _rep_backed_calc_names(model)
 
     header = [
         "# Auto-generated from SysML TextualRepresentation bodies.",
