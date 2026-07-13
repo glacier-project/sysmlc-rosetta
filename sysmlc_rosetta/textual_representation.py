@@ -91,6 +91,13 @@ def _rep_backed_calc_names(model: syside.Model) -> frozenset[str]:
         bodies = _python_rep_bodies(calc)
         if not bodies:
             continue
+        if len(bodies) > 1:
+            raise UnsupportedConstructError(
+                "this calc def carries more than one Python textual "
+                "representation, so its function body is ambiguous; "
+                "keep exactly one.",
+                node=calc,
+            )
         for body in bodies:
             _require_valid_python(body, calc)
         _require_backing_def(bodies, calc)

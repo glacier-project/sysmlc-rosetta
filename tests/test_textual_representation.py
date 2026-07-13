@@ -53,6 +53,12 @@ def test_extracted_names_are_the_rep_backed_calc_defs_only() -> None:
     assert names == frozenset({"quadruple"})
 
 
+def test_two_python_reps_on_one_calc_def_are_rejected() -> None:
+    model = load_model(FIXTURES_DIR / "rep-two-bodies")
+    with pytest.raises(UnsupportedConstructError, match="more than one Python"):
+        extract_textual(model, "TwoBodies::double")
+
+
 def test_def_name_mismatch_names_both_sides() -> None:
     model = load_model(FIXTURES_DIR / "rep-name-mismatch")
     with pytest.raises(
