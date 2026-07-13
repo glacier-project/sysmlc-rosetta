@@ -20,6 +20,7 @@ from sysmlc.backends.rosetta.builder import OUTPUT_PORT
 from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
+from sysmlc.backends.rosetta.textual_representation import write_module
 from sysmlc.sysml.loading import load_model
 from sysmlc.values import configure_model
 
@@ -83,8 +84,8 @@ def compile_harness(
         )
     if program.external_module_lines:
         assert program.external_module_name is not None
-        (src / f"{program.external_module_name}.py").write_text(
-            "\n".join(program.external_module_lines) + "\n"
+        write_module(
+            program.external_module_lines, src, program.external_module_name
         )
     (src / "Harness.lf").write_text(
         HARNESS.format(
