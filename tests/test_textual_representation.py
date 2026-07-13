@@ -37,6 +37,12 @@ def test_python_rep_outside_package_or_calc_def_is_rejected() -> None:
         extract_textual(model, "RepOnAction::logIt")
 
 
+def test_invalid_python_in_a_rep_body_names_the_calc_def() -> None:
+    model = load_model(FIXTURES_DIR / "rep-bad-syntax")
+    with pytest.raises(UnsupportedConstructError, match="BadSyntax::broken"):
+        extract_textual(model, "BadSyntax::broken")
+
+
 def test_sm15_rep_backs_the_calc_call_with_a_generated_module() -> None:
     # Twin of sm15-external: same Ramp machine, but the calc body comes
     # from the rep instead of a --python file, with no external given.

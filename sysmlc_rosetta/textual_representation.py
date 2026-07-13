@@ -37,6 +37,22 @@ def _require_package_or_calc_def(element: syside.Element) -> None:
     )
 
 
+def _require_valid_python(body: str, element: syside.Element) -> None:
+    """Reject a rep body that does not parse as Python.
+
+    Validating each body on its own keeps the diagnosis attached to the
+    element that carries the broken rep.
+    """
+    try:
+        ast.parse(body)
+    except SyntaxError as error:
+        raise UnsupportedConstructError(
+            "the Python textual representation body is not valid Python: "
+            f"{error.msg} (body line {error.lineno})",
+            node=element,
+        ) from error
+
+
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
@@ -44,6 +60,7 @@ def _collect_lines(element: syside.Element) -> list[str]:
         if tr.language.strip().lower() != _PYTHON_TAG:
             continue
         _require_package_or_calc_def(element)
+        _require_valid_python(tr.body, element)
         if code:
             code.extend(("", ""))
         code.extend(tr.body.splitlines())
