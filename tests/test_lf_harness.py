@@ -16,9 +16,11 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from sysmlc.backends.rosetta.backend import RosettaBackend
-from sysmlc.backends.rosetta.builder import OUTPUT_PORT, build_program
+from sysmlc.backends.rosetta.builder import OUTPUT_PORT
 from sysmlc.backends.rosetta.parts import build_part_program
+from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
+from sysmlc.backends.rosetta.textual_representation import write_module
 from sysmlc.sysml.loading import load_model
 from sysmlc.values import configure_model
 
@@ -70,12 +72,20 @@ def compile_harness(
         )
         external = (python_file.stem, names)
         shutil.copy(python_file, src / python_file.name)
-    program = build_program(model, qn, external=external)
+    # The backend entry point also derives the external module from
+    # textual representations when no --python file is supplied.
+    program = RosettaBackend().build(model, qn, external=external)
+    assert isinstance(program, LfProgram)
     (src / f"{name}.lf").write_text(to_lf(program))
     if program.types_module_lines:
         assert program.types_module_name is not None
         (src / f"{program.types_module_name}.py").write_text(
             "\n".join(program.types_module_lines) + "\n"
+        )
+    if program.external_module_lines:
+        assert program.external_module_name is not None
+        write_module(
+            program.external_module_lines, src, program.external_module_name
         )
     (src / "Harness.lf").write_text(
         HARNESS.format(

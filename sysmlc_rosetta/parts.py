@@ -191,6 +191,7 @@ def build_part_program(
     *,
     target_options: tuple[tuple[str, str], ...] = (),
     external: tuple[str, frozenset[str]] | None = None,
+    module_source: tuple[str, tuple[str, ...]] | None = None,
 ) -> LfProgram:
     """Build the composed LF program for a top-level part usage.
 
@@ -217,6 +218,13 @@ def build_part_program(
             calc-def calls.  When supplied, ``module_stem`` and any matched
             function names are emitted as ``from <module> import <name>`` in
             the generated preamble.
+        module_source: Optional ``(module_name, source_lines)`` pair for a
+            Python module auto-extracted from SysML ``TextualRepresentation``
+            annotations (as opposed to a user-supplied ``--python`` file,
+            which the CLI copies to the output directory itself). When
+            given, it is attached to the returned program so
+            :meth:`RosettaBackend.write` writes it to disk alongside the
+            ``.lf`` file.
     """
     g = part_graph(model, usage_qn)
 
@@ -260,7 +268,7 @@ def build_part_program(
         main=main,
         target_options=target_options,
     )
-    return finalize(program, needs, external)
+    return finalize(program, needs, external, module_source)
 
 
 def _peer_accepts(

@@ -427,6 +427,9 @@ design.
 | a composing part not exhibiting **two or more named** state defs (anonymous exhibit, or a non-exhibit member) | name every exhibit                                                                                 |
 | the **same state def exhibited twice** in one part                                                            | a composition combines distinct machines                                                           |
 | cross-machine reactor / enum / payload **name collisions** across a composition's machines                    | the merged program and preamble are keyed by simple name — rename a state, machine, or item        |
+| a Python **textual representation** outside a package or calc def                                             | its text would execute at import time in the generated module (§12)                                |
+| a rep body that is not valid Python, or whose `def` does not match the calc def's name                        | fails at build naming the calc def, instead of at run time (§12)                                   |
+| **two Python reps** on one calc def, or two rep bodies defining the **same function differently**             | the generated module's namespace is flat; the last definition would silently win (§12)             |
 
 ## 12. Function calls
 
@@ -552,6 +555,116 @@ an *imported* reactor file too, so a harness importing the machine needs no
 `tests/.../test_run.py::test_part_runs_self_sufficiently_without_pythonpath`.
 The DEBUG-observation `sitecustomize.py` still rides on `PYTHONPATH` (that is
 the run enabling logging, not an import requirement).
+
+### Inline functions (textual representations)
+
+Instead of shipping a separate `--python` file, a `calc def` can carry its
+own Python body inline, as a SysML **textual representation**:
+
+```sysml
+package P {
+    calc def step {
+        in x : Real;
+        in dt : Real;
+        return : Real;
+
+        rep impl language "Python"
+        /*
+         * def step(x, dt):
+         *     return x + dt
+         */
+    }
+}
+```
+
+The body is the **whole function**: signature, body, and return. The `def`
+must be named after its calc def, because call sites and the preamble import
+resolve by simple name (the same rule `--python` modules follow). Syside
+normalizes the comment body before it reaches the generator: the delimiters,
+the per-line `*` decoration, and the common indentation margin are stripped,
+while relative indentation is preserved.
+
+When no `--python` module is supplied, the backend collects every Python rep
+in the model into one generated module named `<element>_impl.py`, written
+beside the `.lf` and listed in `files:` exactly like the companion types
+module. Building `models/sm-examples/sm15-rep` (the inline twin of
+`sm15-external`) produces:
+
+```python
+# Ramp_impl.py (generated)
+# Auto-generated from SysML TextualRepresentation bodies.
+# Do not edit — regenerate from the SysML source instead.
+
+def step(x, dt):
+    return x + dt
+```
+
+```
+target Python {
+  files: ["Ramp_impl.py"],
+}
+
+preamble {=
+  from Ramp_impl import step
+=}
+…
+      self.x = step(self.x, 0.1)
+```
+
+An explicit `--python` module **wins**: reps back the calc defs only when no
+external module is given, so a hand-written module can temporarily override
+the model's inline bodies without touching the model.
+
+**Module scaffolding lives on the package.** Shared imports, constants, and
+private helpers are written once, in a rep attached to the **package**; they
+are collected ahead of the function bodies, so the generated module reads
+like a hand-written one:
+
+```sysml
+package FurutaPendulum {
+    rep scaffolding language "Python"
+    /*
+     * import math
+     *
+     * ALPHA = 0.00260569
+     *
+     * def _sign(x):
+     *     return float((x > 0.0) - (x < 0.0))
+     */
+
+    calc def restrict_angle {
+        in theta : Real;
+        return : Real;
+
+        rep impl language "Python"
+        /*
+         * def restrict_angle(theta):
+         *     pi = math.pi
+         *     return (math.fmod(math.fabs(theta) + pi, 2 * pi) - pi) * _sign(theta)
+         */
+    }
+}
+```
+
+Because collection is model-wide (not call-site-driven), every rep-backed
+calc def lands in the same module: a body may freely call another rep-backed
+calc def, the way `swingup_torque` calls `restrict_angle` in
+`models/showcase/furuta-pendulum_inline` (the full inline twin of the furuta
+showcase). Scaffolding helpers are module-internal: they never enter the
+external-name set, so a SysML call can only bind to a calc def.
+
+The purity / determinism contract of `--python` applies unchanged: a rep
+body must be a pure, deterministic function of its inputs.
+
+**Boundaries.** The collector fails loud, naming the offending element, on:
+
+| Rejected                                                  | Why                                                                                                        |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| a Python rep on anything but a package or a calc def      | its text would land at module top level and execute at import time                                         |
+| a rep body that does not parse as Python                  | the error names the calc def and the Python line, instead of a misleading missing-function error later     |
+| a body whose `def` does not match the calc def's name     | the preamble imports the calc def's name; a mismatch would only fail at run time                           |
+| two Python reps on one calc def                           | the function body would be ambiguous; keep exactly one (reps in other languages coexist fine)              |
+| two rep bodies defining the same function **differently** | the module namespace is flat, so the last `def` would silently win; byte-identical duplicates stay allowed |
 
 ## 13. Parts, ports, and the generated main reactor
 
