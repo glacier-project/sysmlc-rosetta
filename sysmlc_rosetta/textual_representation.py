@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import textwrap
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -18,21 +17,6 @@ logger = logging.getLogger(__name__)
 _PYTHON_TAG = "python"
 
 
-def _normalize_body(body: str) -> list[str]:
-    body = textwrap.dedent(body)
-
-    lines = []
-    for line in body.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("*"):
-            line = stripped[1:]
-            if line.startswith((" ", "\t")):
-                line = line[1:]
-        lines.append(line)
-
-    return lines
-
-
 def _collect_lines(element: syside.Element) -> list[str]:
     code: list[str] = []
 
@@ -41,7 +25,7 @@ def _collect_lines(element: syside.Element) -> list[str]:
             continue
         if code:
             code.extend(("", ""))
-        code.extend(_normalize_body(tr.body))
+        code.extend(tr.body.splitlines())
 
     for child in element.owned_elements.collect():
         child_lines = _collect_lines(child)
