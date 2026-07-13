@@ -92,6 +92,22 @@ def test_identical_duplicate_helpers_stay_allowed() -> None:
     assert names == frozenset({"use_sign"})
 
 
+def test_explicit_python_module_wins_over_reps() -> None:
+    # A user-supplied --python module overrides the model's reps: no
+    # module is generated and the explicit stem backs the calls.
+    model = load_model(SM_EXAMPLES_DIR / "sm15-rep")
+    program = RosettaBackend().build(
+        model, "SM15Rep::Ramp", external=("ramp", frozenset({"step"}))
+    )
+    assert isinstance(program, LfProgram)
+    assert program.external_module_name is None
+    assert program.external_module_lines == ()
+    assert "from ramp import step" in program.preamble
+    text = to_lf(program)
+    assert '"ramp.py"' in text
+    assert '"Ramp_impl.py"' not in text
+
+
 def test_sm15_rep_backs_the_calc_call_with_a_generated_module() -> None:
     # Twin of sm15-external: same Ramp machine, but the calc body comes
     # from the rep instead of a --python file, with no external given.

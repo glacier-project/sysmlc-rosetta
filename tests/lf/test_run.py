@@ -979,6 +979,20 @@ def test_external_ramp_runs(tmp_path: Path) -> None:
     assert all(s == "run" for s in states)
 
 
+def test_rep_ramp_runs(tmp_path: Path) -> None:
+    # Twin of test_external_ramp_runs: `step` comes from the calc def's
+    # textual representation, so no --python module is supplied and the
+    # generated Ramp_impl.py backs the call.
+    states = run_machine(
+        tmp_path,
+        SM_EXAMPLES_DIR / "sm15-rep",
+        "SM15Rep::Ramp",
+        timeout="1 sec",
+    )
+    assert states, "no state announcements"
+    assert all(s == "run" for s in states)
+
+
 def test_part01_runs_and_logs(tmp_path: Path) -> None:
     logs, rc = run_part(
         tmp_path, SM_EXAMPLES_DIR / "part01-two-parts", "Part01::pingSystem"
