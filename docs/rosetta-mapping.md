@@ -584,11 +584,14 @@ normalizes the comment body before it reaches the generator: the delimiters,
 the per-line `*` decoration, and the common indentation margin are stripped,
 while relative indentation is preserved.
 
-When no `--python` module is supplied, the backend collects every Python rep
-in the model into one generated module named `<element>_impl.py`, written
-beside the `.lf` and listed in `files:` exactly like the companion types
-module. Building `models/sm-examples/sm15-rep` (the inline twin of
-`sm15-external`) produces:
+When no `--python` module is supplied, the CLI collects every Python rep in
+the model into one generated module named `<element>_impl.py` and feeds it
+through the `--python` pipeline itself: the written file is parsed for its
+top-level function names, copied beside the `.lf`, and listed in `files:`
+exactly like a user-supplied module. Because this happens at the CLI, not
+inside a backend, reps back every backend that accepts `--python`: quake
+builds and runs consume them the same way. Building
+`models/sm-examples/sm15-rep` (the inline twin of `sm15-external`) produces:
 
 ```python
 # Ramp_impl.py (generated)
@@ -650,8 +653,10 @@ Because collection is model-wide (not call-site-driven), every rep-backed
 calc def lands in the same module: a body may freely call another rep-backed
 calc def, the way `swingup_torque` calls `restrict_angle` in
 `models/showcase/furuta-pendulum_inline` (the full inline twin of the furuta
-showcase). Scaffolding helpers are module-internal: they never enter the
-external-name set, so a SysML call can only bind to a calc def.
+showcase). Scaffolding helpers enter the external-name set like any function
+in a `--python` module, but a SysML call site can only reference a `calc def`
+declared in the model, so a helper backs a call only when a calc def of that
+name exists.
 
 The purity / determinism contract of `--python` applies unchanged: a rep
 body must be a pure, deterministic function of its inputs.
