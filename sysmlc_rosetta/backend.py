@@ -11,10 +11,6 @@ from sysmlc.backends.rosetta.codegen import PreambleNeeds
 from sysmlc.backends.rosetta.parts import build_part_program, compose_exhibits
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.backends.rosetta.textual_representation import (
-    extract_textual,
-    write_module,
-)
 from sysmlc.errors import SerializationError, UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import machine_interface
 from sysmlc.sysml.queries import exhibited_state_defs, resolve
@@ -25,24 +21,6 @@ if TYPE_CHECKING:
     import syside
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_external(
-    model: syside.Model,
-    scope_qn: str,
-    explicit_external: tuple[str, frozenset[str]] | None,
-) -> tuple[
-    tuple[str, frozenset[str]] | None, tuple[str, tuple[str, ...]] | None
-]:
-    if explicit_external is not None:
-        return explicit_external, None
-
-    extracted = extract_textual(model, scope_qn)
-    if extracted is None:
-        return None, None
-
-    module_name, names, source_lines = extracted
-    return (module_name, names), (module_name, source_lines)
 
 
 class RosettaBackend(Backend):
@@ -67,15 +45,7 @@ class RosettaBackend(Backend):
         external: tuple[str, frozenset[str]] | None = None,
     ) -> object:
         """Build the Lingua Franca program for the given state definition."""
-        resolved_external, module_info = _resolve_external(
-            model, element_qn, external
-        )
-        return build_program(
-            model,
-            element_qn,
-            external=resolved_external,
-            module_source=module_info,
-        )
+        return build_program(model, element_qn, external=external)
 
     def build_composition(
         self,
@@ -122,13 +92,8 @@ class RosettaBackend(Backend):
         composite_name = rig_qn.split("::")[-1]
         needs = PreambleNeeds()
         needs.types_module = f"{composite_name}_types"
-        resolved_external, module_info = _resolve_external(
-            model, rig_qn, external
-        )
-        if resolved_external is not None:
-            needs.register_external(
-                module=resolved_external[0], names=resolved_external[1]
-            )
+        if external is not None:
+            needs.register_external(module=external[0], names=external[1])
         children, composite = compose_exhibits(
             model,
             composite_name,
@@ -139,7 +104,7 @@ class RosettaBackend(Backend):
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
         )
-        return finalize(program, needs, resolved_external, module_info)
+        return finalize(program, needs, external)
 
     def build_part(
         self,
@@ -158,15 +123,11 @@ class RosettaBackend(Backend):
             external: Optional ``(module_stem, function_names)`` pair for
                 ``--python`` external calc-def backing.
         """
-        resolved_external, module_info = _resolve_external(
-            model, usage_qn, external
-        )
         return build_part_program(
             model,
             usage_qn,
             target_options=target_options,
-            external=resolved_external,
-            module_source=module_info,
+            external=external,
         )
 
     @override
@@ -204,14 +165,6 @@ class RosettaBackend(Backend):
             )
             module_path.write_text(
                 "\n".join(artifact.types_module_lines) + "\n"
-            )
-            written.append(module_path)
-        if artifact.external_module_lines:
-            assert artifact.external_module_name is not None
-            module_path = write_module(
-                artifact.external_module_lines,
-                options.output_dir,
-                artifact.external_module_name,
             )
             written.append(module_path)
         return written

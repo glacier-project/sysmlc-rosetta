@@ -9,7 +9,6 @@ with ``lfc``, and runs the produced binary.  Imported by the tests under
 
 from __future__ import annotations
 
-import ast
 import os
 import shutil
 import subprocess
@@ -20,8 +19,12 @@ from sysmlc.backends.rosetta.builder import OUTPUT_PORT
 from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.backends.rosetta.textual_representation import write_module
 from sysmlc.sysml.loading import load_model
+from sysmlc.sysml.textual_representation import (
+    extract_textual,
+    module_function_names,
+    write_module,
+)
 from sysmlc.values import configure_model
 
 if TYPE_CHECKING:
@@ -65,15 +68,14 @@ def compile_harness(
     src.mkdir()
     external = None
     if python_file is not None:
-        names = frozenset(
-            n.name
-            for n in ast.parse(python_file.read_text()).body
-            if isinstance(n, ast.FunctionDef)
-        )
-        external = (python_file.stem, names)
+        external = (python_file.stem, module_function_names(python_file))
         shutil.copy(python_file, src / python_file.name)
-    # The backend entry point also derives the external module from
-    # textual representations when no --python file is supplied.
+    else:
+        extracted = extract_textual(model, qn)
+        if extracted is not None:
+            stem, src_lines = extracted
+            module_path = write_module(src_lines, src, stem)
+            external = (stem, module_function_names(module_path))
     program = RosettaBackend().build(model, qn, external=external)
     assert isinstance(program, LfProgram)
     (src / f"{name}.lf").write_text(to_lf(program))
@@ -81,11 +83,6 @@ def compile_harness(
         assert program.types_module_name is not None
         (src / f"{program.types_module_name}.py").write_text(
             "\n".join(program.types_module_lines) + "\n"
-        )
-    if program.external_module_lines:
-        assert program.external_module_name is not None
-        write_module(
-            program.external_module_lines, src, program.external_module_name
         )
     (src / "Harness.lf").write_text(
         HARNESS.format(
@@ -248,12 +245,7 @@ def run_part(
     model = load_model(model_dir)
     external = None
     if python_file is not None:
-        names = frozenset(
-            n.name
-            for n in ast.parse(python_file.read_text()).body
-            if isinstance(n, ast.FunctionDef)
-        )
-        external = (python_file.stem, names)
+        external = (python_file.stem, module_function_names(python_file))
     program = build_part_program(
         model,
         usage_qn,

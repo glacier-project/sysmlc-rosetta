@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 import syside
 
-from sysmlc.backends.rosetta.textual_representation import (
+from sysmlc.sysml.textual_representation import (
     extract_textual,
     write_module,
 )
@@ -44,7 +44,7 @@ def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
         model, "furuta::physics", module_name="furuta_physics_inline"
     )
     assert result is not None
-    stem, _, src_lines = result
+    stem, src_lines = result
 
     write_module(src_lines, out, stem)
 
