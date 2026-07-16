@@ -734,7 +734,7 @@ class RosettaBuilder:
                 continue
             if isinstance(trigger, SignalTrigger):
                 signals.setdefault(t.source, set()).add(trigger.signal_name)
-            elif isinstance(trigger, AfterTrigger):
+            elif isinstance(trigger, (AfterTrigger, AtTrigger)):
                 afters[t.source] = afters.get(t.source, 0) + 1
         out: set[str] = set()
         for source in set(signals) | set(afters):
@@ -803,6 +803,8 @@ class RosettaBuilder:
         eventless: list[TransitionFact] = []
         signal_groups: dict[str, list[TransitionFact]] = {}
         afters: list[TransitionFact] = []
+        ats: list[TransitionFact] = []
+        whens: list[TransitionFact] = []
         for transition in outgoing:
             trigger = transition.trigger
             if trigger is None:
@@ -813,13 +815,18 @@ class RosettaBuilder:
                 )
             elif isinstance(trigger, AfterTrigger):
                 afters.append(transition)
+            elif isinstance(trigger, AtTrigger):
+                ats.append(transition)
             else:
-                kind = "at" if isinstance(trigger, AtTrigger) else "when"
-                raise UnsupportedConstructError(
-                    f"an `accept {kind}` trigger is "
-                    "unsupported by rosetta; only signal and relative "
-                    "`accept after` triggers are supported."
-                )
+                whens.append(transition)
+        if whens:
+            # `accept when` codegen lands in a later slice; bucketed above
+            # (for that slice to consume) but still rejected for now.
+            raise UnsupportedConstructError(
+                "an `accept when` trigger is unsupported by rosetta; only "
+                "signal and relative `accept after`/absolute `accept at` "
+                "triggers are supported."
+            )
 
         # Observation exit log: prepended to BOTH exit-statement threads (the
         # default one below and the payload-aware ``group_exit`` for signal
@@ -841,7 +848,9 @@ class RosettaBuilder:
             actions.require_inline_one_shot(fact.do_action)
             entry_body += self._statements(fact.do_action, gen)
 
-        multi = len(signal_groups) + len(afters) >= 2
+        multi = (
+            len(signal_groups) + len(afters) + len(ats) + len(whens) >= 2
+        )
         fired_flag = f"{simple}_fired" if multi else None
         if fired_flag is not None:
             # Child-scope reactors are instantiated inside a parent `reset`
@@ -888,6 +897,46 @@ class RosettaBuilder:
                     pos[id(transition)],
                     self._reaction(
                         (trigger_name,),
+                        targets,
+                        tuple(body),
+                        sent,
+                        self._scope_ports(scope),
+                    ),
+                )
+            )
+
+        for index, transition in enumerate(ats):
+            assert isinstance(transition.trigger, AtTrigger)
+            instant = transition.trigger.instant
+            action_name = (
+                f"at_{simple}_act"
+                if len(ats) == 1
+                else f"at_{simple}_{index}_act"
+            )
+            mode_actions.append(LogicalAction(action_name))
+            if isinstance(instant, float):
+                instant_ns = str(round(instant * 1e9))
+            else:
+                instant_ns = f"int(({gen.render_expression(instant)}) * 1e9)"
+            entry_body.append(
+                f"_at_delta = {instant_ns} - lf.time.logical_elapsed()"
+            )
+            entry_body.append("if _at_delta >= 0:")
+            entry_body.append(f"{_PY_INDENT}{action_name}.schedule(_at_delta)")
+            entry_effects.append(action_name)
+            body, targets = self._dispatch(
+                [transition], exit_stmts, scope, gen, fired=fired_flag
+            )
+            if fired_flag is not None:
+                body = [
+                    f"if not self.{fired_flag}:",
+                    *(f"{_PY_INDENT}{line}" for line in body),
+                ]
+            ordered.append(
+                (
+                    pos[id(transition)],
+                    self._reaction(
+                        (action_name,),
                         targets,
                         tuple(body),
                         sent,

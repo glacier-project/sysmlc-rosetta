@@ -9,7 +9,6 @@ from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.facts import (
     AttributeBinding,
     AttributeDirection,
-    AtTrigger,
     StateFact,
     StateKind,
     TransitionFact,
@@ -115,11 +114,10 @@ def test_payload_referencing_guard_builds_and_binds() -> None:
 @pytest.mark.parametrize(
     "trigger",
     [
-        AtTrigger(instant=0.0),
         WhenTrigger(condition=cast("syside.Expression", object())),
     ],
 )
-def test_at_and_when_triggers_are_rejected(trigger: Trigger) -> None:
+def test_when_trigger_is_rejected(trigger: Trigger) -> None:
     builder = RosettaBuilder("Machine")
     builder.add_state(_root())
     builder.add_state(_leaf("idle"))

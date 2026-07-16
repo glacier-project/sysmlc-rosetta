@@ -254,6 +254,28 @@ def test_sm13_chained_duration_renders_chain() -> None:
     assert any("self.holder.delay" in line for line in entry.body)
 
 
+def test_sm13_at_arms_scheduled_action_from_entry() -> None:
+    program = _build("sm13-time-trigger", "SM13::MachineAt")
+    idle = _mode(program, "idle")
+    assert any(a.name == "at_idle_act" for a in idle.actions)
+    entry = idle.reactions[0]
+    assert "at_idle_act" in entry.effects
+    assert any("lf.time.logical_elapsed()" in line for line in entry.body)
+    assert any("at_idle_act.schedule(" in line for line in entry.body)
+    # a dedicated reaction fires the transition off the scheduled action
+    (fire,) = [r for r in idle.reactions if r.triggers == ("at_idle_act",)]
+    assert "reset(running)" in fire.effects
+
+
+def test_sm13_at_reentry_guards_negative_delta() -> None:
+    # Re-entry after the instant passed must not fire: the schedule is gated
+    # on a non-negative delta.
+    program = _build("sm13-time-trigger", "SM13::MachineAtReentry")
+    idle = _mode(program, "idle")
+    entry = idle.reactions[0]
+    assert any(">= 0" in line for line in entry.body)
+
+
 # -- after + if: supported by rosetta although quake must reject it --
 
 
