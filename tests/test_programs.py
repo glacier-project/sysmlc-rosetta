@@ -277,11 +277,12 @@ def test_sm13_at_reentry_guards_negative_delta() -> None:
 
 
 def test_at_literal_instant_renders_nanosecond_constant() -> None:
-    # `accept at deadline + 2 [s]` is not a bare attribute reference, so the
-    # instant is folded to a Python float at build time (`deadline`'s default
-    # of 4 [s] plus the 2 [s] offset); this exercises the literal-float
-    # branch of the `at` renderer (`instant_ns = str(round(instant * 1e9))`),
-    # as opposed to `accept at deadline` (SM13::MachineAt), which renders the
+    # `accept at deadlineTime + 2 [s]` is not a bare attribute reference, so
+    # the instant is folded to a Python float at build time (`deadlineTime`'s
+    # default of 4 [s] plus the 2 [s] offset); this exercises the
+    # literal-float branch of the `at` renderer
+    # (`instant_ns = str(round(instant * 1e9))`), as opposed to
+    # `accept at deadlineTime` (SM13::MachineAt), which renders the
     # attribute-reference expression form instead.
     model = load_model(FIXTURES_DIR / "at-literal")
     program = build_program(model, "AtLiteral::Machine")
