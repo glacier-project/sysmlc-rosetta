@@ -506,3 +506,54 @@ def test_dispatch_fired_sets_flag_per_branch() -> None:
     # Without `fired`, no flag write appears.
     body2, _ = b._dispatch(group, [], "", gen)
     assert not any("idle_fired" in line for line in body2)
+
+
+# -- sm16: accept when change triggers --
+
+
+def test_sm16_bare_when_arms_and_checks_on_change() -> None:
+    program = _build("sm16-change-trigger", "SM16::MachineWhenBare")
+    reactor = program.reactor
+    assert any(a.name == "_change_act" for a in reactor.actions)
+    idle = _mode(program, "idle")
+    assert any(v.name == "idle_w_armed" for v in reactor.state_vars)
+    entry = idle.reactions[0]
+    assert "_change_act.schedule(0)" in entry.body
+    assert "_change_act" in entry.effects
+    (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
+    assert "if not self.idle_w_armed:" in chk.body
+    assert any("if (self.hot):" in line for line in chk.body)
+    assert any("self.idle_w_armed = True" in line for line in chk.body)
+    assert "reset(running)" in chk.effects
+
+
+def test_sm16_guarded_when_consumes_before_guard() -> None:
+    # consume-on-false-guard: armed is set when the CONDITION holds, before
+    # the guard is evaluated, so a false guard still consumes the occurrence.
+    program = _build("sm16-change-trigger", "SM16::MachineWhenGuard")
+    idle = _mode(program, "idle")
+    (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
+    body = "\n".join(chk.body)
+    armed_idx = body.index("self.idle_w_armed = True")
+    guard_idx = body.index("if self.enabled:")
+    assert armed_idx < guard_idx
+
+
+def test_sm16_notification_scheduled_after_attribute_assignment() -> None:
+    # A model whose transition effect assigns a watched attribute schedules
+    # the change action from that reaction. MachineWhenComposed's `running`
+    # completion does not assign; use MachineWhenTwo which has two whens but
+    # no assignment, so only entry arming schedules. Assert the machine with
+    # a self-driving assignment (WhenCounter fixture, Task 4) instead.
+    program = _build("sm16-change-trigger", "SM16::MachineWhenComposed")
+    idle = _mode(program, "idle")
+    (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
+    # the composed condition is watched as a whole
+    assert any(
+        "if (self.hot and self.enabled):" in line for line in chk.body
+    )
+
+
+def test_no_change_action_without_when() -> None:
+    program = _build("sm01-helloworld", "SM01::Machine")
+    assert not any(a.name == "_change_act" for a in program.reactor.actions)
