@@ -292,10 +292,14 @@ class RosettaBuilder:
         """Schedule the change-notify action after each attribute assignment.
 
         ``accept when`` observations are re-checked one microstep after any
-        root-scope attribute changes: every reaction whose body assigns a
-        bound attribute schedules ``_change_act`` (a reactor-level logical
-        action) and declares it as an effect, and each ``when``-source mode
-        reacts to it. Emitted only when the machine has >=1 ``when`` trigger.
+        root-scope attribute changes: a ``_change_act.schedule(0)`` is inserted
+        immediately after every line that assigns a bound attribute, at that
+        line's own indentation, so an assignment nested under a guard notifies
+        only when it actually runs (a top-level notify would re-fire a
+        ``_change_act``-triggered check reaction every activation and loop
+        forever at frozen logical time). ``_change_act`` is declared an effect
+        of any reaction that gains a notify. Emitted only when the machine has
+        >=1 ``when`` trigger.
         """
         if not self._has_when:
             return machine
@@ -303,17 +307,20 @@ class RosettaBuilder:
         notify = f"{CHANGE_ACT}.schedule(0)"
 
         def patched(reaction: Reaction) -> Reaction:
-            mutates = any(
-                marker in line for line in reaction.body for marker in markers
-            )
-            if not mutates or notify in reaction.body:
+            new_body: list[str] = []
+            changed = False
+            for line in reaction.body:
+                new_body.append(line)
+                if any(marker in line for marker in markers):
+                    indent = line[: len(line) - len(line.lstrip())]
+                    new_body.append(f"{indent}{notify}")
+                    changed = True
+            if not changed:
                 return reaction
             return replace(
                 reaction,
-                effects=tuple(
-                    dict.fromkeys((*reaction.effects, CHANGE_ACT))
-                ),
-                body=(*reaction.body, notify),
+                effects=tuple(dict.fromkeys((*reaction.effects, CHANGE_ACT))),
+                body=tuple(new_body),
             )
 
         reactions = tuple(patched(r) for r in machine.reactions)

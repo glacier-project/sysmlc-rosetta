@@ -539,7 +539,7 @@ def test_sm16_guarded_when_consumes_before_guard() -> None:
     assert armed_idx < guard_idx
 
 
-def test_sm16_notification_scheduled_after_attribute_assignment() -> None:
+def test_sm16_composed_condition_watched_whole() -> None:
     # A model whose transition effect assigns a watched attribute schedules
     # the change action from that reaction. MachineWhenComposed's `running`
     # completion does not assign; use MachineWhenTwo which has two whens but
@@ -551,6 +551,32 @@ def test_sm16_notification_scheduled_after_attribute_assignment() -> None:
     # the composed condition is watched as a whole
     assert any(
         "if (self.hot and self.enabled):" in line for line in chk.body
+    )
+
+
+def test_change_notify_is_gated_by_the_assigning_branch() -> None:
+    # A `when`-transition whose effect assigns a watched attribute must schedule
+    # _change_act right after the assignment (inside the guard), NOT once at the
+    # reaction's top level -- a top-level notify would re-fire this
+    # _change_act-triggered check reaction forever.
+    program = build_program(
+        load_model(FIXTURES_DIR / "when-assign"), "WhenAssign::Machine"
+    )
+    idle = _mode(program, "idle")
+    (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
+    assert "_change_act" in chk.effects
+    assign_i = next(
+        i for i, line in enumerate(chk.body) if "self.count = " in line
+    )
+    assign_line = chk.body[assign_i]
+    indent = assign_line[: len(assign_line) - len(assign_line.lstrip())]
+    # the notify immediately follows the assignment, at the same (guarded) indent
+    assert chk.body[assign_i + 1] == f"{indent}_change_act.schedule(0)"
+    # and every notify in the check reaction is indented (none unconditional)
+    assert all(
+        line.startswith(" ")
+        for line in chk.body
+        if line.strip() == "_change_act.schedule(0)"
     )
 
 
