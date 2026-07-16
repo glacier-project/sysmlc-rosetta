@@ -276,6 +276,24 @@ def test_sm13_at_reentry_guards_negative_delta() -> None:
     assert any(">= 0" in line for line in entry.body)
 
 
+def test_at_literal_instant_renders_nanosecond_constant() -> None:
+    # `accept at deadline + 2 [s]` is not a bare attribute reference, so the
+    # instant is folded to a Python float at build time (`deadline`'s default
+    # of 4 [s] plus the 2 [s] offset); this exercises the literal-float
+    # branch of the `at` renderer (`instant_ns = str(round(instant * 1e9))`),
+    # as opposed to `accept at deadline` (SM13::MachineAt), which renders the
+    # attribute-reference expression form instead.
+    model = load_model(FIXTURES_DIR / "at-literal")
+    program = build_program(model, "AtLiteral::Machine")
+    idle = _mode(program, "idle")
+    entry = idle.reactions[0]
+    assert any(
+        "_at_delta = 6000000000 - lf.time.logical_elapsed()" in line
+        for line in entry.body
+    )
+    assert not any("int((" in line for line in entry.body)
+
+
 # -- after + if: supported by rosetta although quake must reject it --
 
 
