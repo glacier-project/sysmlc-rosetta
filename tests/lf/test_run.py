@@ -1063,6 +1063,36 @@ def test_sm13_at_reentry_after_instant_does_not_fire(tmp_path: Path) -> None:
     assert states == ["idle", "away", "idle"]
 
 
+def test_when_counter_fires_when_condition_reached(tmp_path: Path) -> None:
+    # `n` starts 0, +1 on each idle entry; the 1-sec self-loop re-enters idle
+    # until `n >= 3`, at which point the change trigger wins and completes.
+    states = run_machine(
+        tmp_path,
+        FIXTURES_DIR / "when-counter",
+        "WhenCounter::Machine",
+        timeout="12 sec",
+    )
+    assert states[0] == "idle"
+    assert "running" in states
+    assert states[-1] == "done"
+
+
+def test_when_assign_loop_terminates(tmp_path: Path) -> None:
+    # A `when`-transition whose effect assigns a watched attribute must NOT
+    # loop forever at frozen logical time (the gated change-notify fix). The
+    # after-self-loop bumps `n` until `n >= 2`, then the change trigger fires,
+    # assigns `n`, and completes -- quickly, not via the 120s subprocess kill.
+    states = run_machine(
+        tmp_path,
+        FIXTURES_DIR / "when-assign-loop",
+        "WhenAssignLoop::Machine",
+        timeout="10 sec",
+    )
+    assert states[0] == "idle"
+    assert "running" in states
+    assert states[-1] == "done"
+
+
 def test_part01_silent_without_debug(tmp_path: Path) -> None:
     # Without the run enabling DEBUG, the generated program emits no
     # observation lines (spec 5.5: silent unless the run turns DEBUG on).

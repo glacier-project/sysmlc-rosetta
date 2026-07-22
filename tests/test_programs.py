@@ -540,11 +540,10 @@ def test_sm16_guarded_when_consumes_before_guard() -> None:
 
 
 def test_sm16_composed_condition_watched_whole() -> None:
-    # A model whose transition effect assigns a watched attribute schedules
-    # the change action from that reaction. MachineWhenComposed's `running`
-    # completion does not assign; use MachineWhenTwo which has two whens but
-    # no assignment, so only entry arming schedules. Assert the machine with
-    # a self-driving assignment (WhenCounter fixture, Task 4) instead.
+    # MachineWhenComposed's `accept when hot and enabled` is a single
+    # composed boolean condition, not two independent triggers: the change
+    # check must watch the conjunction as one expression rather than
+    # emitting a separate guard per operand.
     program = _build("sm16-change-trigger", "SM16::MachineWhenComposed")
     idle = _mode(program, "idle")
     (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
