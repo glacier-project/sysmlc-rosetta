@@ -896,9 +896,7 @@ class RosettaBuilder:
             actions.require_inline_one_shot(fact.do_action)
             entry_body += self._statements(fact.do_action, gen)
 
-        multi = (
-            len(signal_groups) + len(afters) + len(ats) + len(whens) >= 2
-        )
+        multi = len(signal_groups) + len(afters) + len(ats) + len(whens) >= 2
         fired_flag = f"{simple}_fired" if multi else None
         if fired_flag is not None:
             # Child-scope reactors are instantiated inside a parent `reset`

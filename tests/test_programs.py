@@ -548,9 +548,7 @@ def test_sm16_composed_condition_watched_whole() -> None:
     idle = _mode(program, "idle")
     (chk,) = [r for r in idle.reactions if r.triggers == ("_change_act",)]
     # the composed condition is watched as a whole
-    assert any(
-        "if (self.hot and self.enabled):" in line for line in chk.body
-    )
+    assert any("if (self.hot and self.enabled):" in line for line in chk.body)
 
 
 def test_change_notify_is_gated_by_the_assigning_branch() -> None:
