@@ -43,6 +43,7 @@ from sysmlc.semantics.statemachine.facts import (
     TransitionFact,
     WhenTrigger,
 )
+from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.sysml.queries import feature_value
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,10 @@ class RosettaBuilder:
         self._accepted: dict[str, dict[str, None]] = {}
         self._handled: dict[str, set[str]] = {}
         self._sent_by_scope: dict[str, dict[str, None]] = {}
+        # scope -> signals with a self-directed (no-`via`) send in that
+        #   scope; exactly the signals whose `<sig>_act` render_send
+        #   schedules.
+        self._self_sched_by_scope: dict[str, set[str]] = {}
         # scope -> signals whose {sig}_consumed flag this scope's reactor
         #   outputs (set by an inner transition here, or re-emitted from a
         #   child). Empty unless a cross-level priority conflict exists.
@@ -158,9 +163,6 @@ class RosettaBuilder:
         # _port_sigs: machine-level sends that become output ports
         #   (root exports).
         self._port_sigs: frozenset[str] = frozenset()
-        # _self_sigs: ported sigs ALSO accepted locally → render both
-        #   a port set and a self-event.
-        self._self_sigs: frozenset[str] = frozenset()
         # _omitted_inputs: signals dropped from input ports; deliberately
         #   identity-equal to _port_sigs today (named separately because
         #   use sites read "interface rule" vs "codegen rule").
@@ -466,6 +468,10 @@ class RosettaBuilder:
                 self._sent_by_scope.setdefault(scope, {}).setdefault(
                     event_name, None
                 )
+                if send_via_port(action) is None:
+                    self._self_sched_by_scope.setdefault(scope, set()).add(
+                        event_name
+                    )
                 payload = action.payload_argument
                 if isinstance(payload, syside.ConstructorExpression):
                     item_type = payload.instantiated_type
@@ -493,11 +499,6 @@ class RosettaBuilder:
         self._port_sigs = frozenset(self._exported.get("", {}))
         # Intentional alias; see __init__ docstring for the field.
         self._omitted_inputs = self._port_sigs
-        self._self_sigs = frozenset(
-            sig
-            for sig in self._port_sigs
-            if any(sig in handled for handled in self._handled.values())
-        )
 
     # -- attributes -> parameters and state variables --
 
@@ -659,11 +660,8 @@ class RosettaBuilder:
             )
             reactions = []
             name = self._reactor_name(scope)
-        sent_self = [
-            sig
-            for sig in sent
-            if sig not in self._port_sigs or sig in self._self_sigs
-        ]
+        sched = self._self_sched_by_scope.get(scope, set())
+        sent_self = [sig for sig in sent if sig in sched]
         action_list = [LogicalAction(f"{sig}_act") for sig in sent_self]
         if is_root and self._has_when:
             action_list.append(LogicalAction(CHANGE_ACT))
@@ -740,11 +738,8 @@ class RosettaBuilder:
         parameters, state_vars = self._attribute_split()
         state_vars += [StateVar(flag, "False", reset=True) for flag in flags]
         ported = tuple(self._exported.get("", {}))
-        sent_self = [
-            sig
-            for sig in sent
-            if sig not in self._port_sigs or sig in self._self_sigs
-        ]
+        sched = self._self_sched_by_scope.get("", set())
+        sent_self = [sig for sig in sent if sig in sched]
         return Reactor(
             name=self._name,
             parameters=tuple(parameters),
@@ -1035,12 +1030,26 @@ class RosettaBuilder:
 
         for signal, group in signal_groups.items():
             triggers: tuple[str, ...]
-            if signal in self._omitted_inputs:
-                triggers = (f"{signal}_act",)
-            elif signal in sent:
-                triggers = (signal, f"{signal}_act")
-            else:
-                triggers = (signal,)
+            is_input = signal not in self._omitted_inputs
+            is_self_sched = signal in self._self_sched_by_scope.get(scope, set())
+            trig: list[str] = []
+            if is_input:
+                trig.append(signal)
+            if is_self_sched:
+                trig.append(f"{signal}_act")
+            if not trig:
+                # Peer-sent (an output, omitted from inputs) with no
+                # self-directed send: nothing can deliver this signal to the
+                # machine, so the local accept is unreachable. Drop it.
+                logger.warning(
+                    "accept of %r in %r is unreachable: the signal is only "
+                    "sent out (via a port) and has no self-directed send to "
+                    "deliver it locally; the transition is dropped",
+                    signal,
+                    self._name,
+                )
+                continue
+            triggers = tuple(trig)
             payload_names = {
                 t.trigger.payload_name
                 for t in group
@@ -1056,15 +1065,15 @@ class RosettaBuilder:
             group_gen = gen
             if payload_names:
                 (payload_name,) = payload_names
-                if signal in self._omitted_inputs:
-                    value = f"{signal}_act.value"
-                elif signal in sent:
+                if is_input and is_self_sched:
                     value = (
                         f"({signal}.value if {signal}.is_present "
                         f"else {signal}_act.value)"
                     )
-                else:
+                elif is_input:
                     value = f"{signal}.value"
+                else:
+                    value = f"{signal}_act.value"
                 prelude = [f"{payload_name} = {value}"]
                 group_gen = self._make_codegen(
                     self._scope_attribute_names(scope),
@@ -1498,8 +1507,10 @@ def finalize(
     options = program.target_options + ((file_opt,) if file_opt else ())
     for event_name, port in sorted(needs.undeliverable_sends):
         logger.warning(
-            "send %r via %r has no connected peer; the signal is not "
-            "delivered (use `send ... to <own port>` for a self-event)",
+            "machine %r: send %r via %r has no connected peer; the signal "
+            "is not delivered (use `send ... to <own port>` for a "
+            "self-event)",
+            program.reactor.name,
             event_name,
             port,
         )

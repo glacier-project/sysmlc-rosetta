@@ -160,6 +160,37 @@ def test_standalone_via_send_warns(caplog) -> None:
         r.name == logger_name
         and "Report" in r.message
         and "commPort" in r.message
+        and "Counter" in r.message
+        for r in caplog.records
+    )
+
+
+def test_overlap_build_emits_no_undriven_action() -> None:
+    program = _build_peer(
+        FIXTURES_DIR / "rig-overlap", "RigOverlap::Pulser", frozenset({"Tick"})
+    )
+    text = to_lf(program)
+    assert "Tick.set(True)" in text  # peer delivery still works
+    assert "logical action Tick_act" not in text  # no undriven action
+    assert "reaction(Tick_act)" not in text  # no unreachable reaction
+
+
+def test_standalone_via_drop_emits_no_undriven_action() -> None:
+    text = to_lf(
+        build_program(load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter")
+    )
+    assert "logical action Report_act" not in text
+    assert "Report_act" not in text
+
+
+def test_unreachable_local_accept_warns(caplog) -> None:
+    logger_name = "sysmlc.backends.rosetta.builder"
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        _build_peer(
+            FIXTURES_DIR / "rig-overlap", "RigOverlap::Pulser", frozenset({"Tick"})
+        )
+    assert any(
+        r.name == logger_name and "Tick" in r.message and "unreachable" in r.message
         for r in caplog.records
     )
 
