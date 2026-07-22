@@ -151,6 +151,17 @@ def test_standalone_via_send_is_dropped() -> None:
     assert "Report.set" not in text
 
 
+def test_standalone_via_send_warns(caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="sysmlc.backends.rosetta.builder"):
+        build_program(load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter")
+    assert any(
+        "Report" in r.message and "commPort" in r.message
+        for r in caplog.records
+    )
+
+
 def test_rig_program_composes_bench_reactor() -> None:
     model = load_model(FIXTURES_DIR / "rig-pair")
     program = RosettaBackend().build_composition(model, "RigPair::PlantRig")

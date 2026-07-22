@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 import syside
@@ -43,6 +44,8 @@ from sysmlc.semantics.statemachine.facts import (
     WhenTrigger,
 )
 from sysmlc.sysml.queries import feature_value
+
+logger = logging.getLogger(__name__)
 
 OUTPUT_PORT = "current_state"
 COMPLETED_PORT = "completed"
@@ -1494,6 +1497,13 @@ def finalize(
         external[0] if external is not None else None,
     )
     options = program.target_options + ((file_opt,) if file_opt else ())
+    for event_name, port in sorted(needs.undeliverable_sends):
+        logger.warning(
+            "send %r via %r has no connected peer; the signal is not "
+            "delivered (use `send ... to <own port>` for a self-event)",
+            event_name,
+            port,
+        )
     return replace(
         program,
         target_options=options,
