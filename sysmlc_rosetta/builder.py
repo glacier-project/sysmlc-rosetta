@@ -594,7 +594,6 @@ class RosettaBuilder:
             attribute_names,
             needs=self._needs,
             port_signals=self._port_sigs,
-            self_signals=self._self_sigs,
             local_names=local_names,
         )
 

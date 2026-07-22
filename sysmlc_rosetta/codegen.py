@@ -252,9 +252,6 @@ class LfPythonCodeGen(PythonCodeGen):
         port_signals: Signals a connected peer accepts, so a ``via`` send of
             one sets the LF output port; a ``via`` send of any other signal
             is dropped and recorded in ``needs.undeliverable_sends``.
-        self_signals: Port signals (subset of ``port_signals``) that this
-            machine also accepts itself, so the send both sets the port and
-            schedules the self-event.
     """
 
     def __init__(
@@ -266,7 +263,6 @@ class LfPythonCodeGen(PythonCodeGen):
         self_prefix: bool = True,
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
-        self_signals: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__(context)
         self._attribute_names = attribute_names
@@ -274,7 +270,6 @@ class LfPythonCodeGen(PythonCodeGen):
         self._self_prefix = self_prefix
         self._local_names = local_names
         self._port_signals = port_signals
-        self._self_signals = self_signals
 
     @override
     def _emit_feature_reference(
