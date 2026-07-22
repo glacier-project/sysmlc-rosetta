@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -152,12 +153,13 @@ def test_standalone_via_send_is_dropped() -> None:
 
 
 def test_standalone_via_send_warns(caplog) -> None:
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="sysmlc.backends.rosetta.builder"):
+    logger_name = "sysmlc.backends.rosetta.builder"
+    with caplog.at_level(logging.WARNING, logger=logger_name):
         build_program(load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter")
     assert any(
-        "Report" in r.message and "commPort" in r.message
+        r.name == logger_name
+        and "Report" in r.message
+        and "commPort" in r.message
         for r in caplog.records
     )
 
