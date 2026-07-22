@@ -6,6 +6,10 @@ import syside
 
 from sysmlc.codegen.python import PythonCodeGen, payload_signature
 from sysmlc.errors import UnsupportedConstructError
+from sysmlc.semantics.statemachine.interface import (
+    send_receiver_is_own_port,
+    send_via_port,
+)
 
 if TYPE_CHECKING:
     from sysmlc.codegen.python import PythonCodeGenContext
@@ -87,6 +91,9 @@ class PreambleNeeds:
         self.external_module: str | None = None
         self.external_names: frozenset[str] = frozenset()
         self.used_external: set[str] = set()
+        # (event_name, via_port) for `via` sends with no connected peer;
+        # surfaced as build warnings (see builder.finalize).
+        self.undeliverable_sends: set[tuple[str, str]] = set()
 
     def register_enum(self, literal: syside.EnumerationUsage) -> str:
         """Register the literal's enum def; return ``Def.literal`` source.
@@ -242,9 +249,9 @@ class LfPythonCodeGen(PythonCodeGen):
             that renders outside of any reaction method.
         local_names: Names that are in scope as plain locals (e.g. accept
             payload parameters) and must not receive a ``self.`` prefix.
-        port_signals: Sent signals that a peer machine accepts, so the send
-            sets an LF output port instead of (or alongside) scheduling a
-            self-event.
+        port_signals: Signals a connected peer accepts, so a ``via`` send of
+            one sets the LF output port; a ``via`` send of any other signal
+            is dropped and recorded in ``needs.undeliverable_sends``.
         self_signals: Port signals (subset of ``port_signals``) that this
             machine also accepts itself, so the send both sets the port and
             schedules the self-event.
@@ -334,74 +341,73 @@ class LfPythonCodeGen(PythonCodeGen):
 
     @override
     def render_send(self, send: syside.SendActionUsage) -> str:
-        """Translate a send into a port set, a self-event, or both.
+        """Translate a send by its declared receiver (SysML/KerML semantics).
 
-        Three forms are emitted, selected by the signal sets:
+        - A ``to`` receiver that is not the machine's own port is
+          cross-machine addressing and is rejected (route with ``via`` + a
+          ``connect`` instead).
+        - A ``via`` send routes over the port's connections: it sets the LF
+          output port when a connected peer accepts the signal, and is
+          dropped (recorded for a build warning) otherwise. It never also
+          schedules a self-event -- one send is one transfer.
+        - A ``to <own port>`` send (or a bare send) is an internal
+          self-event: ``<Event>_act.schedule(0[, <payload>])``.
 
-        - **Default** (signal not in ``port_signals``): schedule the
-          signal's logical action, ``<Event>_act.schedule(0[, <Event>(...)])``;
-          the zero delay makes the event visible at the next microstep, like
-          an internally raised event.
-        - **Port-only** (signal in ``port_signals`` but not
-          ``self_signals``): a peer accepts the signal and this machine does
-          not, so set the LF output port, ``<Event>.set(<payload or True>)``.
-        - **Overlap** (signal in both sets): set the port *and* schedule the
-          self-event, since the signal is both ported to a peer and accepted
-          locally.
-
-        When the payload carries arguments a constructor call is emitted
-        (matching the ``@dataclass`` generated in the preamble); the
-        no-argument form sets the port to ``True`` and omits the schedule's
-        second argument entirely.
-
-        Inside an LF reaction a ported signal's output port appears as a
-        parameter named ``<Event>``, which shadows the module-level preamble
-        dataclass of the same name.  Calling ``<Event>(...)`` there hits the
-        port capsule, not the class, raising ``TypeError`` at runtime.  So on
-        the ported paths (port-only and overlap) the payload constructor is
-        reached via ``globals()["<Event>"](...)``.  The default path is
-        unaffected (its parameter is ``<Event>_act``) and keeps the plain
-        constructor, preserving byte-identity for bare builds.
+        On the ported ``.set`` path ``<Event>`` is the reaction's port
+        parameter, shadowing the preamble dataclass; the payload constructor
+        is reached through ``globals()["<Event>"](...)``.
 
         Args:
             send: The ``send new <Type>(<args>)`` action to translate.
 
         Returns:
-            Python source for the resulting statement(s); the overlap form is
-            two lines separated by a newline.
+            Python source for the statement, or ``""`` for a dropped ``via``
+            send.
 
         Raises:
+            UnsupportedConstructError: If the ``to`` receiver is not the
+                machine's own port.
             ValueError: If the payload is not a ``new <Type>(...)``
                 constructor resolving to a named definition, or an argument
                 has no corresponding named attribute.
         """
         event_name, pairs = payload_signature(send)
+        if (
+            send.receiver_argument is not None
+            and not send_receiver_is_own_port(send)
+        ):
+            raise UnsupportedConstructError(
+                f"send {event_name!r} addresses a receiver that is not the "
+                "machine's own port; cross-machine 'to' addressing is not "
+                "supported. Route the signal with 'via <port>' and a "
+                "connect instead.",
+                node=send,
+            )
+        via_port = send_via_port(send)
+        if via_port is not None:
+            if event_name not in self._port_signals:
+                self._needs.undeliverable_sends.add((event_name, via_port))
+                return ""
+            args = ", ".join(
+                f"{name}={self.render_expression(argument)}"
+                for name, argument in pairs
+            )
+            # `{event_name}` is the reaction's port parameter here, shadowing
+            # the preamble class; reach the class through globals().
+            ported_payload = (
+                f'globals()["{event_name}"]({args})' if pairs else None
+            )
+            return f"{event_name}.set({ported_payload or 'True'})"
         args = ", ".join(
             f"{name}={self.render_expression(argument)}"
             for name, argument in pairs
         )
         payload = f"{event_name}({args})" if pairs else None
-        schedule = (
+        return (
             f"{event_name}_act.schedule(0, {payload})"
             if payload
             else f"{event_name}_act.schedule(0)"
         )
-        if event_name not in self._port_signals:
-            return schedule
-        # On ported paths `{event_name}` is the reaction's port parameter,
-        # shadowing the preamble class; reach the class through globals().
-        ported_payload = f'globals()["{event_name}"]({args})' if pairs else None
-        set_line = (
-            f"{event_name}.set({ported_payload if ported_payload else 'True'})"
-        )
-        if event_name in self._self_signals:
-            ported_schedule = (
-                f"{event_name}_act.schedule(0, {ported_payload})"
-                if ported_payload
-                else schedule
-            )
-            return f"{set_line}\n{ported_schedule}"
-        return set_line
 
     @override
     def _emit_invocation(self, expr: syside.InvocationExpression) -> str:

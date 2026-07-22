@@ -109,7 +109,7 @@ def test_peer_sent_signal_loses_its_input_port() -> None:
     assert "Done" in machine.inputs
 
 
-def test_overlap_send_emits_both_forms() -> None:
+def test_overlap_send_emits_port_only() -> None:
     program = _build_peer(
         FIXTURES_DIR / "rig-overlap",
         "RigOverlap::Pulser",
@@ -120,14 +120,14 @@ def test_overlap_send_emits_both_forms() -> None:
     assert "Tick" not in machine.inputs
     text = to_lf(program)
     assert "Tick.set(True)" in text
-    assert "Tick_act.schedule(0)" in text  # local accept still served
+    # One send is one transfer: a `via` send does NOT also self-deliver.
+    assert "Tick_act.schedule(0)" not in text
 
 
-def test_overlap_payload_send_dodges_port_shadowing() -> None:
-    # When the ported signal carries a payload, the reaction parameter named
-    # after the port shadows the preamble dataclass, so the constructor must
-    # be reached via globals(). The overlap form renders BOTH lines; both
-    # must use the globals() reach (set line + schedule line).
+def test_overlap_payload_send_emits_port_only_via_globals() -> None:
+    # A ported payload send: the reaction parameter named after the port
+    # shadows the preamble dataclass, so the constructor is reached via
+    # globals(). Only the port `.set` line is emitted (one transfer).
     program = RosettaBackend().build_composition(
         load_model(FIXTURES_DIR / "rig-payload"),
         "RigPayload::CounterRig",
@@ -136,20 +136,19 @@ def test_overlap_payload_send_dodges_port_shadowing() -> None:
     text = to_lf(program)
     assert "Report" in plant.outputs
     assert 'Report.set(globals()["Report"](n=7))' in text
-    assert 'Report_act.schedule(0, globals()["Report"](n=7))' in text
+    assert "Report_act.schedule" not in text
 
 
-def test_bare_payload_send_keeps_plain_constructor() -> None:
-    # The non-ported path is unaffected: the parameter there is `Report_act`,
-    # not `Report`, so no shadowing occurs and the plain constructor stays
-    # byte-identical (port_signals empty).
+def test_standalone_via_send_is_dropped() -> None:
+    # A `via` send in a standalone build has no connected peer, so nothing
+    # is delivered (recorded for a build warning; see test_backend).
     text = to_lf(
         build_program(
             load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter"
         )
     )
-    assert "Report_act.schedule(0, Report(n=7))" in text
-    assert "globals()" not in text
+    assert "Report_act.schedule" not in text
+    assert "Report.set" not in text
 
 
 def test_rig_program_composes_bench_reactor() -> None:

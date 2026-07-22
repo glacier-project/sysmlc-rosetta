@@ -948,20 +948,23 @@ def test_rig_overlap_serves_local_and_peer(tmp_path: Path) -> None:
         tmp_path, FIXTURES_DIR / "rig-overlap", "RigOverlap::PulserRig"
     )
     assert process.returncode == 0, process.stderr
-    assert "finished" in states["plant"]  # local self-event delivered
     assert "sawTick" in states["tb"]  # peer port delivered
+    # A `via` send does not loop back to its own sender: the plant's local
+    # `accept Tick` is never served, so it does not reach `finished`.
+    assert "finished" not in states["plant"]
 
 
 def test_rig_payload_serves_local_and_peer(tmp_path: Path) -> None:
     # A ported send carrying a payload: the reaction parameter shadows the
     # preamble dataclass, so the constructor must be reached via globals().
-    # Without the fix both the set and the schedule line raise TypeError.
+    # Without the fix the set line raises TypeError.
     process, states = run_rig(
         tmp_path, FIXTURES_DIR / "rig-payload", "RigPayload::CounterRig"
     )
     assert process.returncode == 0, process.stderr
-    assert "finished" in states["plant"]  # local overlap delivery worked
     assert states["tb"][-1] == "done"  # peer payload delivery worked
+    # The plant's own overlap accept is no longer served by its `via` send.
+    assert "finished" not in states["plant"]
 
 
 def test_external_ramp_runs(tmp_path: Path) -> None:

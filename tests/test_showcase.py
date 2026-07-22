@@ -167,11 +167,9 @@ def test_vending_dispense_constructs_payload_class() -> None:
     paid = _mode(program, "paid")
     sel = paid.reactions[1]
     assert sel.body[0] == "sel = Selection.value"
-    assert any(
-        "Dispensed_act.schedule(0, Dispensed(product=self.chosen, "
-        "change=self.credit))" in line
-        for line in sel.body
-    )
+    # Standalone: the `via commPort` dispense is dropped (no peer). The
+    # payload dataclass is still declared in the companion module above.
+    assert not any("Dispensed_act.schedule" in line for line in sel.body)
 
 
 # -- furuta-pendulum: external calc-defs + port-based signals --
@@ -363,10 +361,9 @@ def test_milling_workcell_batch_loop_dispatches_on_completion() -> None:
     # not from the c_producing.completed reaction.
     announcing = _mode(program, "announcing")
     (startup,) = [r for r in announcing.reactions if "startup" in r.triggers]
-    # In standalone mode the send renders as a logical-action schedule;
+    # Standalone: the `via commPort` BatchReport send is dropped (no peer);
     # in rig mode it becomes BatchReport.set() on the output port.
-    # Either way the announcement payload is present in the body.
-    assert "BatchReport" in "\n".join(startup.body)
+    assert not any("BatchReport" in line for line in startup.body)
 
 
 def test_batch_reactor_parallel_regions_and_payload_guard() -> None:

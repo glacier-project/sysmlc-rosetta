@@ -1478,6 +1478,7 @@ class RosettaBuilder:
             line
             for candidate in actions.inline_actions(action)
             for line in codegen.render_action(candidate).split("\n")
+            if line
         ]
 
 

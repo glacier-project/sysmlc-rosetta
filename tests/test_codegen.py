@@ -166,3 +166,42 @@ def test_external_call_renders_with_import() -> None:
     gen = LfPythonCodeGen(frozenset({"x"}), needs=needs)
     assert gen.render_action(action) == "self.x = step(self.x, 0.1)"
     assert "from furuta_plant import step" in needs.preamble_lines()
+
+
+def _only_send(model_dir: Path, qn: str) -> ActionUsage:
+    recorded = record(model_dir, qn)
+    effects = [t.effect for t in recorded.transitions if t.effect is not None]
+    (send,) = actions.inline_actions(effects[0])
+    return send
+
+
+def test_send_to_own_port_still_schedules_self_event() -> None:
+    # `send ... to commPort` where commPort is the machine's own port is an
+    # internal self-event and is unchanged.
+    send = _only_send(SM_EXAMPLES_DIR / "sm11-send-effect", "SM11::MachineSelfSend")
+    gen = LfPythonCodeGen(frozenset())
+    assert gen.render_action(send) == "Ping_act.schedule(0)"
+
+
+def test_via_send_to_connected_peer_sets_output_port() -> None:
+    # `send Tick via commPort` when a peer accepts Tick -> set the port only.
+    send = _only_send(FIXTURES_DIR / "rig-overlap", "RigOverlap::Pulser")
+    gen = LfPythonCodeGen(frozenset(), port_signals=frozenset({"Tick"}))
+    assert gen.render_action(send) == "Tick.set(True)"
+
+
+def test_via_send_without_peer_is_dropped_and_recorded() -> None:
+    # `send Tick via commPort` with no connected peer -> nothing delivered;
+    # recorded for a build warning.
+    send = _only_send(FIXTURES_DIR / "rig-overlap", "RigOverlap::Pulser")
+    needs = PreambleNeeds()
+    gen = LfPythonCodeGen(frozenset(), needs=needs, port_signals=frozenset())
+    assert gen.render_action(send) == ""
+    assert needs.undeliverable_sends == {("Tick", "commPort")}
+
+
+def test_foreign_to_receiver_is_rejected() -> None:
+    send = _only_send(FIXTURES_DIR / "foreign-to", "ForeignTo::MachineSendToPeer")
+    gen = LfPythonCodeGen(frozenset())
+    with pytest.raises(UnsupportedConstructError, match="cross-machine"):
+        gen.render_action(send)
