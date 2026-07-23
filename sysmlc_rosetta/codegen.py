@@ -367,9 +367,8 @@ class LfPythonCodeGen(PythonCodeGen):
                 has no corresponding named attribute.
         """
         event_name, pairs = payload_signature(send)
-        if (
-            send.receiver_argument is not None
-            and not send_receiver_is_own_port(send)
+        if send.receiver_argument is not None and not send_receiver_is_own_port(
+            send
         ):
             raise UnsupportedConstructError(
                 f"send {event_name!r} addresses a receiver that is not the "

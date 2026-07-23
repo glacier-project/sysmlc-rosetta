@@ -178,7 +178,9 @@ def _only_send(model_dir: Path, qn: str) -> ActionUsage:
 def test_send_to_own_port_still_schedules_self_event() -> None:
     # `send ... to commPort` where commPort is the machine's own port is an
     # internal self-event and is unchanged.
-    send = _only_send(SM_EXAMPLES_DIR / "sm11-send-effect", "SM11::MachineSelfSend")
+    send = _only_send(
+        SM_EXAMPLES_DIR / "sm11-send-effect", "SM11::MachineSelfSend"
+    )
     gen = LfPythonCodeGen(frozenset())
     assert gen.render_action(send) == "Ping_act.schedule(0)"
 
@@ -201,7 +203,9 @@ def test_via_send_without_peer_is_dropped_and_recorded() -> None:
 
 
 def test_foreign_to_receiver_is_rejected() -> None:
-    send = _only_send(FIXTURES_DIR / "foreign-to", "ForeignTo::MachineSendToPeer")
+    send = _only_send(
+        FIXTURES_DIR / "foreign-to", "ForeignTo::MachineSendToPeer"
+    )
     gen = LfPythonCodeGen(frozenset())
     with pytest.raises(UnsupportedConstructError, match="cross-machine"):
         gen.render_action(send)

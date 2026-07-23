@@ -1031,7 +1031,9 @@ class RosettaBuilder:
         for signal, group in signal_groups.items():
             triggers: tuple[str, ...]
             is_input = signal not in self._omitted_inputs
-            is_self_sched = signal in self._self_sched_by_scope.get(scope, set())
+            is_self_sched = signal in self._self_sched_by_scope.get(
+                scope, set()
+            )
             trig: list[str] = []
             if is_input:
                 trig.append(signal)
