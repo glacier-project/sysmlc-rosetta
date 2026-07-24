@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sysmlc_models.catalog import model_path
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc.backends.rosetta.builder import build_program
@@ -14,7 +14,7 @@ from tests.backends.rosetta.conftest import FIXTURES_DIR
 if TYPE_CHECKING:
     from sysmlc.backends.rosetta.program import LfProgram, Mode
 
-PART_EXT = Path("models/sm-examples/part-external")
+PART_EXT = model_path("sm-examples/part-external")
 
 
 def _build(model_dir: str, qn: str) -> LfProgram:
