@@ -17,10 +17,10 @@ import importlib.util
 import math
 import subprocess
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc_models.catalog import model_file, model_path
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -29,17 +29,10 @@ if TYPE_CHECKING:
 # Module import by file path
 # ---------------------------------------------------------------------------
 
-_MODULE_PATH = (
-    Path(__file__).parents[3]
-    / "models"
-    / "showcase"
-    / "furuta-pendulum"
-    / "furuta_physics.py"
-)
+_MODULE_PATH = model_file("showcase/furuta-pendulum/furuta_physics.py")
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_SYSMLC = str(_PROJECT_ROOT / ".venv" / "bin" / "sysmlc")
-_MODEL_DIR = str(_PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum")
+_SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
+_MODEL_DIR = str(model_path("showcase/furuta-pendulum"))
 _PHYSICS_FILE = str(_MODULE_PATH)
 
 
@@ -77,7 +70,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     out = tmp_path_factory.mktemp("furuta_gen")
     subprocess.run(
         [
-            _SYSMLC,
+            *_SYSMLC,
             "rosetta",
             "build",
             _MODEL_DIR,

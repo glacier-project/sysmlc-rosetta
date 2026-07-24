@@ -14,17 +14,15 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 import syside
+from sysmlc_models.catalog import model_path
 
 from sysmlc.sysml.textual_representation import (
     extract_textual,
     write_module,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_SYSMLC = str(_PROJECT_ROOT / ".venv" / "bin" / "sysmlc")
-_MODEL_DIR = str(
-    _PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum_inline"
-)
+_SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
+_MODEL_DIR = str(model_path("showcase/furuta-pendulum_inline"))
 _SYSML_FILE = str(Path(_MODEL_DIR) / "furuta_pendulum_inline.sysml")
 
 
@@ -71,7 +69,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     out = tmp_path_factory.mktemp("furuta_gen")
     subprocess.run(
         [
-            _SYSMLC,
+            *_SYSMLC,
             "rosetta",
             "build",
             _MODEL_DIR,
