@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc.backends import OutputOptions, discover_backends
 from sysmlc.backends.rosetta.backend import RosettaBackend
 from sysmlc.backends.rosetta.program import LfProgram
 from sysmlc.errors import SerializationError
 from sysmlc.sysml.loading import load_model
-from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path
