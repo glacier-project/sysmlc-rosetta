@@ -641,6 +641,9 @@ class RosettaBuilder:
         consumed = tuple(
             f"{sig}_consumed" for sig in self._consumed.get(scope, {})
         )
+        parameters: list[Parameter]
+        state_vars: list[StateVar]
+        reactions: list[Reaction]
         if is_root:
             parameters, state_vars = self._attribute_split()
             outputs: tuple[str, ...] = (OUTPUT_PORT, *ported, *consumed)
@@ -649,7 +652,8 @@ class RosettaBuilder:
             )
             name = self._name
         else:
-            parameters, state_vars = [], []
+            parameters = []
+            state_vars = []
             exit_ports = tuple(self._exit_ports.get(scope, {}).values())
             outputs = (
                 COMPLETED_PORT,
