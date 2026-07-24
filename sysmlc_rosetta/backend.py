@@ -47,6 +47,16 @@ class RosettaBackend(Backend):
         """Build the Lingua Franca program for the given state definition."""
         return build_program(model, element_qn, external=external)
 
+    @override
+    def consumes_python_support(self) -> bool:
+        """Rosetta emits Python LF reactions backed by ``--python``."""
+        return True
+
+    @override
+    def accepts_target_options(self) -> bool:
+        """Rosetta emits an LF target header set by ``--timeout``/``--fast``."""
+        return True
+
     def build_composition(
         self,
         model: syside.Model,
