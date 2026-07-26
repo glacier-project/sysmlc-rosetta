@@ -25,6 +25,8 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/setup-python-uv
