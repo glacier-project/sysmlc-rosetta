@@ -1271,6 +1271,7 @@ name = "sysmlc-rosetta"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "syside" },
     { name = "sysmlc" },
 ]
 
@@ -1314,6 +1315,7 @@ requires-dist = [
     { name = "sphinx-autobuild", marker = "extra == 'docs'", specifier = ">=2024.10.3,<2027" },
     { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=2.2,<4" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5,<1" },
+    { name = "syside", specifier = "==0.8.6" },
     { name = "sysmlc", git = "https://github.com/glacier-project/sysmlc-core?branch=dev" },
     { name = "sysmlc-models", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-models?branch=dev" },
     { name = "sysmlc-quake", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-quake?branch=dev" },
