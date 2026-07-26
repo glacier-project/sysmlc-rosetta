@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 import pytest
 from sysmlc_models.showcase import SHOWCASE_DIR
 
+from tests.conftest import bundled_backend_conflict
+
 pytestmark = pytest.mark.lf
 
 REACTOR_RE = re.compile(r"^reactor (\w+) \{")
@@ -72,6 +74,7 @@ SHOWCASE_DIRS = sorted(
 
 
 @pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=lambda d: d.name)
+@bundled_backend_conflict
 def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()

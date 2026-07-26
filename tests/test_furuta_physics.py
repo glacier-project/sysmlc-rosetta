@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING
 import pytest
 from sysmlc_models.catalog import model_file
 
+from tests.conftest import bundled_backend_conflict
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -101,6 +103,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_step_is_deterministic_and_pure(generated_types: ModuleType) -> None:
     """step() called twice on identical inputs gives identical outputs.
 
@@ -140,6 +143,7 @@ def test_step_is_deterministic_and_pure(generated_types: ModuleType) -> None:
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_stabilizer_holds_inverted_equilibrium(
     generated_types: ModuleType,
 ) -> None:
@@ -188,6 +192,7 @@ def test_stabilizer_holds_inverted_equilibrium(
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_swingup_adds_energy(generated_types: ModuleType) -> None:
     """swingup_torque pumps energy toward upright from hanging-down rest.
 

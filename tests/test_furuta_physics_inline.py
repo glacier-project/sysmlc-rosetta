@@ -13,12 +13,13 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 import syside
-from sysmlc_models.showcase import SHOWCASE_DIR
-
 from sysmlc.sysml.textual_representation import (
     extract_textual,
     write_module,
 )
+from sysmlc_models.showcase import SHOWCASE_DIR
+
+from tests.conftest import bundled_backend_conflict
 
 _SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
 _MODEL_DIR = SHOWCASE_DIR / "furuta-pendulum_inline"
@@ -93,6 +94,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_step_is_deterministic_and_pure(
     generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
@@ -134,6 +136,7 @@ def test_step_is_deterministic_and_pure(
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_stabilizer_holds_inverted_equilibrium(
     generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
@@ -181,6 +184,7 @@ def test_stabilizer_holds_inverted_equilibrium(
 # ---------------------------------------------------------------------------
 
 
+@bundled_backend_conflict
 def test_swingup_adds_energy(
     generated_types: ModuleType, physics_module: ModuleType
 ) -> None:
