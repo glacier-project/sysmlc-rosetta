@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 from sismic.interpreter import Interpreter
 from sismic.io import import_from_yaml
-
-from sysmlc.backends.quake.backend import QuakeBackend
-from sysmlc.backends.quake.serialize import to_yaml as quake_to_yaml
 from sysmlc.backends.rosetta.builder import build_program
 from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
-from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.rosetta.test_lf_harness import run_machine
+from sysmlc_quake.backend import QuakeBackend
+from sysmlc_quake.serialize import to_yaml as quake_to_yaml
+
+from tests.conftest import FIXTURES_DIR
+from tests.test_lf_harness import run_machine
 
 MODEL_DIR = FIXTURES_DIR / "rtc"  # created in Task 5
 
