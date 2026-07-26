@@ -1,4 +1,4 @@
-git a# rosetta — SysML v2 → Lingua Franca mapping reference
+# rosetta — SysML v2 → Lingua Franca mapping reference
 
 How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime. This document
