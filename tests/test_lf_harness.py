@@ -14,11 +14,6 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from sysmlc.backends.rosetta.backend import RosettaBackend
-from sysmlc.backends.rosetta.builder import OUTPUT_PORT
-from sysmlc.backends.rosetta.parts import build_part_program
-from sysmlc.backends.rosetta.program import LfProgram
-from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.sysml.loading import load_model
 from sysmlc.sysml.textual_representation import (
     extract_textual,
@@ -26,6 +21,12 @@ from sysmlc.sysml.textual_representation import (
     write_module,
 )
 from sysmlc.values import configure_model
+
+from sysmlc_rosetta.backend import RosettaBackend
+from sysmlc_rosetta.builder import OUTPUT_PORT
+from sysmlc_rosetta.parts import build_part_program
+from sysmlc_rosetta.program import LfProgram
+from sysmlc_rosetta.serialize import to_lf
 
 if TYPE_CHECKING:
     from pathlib import Path

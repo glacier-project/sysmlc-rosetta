@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sysmlc.sysml.loading import load_model
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
-from sysmlc.backends.rosetta.builder import build_program
-from sysmlc.backends.rosetta.parts import build_part_program
-from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.sysml.loading import load_model
-from tests.backends.rosetta.conftest import FIXTURES_DIR
+from sysmlc_rosetta.builder import build_program
+from sysmlc_rosetta.parts import build_part_program
+from sysmlc_rosetta.serialize import to_lf
+from tests.conftest import FIXTURES_DIR
 
 if TYPE_CHECKING:
-    from sysmlc.backends.rosetta.program import LfProgram, Mode
+    from sysmlc_rosetta.program import LfProgram, Mode
 
 PART_EXT = SM_EXAMPLES_DIR / "part-external"
 
@@ -486,9 +486,10 @@ def test_part_program_sets_types_module_and_files() -> None:
 
 
 def test_dispatch_fired_sets_flag_per_branch() -> None:
-    from sysmlc.backends.rosetta.builder import RosettaBuilder
     from sysmlc.semantics.statemachine.driver import StateMachineDriver
     from sysmlc.semantics.statemachine.facts import SignalTrigger
+
+    from sysmlc_rosetta.builder import RosettaBuilder
 
     model = load_model(FIXTURES_DIR / "rtc")
     b = RosettaBuilder("TwoSignals")

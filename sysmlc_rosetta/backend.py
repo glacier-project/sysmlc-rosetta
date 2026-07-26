@@ -4,16 +4,16 @@ import logging
 from typing import TYPE_CHECKING, override
 
 import syside as _syside
-
 from sysmlc.backends.base import Backend, OutputOptions
-from sysmlc.backends.rosetta.builder import build_program, finalize
-from sysmlc.backends.rosetta.codegen import PreambleNeeds
-from sysmlc.backends.rosetta.parts import build_part_program, compose_exhibits
-from sysmlc.backends.rosetta.program import LfProgram
-from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import SerializationError, UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import machine_interface
 from sysmlc.sysml.queries import exhibited_state_defs, resolve
+
+from sysmlc_rosetta.builder import build_program, finalize
+from sysmlc_rosetta.codegen import PreambleNeeds
+from sysmlc_rosetta.parts import build_part_program, compose_exhibits
+from sysmlc_rosetta.program import LfProgram
+from sysmlc_rosetta.serialize import to_lf
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -70,7 +70,7 @@ class RosettaBackend(Backend):
         Resolves the rig part def, unpacks its two exhibited state machines,
         checks for same-def-twice and bidirectional-same-name-signal errors,
         warns about unwired inputs, then delegates to
-        :func:`~sysmlc.backends.rosetta.parts.compose_exhibits`.
+        :func:`~sysmlc_rosetta.parts.compose_exhibits`.
         """
         rig = resolve(model, _syside.PartDefinition, element_qn)
         (usage_a, def_a), (usage_b, def_b) = exhibited_state_defs(model, rig)

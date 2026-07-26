@@ -5,12 +5,6 @@ from pathlib import Path
 
 import pytest
 import syside
-from sysmlc_models.showcase import SHOWCASE_DIR
-
-from sysmlc.backends.rosetta.backend import RosettaBackend
-from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
-from sysmlc.backends.rosetta.program import LfProgram
-from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import machine_interface
@@ -20,7 +14,13 @@ from sysmlc.sysml.queries import (
     resolve,
     rig_definitions,
 )
-from tests.backends.rosetta.conftest import FIXTURES_DIR
+from sysmlc_models.showcase import SHOWCASE_DIR
+
+from sysmlc_rosetta.backend import RosettaBackend
+from sysmlc_rosetta.builder import RosettaBuilder, build_program
+from sysmlc_rosetta.program import LfProgram
+from sysmlc_rosetta.serialize import to_lf
+from tests.conftest import FIXTURES_DIR
 
 
 def test_rig_definitions_finds_the_rig() -> None:
@@ -153,7 +153,7 @@ def test_standalone_via_send_is_dropped() -> None:
 
 
 def test_standalone_via_send_warns(caplog: pytest.LogCaptureFixture) -> None:
-    logger_name = "sysmlc.backends.rosetta.builder"
+    logger_name = "sysmlc_rosetta.builder"
     with caplog.at_level(logging.WARNING, logger=logger_name):
         build_program(
             load_model(FIXTURES_DIR / "rig-payload"), "RigPayload::Counter"
@@ -190,7 +190,7 @@ def test_standalone_via_drop_emits_no_undriven_action() -> None:
 def test_unreachable_local_accept_warns(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    logger_name = "sysmlc.backends.rosetta.builder"
+    logger_name = "sysmlc_rosetta.builder"
     with caplog.at_level(logging.WARNING, logger=logger_name):
         _build_peer(
             FIXTURES_DIR / "rig-overlap",
@@ -252,12 +252,13 @@ def test_rig_pair_serializes_to_lf() -> None:
 
 
 def test_rig_pair_lf_is_stable() -> None:
-    from sysmlc.backends.rosetta.serialize import to_lf
     from sysmlc.sysml.loading import load_model
 
-    model = load_model(Path("tests/backends/rosetta/fixtures/rig-pair"))
+    from sysmlc_rosetta.serialize import to_lf
+
+    model = load_model(Path("tests/fixtures/rig-pair"))
     text = to_lf(RosettaBackend().build_composition(model, "RigPair::PlantRig"))
-    golden = Path("tests/backends/rosetta/fixtures/rig-pair/expected.lf")
+    golden = Path("tests/fixtures/rig-pair/expected.lf")
     if not golden.exists():
         golden.write_text(text)  # first run records the golden
     assert text == golden.read_text()

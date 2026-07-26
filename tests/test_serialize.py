@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from sysmlc.backends.rosetta.program import (
+from sysmlc_rosetta.program import (
     Connection,
     Instantiation,
     LfProgram,
@@ -14,7 +14,7 @@ from sysmlc.backends.rosetta.program import (
     StateVar,
     Timer,
 )
-from sysmlc.backends.rosetta.serialize import render_duration, to_lf
+from sysmlc_rosetta.serialize import render_duration, to_lf
 
 
 def make_reactors(**kwargs: Any) -> tuple[Reactor, ...]:
@@ -209,7 +209,7 @@ def test_reactor_scope_instantiations_render() -> None:
 
 
 def test_explicit_main_reactor_and_target() -> None:
-    from sysmlc.backends.rosetta.program import MainReactor
+    from sysmlc_rosetta.program import MainReactor
 
     prog = LfProgram(
         reactors=(Reactor(name="Plant"), Reactor(name="Tester")),
@@ -241,7 +241,7 @@ def test_bare_target_and_trivial_main_unchanged() -> None:
 def test_preamble_with_types_module_import_renders_correctly() -> None:
     # When a companion module exists, the preamble should contain an import
     # line, not inline class definitions.
-    from sysmlc.backends.rosetta.program import LfProgram
+    from sysmlc_rosetta.program import LfProgram
 
     prog = LfProgram(
         reactors=(Reactor(name="Machine"),),

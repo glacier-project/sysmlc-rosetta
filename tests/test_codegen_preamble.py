@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import syside
-
-from sysmlc.backends.rosetta.codegen import PreambleNeeds, py_type
 from sysmlc.sysml.loading import load_model
 from sysmlc.sysml.queries import resolve
+
+from sysmlc_rosetta.codegen import PreambleNeeds, py_type
 
 
 def test_no_types_means_no_module_and_no_import() -> None:

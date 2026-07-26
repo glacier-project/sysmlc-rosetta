@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final, override
 
 import syside
-
 from sysmlc.codegen.python import PythonCodeGen, payload_signature
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import (

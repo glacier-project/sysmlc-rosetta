@@ -21,19 +21,6 @@ import logging
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
-from sysmlc.backends.rosetta.builder import (
-    OUTPUT_PORT,
-    RosettaBuilder,
-    finalize,
-)
-from sysmlc.backends.rosetta.codegen import PreambleNeeds
-from sysmlc.backends.rosetta.program import (
-    Connection,
-    Instantiation,
-    LfProgram,
-    MainReactor,
-    Reactor,
-)
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.parts.graph import PartGraph, PartNode, part_graph
 from sysmlc.semantics.parts.routing import PortSignalRoute, validated_routes
@@ -41,6 +28,20 @@ from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.interface import (
     MachineInterface,
     machine_interface,
+)
+
+from sysmlc_rosetta.builder import (
+    OUTPUT_PORT,
+    RosettaBuilder,
+    finalize,
+)
+from sysmlc_rosetta.codegen import PreambleNeeds
+from sysmlc_rosetta.program import (
+    Connection,
+    Instantiation,
+    LfProgram,
+    MainReactor,
+    Reactor,
 )
 
 if TYPE_CHECKING:

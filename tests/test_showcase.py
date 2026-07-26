@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sysmlc.sysml.loading import load_model
 from sysmlc_models.showcase import SHOWCASE_DIR
 
-from sysmlc.backends.rosetta.builder import build_program
-from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.sysml.loading import load_model
-from tests.backends.rosetta.conftest import FIXTURES_DIR
+from sysmlc_rosetta.builder import build_program
+from sysmlc_rosetta.serialize import to_lf
+from tests.conftest import FIXTURES_DIR
 
 if TYPE_CHECKING:
-    from sysmlc.backends.rosetta.program import LfProgram, Mode
+    from sysmlc_rosetta.program import LfProgram, Mode
 
 
 def _build(example: str, qn: str) -> LfProgram:
@@ -402,7 +402,6 @@ def test_batch_reactor_saturating_dynamics_use_whitelist() -> None:
 def test_showcase_values_examples_configure_and_build() -> None:
     # Every shipped values.yaml must configure its model and build.
     import pytest
-
     from sysmlc.values import configure_model, load_values, select_values
 
     examples = [

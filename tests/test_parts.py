@@ -1,11 +1,11 @@
 import pytest
-from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
-
-from sysmlc.backends.rosetta.parts import build_part_program
-from sysmlc.backends.rosetta.program import LfProgram, MainReactor
-from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
+
+from sysmlc_rosetta.parts import build_part_program
+from sysmlc_rosetta.program import LfProgram, MainReactor
+from sysmlc_rosetta.serialize import to_lf
 
 FIX = SM_EXAMPLES_DIR / "part01-two-parts"
 MUX = SM_EXAMPLES_DIR / "part-mux"

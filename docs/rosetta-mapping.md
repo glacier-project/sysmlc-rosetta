@@ -4,7 +4,7 @@ How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime. This document
 covers every supported construct, its LF counterpart, and every deliberate
 rejection. The example models in the bundled showcase corpus exercise all of it,
-and the `lfc`-marked run tests in `tests/backends/rosetta/test_run.py` prove
+and the `lfc`-marked run tests in `tests/lf/test_run.py` prove
 the behavior.
 
 Build one machine with:
@@ -674,7 +674,7 @@ body must be a pure, deterministic function of its inputs.
 ## 13. Parts, ports, and the generated main reactor
 
 A SysML **part** is the structural unit the backend turns into LF reactors.
-The part assembler (`sysmlc/backends/rosetta/parts.py`, `build_part_program`)
+The part assembler (`sysmlc_rosetta/parts.py`, `build_part_program`)
 walks the part graph (`sysmlc/semantics/parts/graph.py`) and emits one reactor
 class per part def plus an explicit `main reactor`.
 

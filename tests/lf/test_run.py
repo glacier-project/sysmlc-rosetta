@@ -20,14 +20,14 @@ import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc.sysml.loading import load_model
 from sysmlc_models.showcase import SHOWCASE_DIR
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
-from sysmlc.backends.rosetta.parts import build_part_program
-from sysmlc.backends.rosetta.serialize import to_lf
-from sysmlc.sysml.loading import load_model
-from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.rosetta.test_lf_harness import (
+from sysmlc_rosetta.parts import build_part_program
+from sysmlc_rosetta.serialize import to_lf
+from tests.conftest import FIXTURES_DIR
+from tests.test_lf_harness import (
     compile_harness,
     run_machine,
     run_part,

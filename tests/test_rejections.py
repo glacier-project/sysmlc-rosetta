@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
-
-from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.facts import (
     AttributeBinding,
@@ -13,7 +10,10 @@ from sysmlc.semantics.statemachine.facts import (
     TransitionFact,
 )
 from sysmlc.sysml.loading import load_model
-from tests.backends.rosetta.conftest import FIXTURES_DIR
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
+
+from sysmlc_rosetta.builder import RosettaBuilder, build_program
+from tests.conftest import FIXTURES_DIR
 
 
 def _leaf(name: str, parent: str = "Machine") -> StateFact:
@@ -173,7 +173,7 @@ def test_out_attribute_is_rejected() -> None:
 
 def test_single_channel_fan_in_is_rejected() -> None:
     """Two sources into one input -> rejected, pointing at multiplicity."""
-    from sysmlc.backends.rosetta.parts import build_part_program
+    from sysmlc_rosetta.parts import build_part_program
 
     model = load_model(FIXTURES_DIR / "part-fanin")
     with pytest.raises(UnsupportedConstructError, match="multiplicity"):

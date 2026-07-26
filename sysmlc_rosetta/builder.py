@@ -4,26 +4,6 @@ import logging
 from dataclasses import replace
 
 import syside
-
-from sysmlc.backends.rosetta.codegen import (
-    LfPythonCodeGen,
-    PreambleNeeds,
-    files_option,
-    py_type,
-)
-from sysmlc.backends.rosetta.program import (
-    Connection,
-    Instantiation,
-    LfProgram,
-    LogicalAction,
-    Mode,
-    Parameter,
-    Reaction,
-    Reactor,
-    StateVar,
-    Timer,
-)
-from sysmlc.backends.rosetta.serialize import render_duration
 from sysmlc.codegen.python import payload_signature
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions, transitions
@@ -45,6 +25,26 @@ from sysmlc.semantics.statemachine.facts import (
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.sysml.queries import feature_value
+
+from sysmlc_rosetta.codegen import (
+    LfPythonCodeGen,
+    PreambleNeeds,
+    files_option,
+    py_type,
+)
+from sysmlc_rosetta.program import (
+    Connection,
+    Instantiation,
+    LfProgram,
+    LogicalAction,
+    Mode,
+    Parameter,
+    Reaction,
+    Reactor,
+    StateVar,
+    Timer,
+)
+from sysmlc_rosetta.serialize import render_duration
 
 logger = logging.getLogger(__name__)
 
