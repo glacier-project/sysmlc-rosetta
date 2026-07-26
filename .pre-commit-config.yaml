@@ -1,0 +1,73 @@
+fail_fast: true
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: check-added-large-files
+    args: [--maxkb=500]
+  - id: trailing-whitespace
+  - id: end-of-file-fixer
+  - id: check-yaml
+    args: [--allow-multiple-documents]
+  - id: check-json
+  - id: check-merge-conflict
+  - id: check-case-conflict
+  - id: mixed-line-ending
+    args: [--fix=lf]
+  - id: check-executables-have-shebangs
+  - id: check-shebang-scripts-are-executable
+  - id: debug-statements
+  - id: name-tests-test
+    args: [--pytest-test-first]
+
+    # Shell script linting
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.11.0.1
+  hooks:
+  - id: shellcheck
+    args: [--severity=warning]
+
+  # Markdown formatting
+- repo: https://github.com/executablebooks/mdformat
+  rev: 0.7.22
+  hooks:
+  - id: mdformat
+    additional_dependencies:
+    - mdformat-gfm
+    - mdformat-tables
+
+  # YAML formatting
+- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+  rev: v2.16.0
+  hooks:
+  - id: pretty-format-yaml
+    args: [--autofix, --indent, '2']
+  # Check for common spelling mistakes
+- repo: https://github.com/codespell-project/codespell
+  rev: v2.4.2
+  hooks:
+  - id: codespell
+    args: ['--ignore-words-list=boardin,crate,inout,inport,nd,ser,statics,te,vise', '--skip=*.json,*.lock']
+
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.22
+  hooks:
+  - id: ruff
+    args:
+    - --fix
+  - id: ruff-format
+    files: ^((sysmlc_rosetta|tests|examples|docs)/.+)?[^/]+\.(py|pyi)$
+
+
+# Global file exclusions
+exclude: |
+  (?x)^(
+    \.git/.*|
+    .devcontainer/.*|
+    .pytest_cache/.*|
+    .ruff_cache/.*|
+    .tox/.*|
+    .venv/.*|
+    __pycache__/.*|
+    .coverage/.*|
+  )$
