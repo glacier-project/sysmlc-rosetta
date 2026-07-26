@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 from sismic.interpreter import Interpreter
 from sismic.io import import_from_yaml
-from sysmlc.backends.rosetta.builder import build_program
-from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 from sysmlc_quake.backend import QuakeBackend
 from sysmlc_quake.serialize import to_yaml as quake_to_yaml
 
+from sysmlc_rosetta.builder import build_program
+from sysmlc_rosetta.serialize import to_lf
 from tests.conftest import FIXTURES_DIR
 from tests.test_lf_harness import run_machine
 

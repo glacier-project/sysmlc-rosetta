@@ -10,7 +10,6 @@ from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc_rosetta.backend import RosettaBackend
 from sysmlc_rosetta.program import LfProgram
-from tests.conftest import bundled_backend_conflict
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -38,7 +37,6 @@ def artifact(backend: RosettaBackend, model: syside.Model) -> LfProgram:
     return result
 
 
-@bundled_backend_conflict
 def test_rosetta_backend_is_discoverable() -> None:
     backends = discover_backends()
     assert "rosetta" in backends
