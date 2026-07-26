@@ -1,6 +1,5 @@
-from pathlib import Path
-
 import pytest
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.program import LfProgram, MainReactor
@@ -8,10 +7,10 @@ from sysmlc.backends.rosetta.serialize import to_lf
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 
-FIX = Path("models/sm-examples/part01-two-parts")
-MUX = Path("models/sm-examples/part-mux")
-UNDECLARED_VIA = Path("models/sm-examples/part-undeclared-via")
-PART_EXT = Path("models/sm-examples/part-external")
+FIX = SM_EXAMPLES_DIR / "part01-two-parts"
+MUX = SM_EXAMPLES_DIR / "part-mux"
+UNDECLARED_VIA = SM_EXAMPLES_DIR / "part-undeclared-via"
+PART_EXT = SM_EXAMPLES_DIR / "part-external"
 
 
 def test_build_part_program_composes_two_parts() -> None:
@@ -52,7 +51,7 @@ def test_observation_logs_entry_and_exit() -> None:
     assert 'logging.debug("exited Plant.idle")' in text
 
 
-MULTI = Path("models/sm-examples/part-multi-exhibit")
+MULTI = SM_EXAMPLES_DIR / "part-multi-exhibit"
 
 
 def test_multi_exhibit_part_builds_composite_reactor() -> None:

@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc_models.showcase import SHOWCASE_DIR
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc.backends.rosetta.codegen import LfPythonCodeGen, PreambleNeeds
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions
 from tests.backends.rosetta.conftest import FIXTURES_DIR, record
-from tests.backends.test_showcase import SHOWCASE_DIR
-from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -1,7 +1,8 @@
 """Unit tests for the furuta_physics pure-Python module.
 
-Imports the module by file path since it lives under models/ (not the
-sysmlc package).  No ``lf`` mark — these are fast, deterministic tests.
+Imports the module by file path since it ships as sysmlc-models package
+data (not as an importable module).  No ``lf`` mark — these are fast,
+deterministic tests.
 
 The physics module's ``step()`` does a runtime import of ``PendulumState``
 from the generated companion module ``furutaSystem_types``.  Tests that call
@@ -17,10 +18,10 @@ import importlib.util
 import math
 import subprocess
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc_models.catalog import model_file
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -29,18 +30,10 @@ if TYPE_CHECKING:
 # Module import by file path
 # ---------------------------------------------------------------------------
 
-_MODULE_PATH = (
-    Path(__file__).parents[3]
-    / "models"
-    / "showcase"
-    / "furuta-pendulum"
-    / "furuta_physics.py"
-)
+_MODULE_PATH = model_file("showcase/furuta-pendulum/furuta_physics.py")
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_SYSMLC = str(_PROJECT_ROOT / ".venv" / "bin" / "sysmlc")
-_MODEL_DIR = str(_PROJECT_ROOT / "models" / "showcase" / "furuta-pendulum")
-_PHYSICS_FILE = str(_MODULE_PATH)
+_SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
+_MODEL_DIR = _MODULE_PATH.parent
 
 
 def _load_module() -> ModuleType:
@@ -77,14 +70,14 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     out = tmp_path_factory.mktemp("furuta_gen")
     subprocess.run(
         [
-            _SYSMLC,
+            *_SYSMLC,
             "rosetta",
             "build",
             _MODEL_DIR,
             "-o",
             str(out),
             "--python",
-            _PHYSICS_FILE,
+            _MODULE_PATH,
         ],
         check=True,
         capture_output=True,

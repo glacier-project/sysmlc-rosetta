@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import pytest
-
-from tests.backends.test_showcase import SHOWCASE_DIR
+from sysmlc_models.showcase import SHOWCASE_DIR
 
 pytestmark = pytest.mark.lf
 

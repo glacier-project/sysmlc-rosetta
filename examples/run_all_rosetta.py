@@ -8,7 +8,7 @@ into a self-contained ``main reactor``.  Observation is backend-generated:
 reach stderr when the run enables DEBUG via a ``sitecustomize.py`` on
 ``PYTHONPATH``.
 
-Pipeline (per model directory under ``models/showcase/``):
+Pipeline (per model directory in the showcase corpus):
 
 1. **Build** - ``python -m sysmlc.cli rosetta build <model_dir> -o <src>
    --fast --timeout <T>`` auto-selects the single top-level part usage.
@@ -29,7 +29,7 @@ Pipeline (per model directory under ``models/showcase/``):
    collected for the per-model report.
 
 Usage:
-    python models/showcase/run_all.py [--only thermostat microwave]
+    python examples/run_all_rosetta.py [--only thermostat microwave]
         [--timeout "60 sec"] [--show-states N]
 """
 
@@ -43,7 +43,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-SHOWCASE_DIR = Path(__file__).resolve().parent
+from sysmlc_models.showcase import SHOWCASE_DIR
+
+BUILD_ROOT = Path(__file__).resolve().parent / "build"
 
 _ENTERED_RE = re.compile(r"entered (\S+)")
 
@@ -232,12 +234,11 @@ def main() -> int:
     if not _which_lfc():
         sys.exit("lfc is not on PATH; install Lingua Franca first")
 
-    build_root = SHOWCASE_DIR / "build"
     results: list[Result] = []
     models = _model_dirs(args.only)
     for index, model_dir in enumerate(models, start=1):
         print(f"[{index}/{len(models)}] {model_dir.name} ...", flush=True)
-        result = _run_model(model_dir, build_root, args.timeout)
+        result = _run_model(model_dir, BUILD_ROOT, args.timeout)
         results.append(result)
         _report(result, args.show_states)
 

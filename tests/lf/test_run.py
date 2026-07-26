@@ -20,6 +20,8 @@ import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc_models.showcase import SHOWCASE_DIR
+from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc.backends.rosetta.parts import build_part_program
 from sysmlc.backends.rosetta.serialize import to_lf
@@ -31,8 +33,6 @@ from tests.backends.rosetta.test_lf_harness import (
     run_part,
     run_rig,
 )
-from tests.backends.test_showcase import SHOWCASE_DIR
-from tests.backends.test_sm_examples import SM_EXAMPLES_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path
