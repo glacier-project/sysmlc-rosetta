@@ -1,0 +1,27 @@
+name: Set up Python and uv
+description: Install the requested Python version and uv with dependency caching.
+inputs:
+  python-version:
+    description: Python version to install.
+    required: true
+  git-repos-token:
+    description: Token with read access to private glacier-project repositories, used to fetch git dependencies.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+  - name: Set up Python
+    uses: actions/setup-python@v6
+    with:
+      python-version: ${{ inputs.python-version }}
+  - name: Install uv
+    uses: astral-sh/setup-uv@v7
+    with:
+      enable-cache: true
+      cache-dependency-glob: uv.lock
+  - name: Grant read access to private glacier-project git dependencies
+    if: inputs.git-repos-token != ''
+    shell: bash
+    run: |
+      git config --global url."https://x-access-token:${{ inputs.git-repos-token }}@github.com/glacier-project/".insteadOf "https://github.com/glacier-project/"

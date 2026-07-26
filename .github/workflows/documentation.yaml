@@ -1,0 +1,43 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+    - main
+    - dev
+  pull_request:
+    branches:
+    - main
+    - dev
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  docs:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-python-uv
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        git-repos-token: ${{ secrets.GH_REPOS_READ_TOKEN }}
+    - name: Build documentation
+      run: uv run --locked --extra dev --extra docs tox run -e docs
+    - name: Upload documentation artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation-html
+        path: docs/_build/html
+        if-no-files-found: error

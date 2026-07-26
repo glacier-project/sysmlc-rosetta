@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  push:
+    branches:
+    - main
+    - dev
+  pull_request:
+    branches:
+    - main
+    - dev
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-python-uv
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        git-repos-token: ${{ secrets.GH_REPOS_READ_TOKEN }}
+    - name: Audit dependencies
+      run: uv run --locked --extra dev --extra docs tox run -e security

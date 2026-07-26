@@ -1,0 +1,66 @@
+name: Tests
+
+on:
+  push:
+    branches:
+    - main
+    - dev
+  pull_request:
+    branches:
+    - main
+    - dev
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  unit:
+    name: Unit (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - python-version: '3.12'
+          tox-env: py312
+        - python-version: '3.13'
+          tox-env: py313
+    env:
+      SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-python-uv
+      with:
+        python-version: ${{ matrix.python-version }}
+        git-repos-token: ${{ secrets.GH_REPOS_READ_TOKEN }}
+    - name: Run unit tests
+      run: uv run --locked --extra dev tox run -e ${{ matrix.tox-env }}
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/setup-python-uv
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        git-repos-token: ${{ secrets.GH_REPOS_READ_TOKEN }}
+    - name: Run coverage
+      run: uv run --locked --extra dev tox run -e coverage
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-xml
+        path: coverage.xml
+        if-no-files-found: error
