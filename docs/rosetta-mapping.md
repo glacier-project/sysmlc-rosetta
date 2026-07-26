@@ -3,14 +3,14 @@ git a# rosetta — SysML v2 → Lingua Franca mapping reference
 How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime. This document
 covers every supported construct, its LF counterpart, and every deliberate
-rejection. The example models under `models/showcase/` exercise all of it,
+rejection. The example models in the bundled showcase corpus exercise all of it,
 and the `lfc`-marked run tests in `tests/backends/rosetta/test_run.py` prove
 the behavior.
 
 Build one machine with:
 
 ```bash
-sysmlc rosetta build models/showcase/microwave -e Microwave::Microwave -o out/
+sysmlc rosetta build showcase/microwave -e Microwave::Microwave -o out/
 ```
 
 ## 1. The big picture
@@ -591,7 +591,7 @@ top-level function names, copied beside the `.lf`, and listed in `files:`
 exactly like a user-supplied module. Because this happens at the CLI, not
 inside a backend, reps back every backend that accepts `--python`: quake
 builds and runs consume them the same way. Building
-`models/sm-examples/sm15-rep` (the inline twin of `sm15-external`) produces:
+`sm-examples/sm15-rep` (the inline twin of `sm15-external`) produces:
 
 ```python
 # Ramp_impl.py (generated)
@@ -652,7 +652,7 @@ package FurutaPendulum {
 Because collection is model-wide (not call-site-driven), every rep-backed
 calc def lands in the same module: a body may freely call another rep-backed
 calc def, the way `swingup_torque` calls `restrict_angle` in
-`models/showcase/furuta-pendulum_inline` (the full inline twin of the furuta
+`showcase/furuta-pendulum_inline` (the full inline twin of the furuta
 showcase). Scaffolding helpers enter the external-name set like any function
 in a `--python` module, but a SysML call site can only reference a `calc def`
 declared in the model, so a helper backs a call only when a calc def of that
