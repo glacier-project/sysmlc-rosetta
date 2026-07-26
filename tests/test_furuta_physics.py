@@ -1,7 +1,8 @@
 """Unit tests for the furuta_physics pure-Python module.
 
-Imports the module by file path since it lives under models/ (not the
-sysmlc package).  No ``lf`` mark — these are fast, deterministic tests.
+Imports the module by file path since it ships as sysmlc-models package
+data (not as an importable module).  No ``lf`` mark — these are fast,
+deterministic tests.
 
 The physics module's ``step()`` does a runtime import of ``PendulumState``
 from the generated companion module ``furutaSystem_types``.  Tests that call
@@ -20,7 +21,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import pytest
-from sysmlc_models.catalog import model_file, model_path
+from sysmlc_models.catalog import model_file
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -32,8 +33,7 @@ if TYPE_CHECKING:
 _MODULE_PATH = model_file("showcase/furuta-pendulum/furuta_physics.py")
 
 _SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
-_MODEL_DIR = str(model_path("showcase/furuta-pendulum"))
-_PHYSICS_FILE = str(_MODULE_PATH)
+_MODEL_DIR = _MODULE_PATH.parent
 
 
 def _load_module() -> ModuleType:
@@ -77,7 +77,7 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
             "-o",
             str(out),
             "--python",
-            _PHYSICS_FILE,
+            _MODULE_PATH,
         ],
         check=True,
         capture_output=True,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import syside
+from sysmlc_models.showcase import SHOWCASE_DIR
 
 from sysmlc.backends.rosetta.backend import RosettaBackend
 from sysmlc.backends.rosetta.builder import RosettaBuilder, build_program
@@ -20,7 +21,6 @@ from sysmlc.sysml.queries import (
     rig_definitions,
 )
 from tests.backends.rosetta.conftest import FIXTURES_DIR
-from tests.backends.test_showcase import SHOWCASE_DIR
 
 
 def test_rig_definitions_finds_the_rig() -> None:

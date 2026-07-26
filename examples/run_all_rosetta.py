@@ -43,9 +43,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from sysmlc_models.catalog import model_path
+from sysmlc_models.showcase import SHOWCASE_DIR
 
-SHOWCASE_DIR = model_path("showcase")
 BUILD_ROOT = Path(__file__).resolve().parent / "build"
 
 _ENTERED_RE = re.compile(r"entered (\S+)")
@@ -235,12 +234,11 @@ def main() -> int:
     if not _which_lfc():
         sys.exit("lfc is not on PATH; install Lingua Franca first")
 
-    build_root = BUILD_ROOT
     results: list[Result] = []
     models = _model_dirs(args.only)
     for index, model_dir in enumerate(models, start=1):
         print(f"[{index}/{len(models)}] {model_dir.name} ...", flush=True)
-        result = _run_model(model_dir, build_root, args.timeout)
+        result = _run_model(model_dir, BUILD_ROOT, args.timeout)
         results.append(result)
         _report(result, args.show_states)
 
