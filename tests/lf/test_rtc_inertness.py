@@ -66,12 +66,31 @@ def _is_transition_trig(trig: str) -> bool:
     )
 
 
+SHARED_PYTHON_SUPPORT = {
+    SHOWCASE_DIR / "furuta-pendulum" / "deterministic": (
+        SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
+    ),
+}
 SHOWCASE_DIRS = sorted(
-    d for d in SHOWCASE_DIR.iterdir() if d.is_dir() and any(d.glob("*.sysml"))
+    {source.parent for source in SHOWCASE_DIR.rglob("*.sysml")}
 )
 
 
-@pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=lambda d: d.name)
+def _model_id(model_dir: Path) -> str:
+    return model_dir.relative_to(SHOWCASE_DIR).as_posix()
+
+
+def _python_arguments(model_dir: Path) -> list[str]:
+    pys = sorted(model_dir.glob("*.py"))
+    if len(pys) == 1:
+        return ["--python", str(pys[0])]
+    shared = SHARED_PYTHON_SUPPORT.get(model_dir)
+    if shared is not None:
+        return ["--python", str(shared)]
+    return []
+
+
+@pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=_model_id)
 def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
@@ -88,9 +107,7 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         "--timeout",
         "30 sec",
     ]
-    pys = list(model_dir.glob("*.py"))
-    if len(pys) == 1:
-        cmd += ["--python", str(pys[0])]
+    cmd += _python_arguments(model_dir)
     build = subprocess.run(cmd, capture_output=True, text=True)
     assert build.returncode == 0, build.stderr
     lfs = list(src.glob("*.lf"))
@@ -125,4 +142,6 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         for key, trigs in fires.items()
         if len({t for t in trigs if _is_transition_trig(t)}) >= 2
     }
-    assert not collisions, f"1B collisions in {model_dir.name}: {collisions}"
+    assert not collisions, (
+        f"1B collisions in {_model_id(model_dir)}: {collisions}"
+    )
