@@ -2,7 +2,9 @@
 name = "sysmlc-rosetta"
 version = "0.0.0"
 description = "The rosetta backend for sysmlc: Lingua Franca reactors from SysML v2 state machines"
-authors = [{ name = "Mario Libro", email = "mario.libro@univr.it" }]
+authors = [
+    { name = "Sebastiano Gaiardelli", email = "sebastiano.gaiardelli@univr.it" },
+]
 requires-python = ">=3.12,<4"
 readme = "README.md"
 license = "BSD-2-Clause"

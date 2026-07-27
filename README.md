@@ -1,12 +1,22 @@
-# sysmlc-rosetta
+# 🪨 sysmlc-rosetta
 
 The **rosetta** backend for [sysmlc](https://github.com/glacier-project/sysmlc-core):
 it translates SysML v2 state machines into [Lingua Franca](https://www.lf-lang.org/)
 modal-reactor programs targeting Python.
 
-`docs/rosetta-mapping.md` is the canonical, construct-by-construct record of
-the SysML-to-Lingua-Franca mapping and of the boundaries of what this backend
-supports.
+**Status:** in progress.
+
+## Overview
+
+Rosetta maps a SysML state machine onto a Lingua Franca modal reactor: states
+become modes and transitions become reactions. A connected part system becomes
+a `main reactor` that instantiates one reactor per part and wires its connected
+ports, leaving orchestration — routing, scheduling and logical time — to the
+Lingua Franca runtime.
+
+[`docs/rosetta-mapping.md`](docs/rosetta-mapping.md) is the canonical,
+construct-by-construct record of the SysML-to-Lingua-Franca mapping and of the
+boundaries of what this backend supports.
 
 ## Prerequisites
 
@@ -33,11 +43,10 @@ tests and examples use.
 
 ## Usage
 
-Installing this package beside the core registers the backend through the
-`sysmlc.backends` entry-point group, which makes it available on the shared
-CLI. Model arguments accept either a path to a model directory or the name of
-a bundled corpus model. When a model has exactly one top-level part usage,
-`--element` can be omitted and the CLI selects the system target:
+Installed beside the core, the backend registers itself on the shared CLI.
+Model arguments take either a path or a bundled corpus name. When a model has
+exactly one top-level part usage, `--element` can be omitted and the CLI
+selects the system target:
 
 ```bash
 uv run sysmlc rosetta build showcase/milling-workcell -o out/
@@ -59,8 +68,31 @@ uv run sysmlc rosetta build showcase/thermostat \
   --values values.yaml -o out/
 ```
 
+Two flags shape the generated program's `target` header, and apply to
+top-level part usages only:
+
+| Flag        | Meaning                                               |
+| ----------- | ----------------------------------------------------- |
+| `--timeout` | run timeout for the generated program, e.g. `"5 sec"` |
+| `--fast`    | enable fast mode in the generated program             |
+
+External `calc def` calls can be backed by a Python file passed with
+`--python`, matched to SysML functions by simple name.
+
 `examples/run_all_rosetta.py` builds, compiles and runs every showcase model
 end to end and reports a per-model verdict.
+
+## Layout
+
+```
+sysmlc_rosetta/
+├── backend.py       # RosettaBackend: the sysmlc plugin entry point
+├── builder.py       # neutral facts -> modal reactor
+├── codegen.py       # expressions -> Python source for reactions
+├── parts.py         # connected part systems -> main reactor
+├── program.py       # the LfProgram model
+└── serialize.py     # Lingua Franca source output
+```
 
 ## Development
 
@@ -73,3 +105,7 @@ uv run tox run -e formatter      # ruff check --fix and ruff format
 uv run tox run -e docs           # sphinx -W
 uv run pre-commit install        # once after cloning
 ```
+
+The inner-first and run-to-completion tests compare rosetta's output against
+[quake](https://github.com/glacier-project/sysmlc-quake)'s statecharts, which
+is why quake is a test dependency of this repository.
