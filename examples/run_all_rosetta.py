@@ -45,6 +45,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from sysmlc_models.catalog import model_dirs_under
 from sysmlc_models.showcase import SHOWCASE_DIR
 
 BUILD_ROOT = Path(__file__).resolve().parent / "build"
@@ -72,7 +73,7 @@ class Result:
 
 def _model_dirs(only: list[str] | None) -> list[Path]:
     """Return showcase model directories, including nested variants."""
-    dirs = sorted({source.parent for source in SHOWCASE_DIR.rglob("*.sysml")})
+    dirs = model_dirs_under(SHOWCASE_DIR)
     if only:
         chosen = []
         matched = set()

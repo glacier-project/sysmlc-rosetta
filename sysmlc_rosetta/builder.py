@@ -477,9 +477,7 @@ class RosettaBuilder:
                 # Rosetta transports payloads as class instances over LF
                 # ports, so every constructed type needs a generated
                 # class, including attribute-less signal markers.
-                definition = constructed_payload_definition(
-                    action, include_empty=True
-                )
+                definition = constructed_payload_definition(action)
                 if definition is not None:
                     self._register_dataclass(definition)
         for scope, sent in self._sent_by_scope.items():

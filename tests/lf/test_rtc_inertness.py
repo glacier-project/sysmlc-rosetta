@@ -21,7 +21,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import pytest
+from sysmlc_models.catalog import model_dirs_under
 from sysmlc_models.showcase import SHOWCASE_DIR
+
+from examples import run_all_rosetta
 
 pytestmark = pytest.mark.lf
 
@@ -66,28 +69,16 @@ def _is_transition_trig(trig: str) -> bool:
     )
 
 
-SHARED_PYTHON_SUPPORT = {
-    SHOWCASE_DIR / "furuta-pendulum" / "deterministic": (
-        SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
-    ),
-}
-SHOWCASE_DIRS = sorted(
-    {source.parent for source in SHOWCASE_DIR.rglob("*.sysml")}
-)
+SHOWCASE_DIRS = model_dirs_under(SHOWCASE_DIR)
 
 
 def _model_id(model_dir: Path) -> str:
     return model_dir.relative_to(SHOWCASE_DIR).as_posix()
 
 
-def _python_arguments(model_dir: Path) -> list[str]:
-    pys = sorted(model_dir.glob("*.py"))
-    if len(pys) == 1:
-        return ["--python", str(pys[0])]
-    shared = SHARED_PYTHON_SUPPORT.get(model_dir)
-    if shared is not None:
-        return ["--python", str(shared)]
-    return []
+# The support-file policy (single *.py in the folder, else the sweep's
+# curated shared file) lives in one place: the rosetta sweep script.
+_python_arguments = run_all_rosetta._python_arguments
 
 
 @pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=_model_id)

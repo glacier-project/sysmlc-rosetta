@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, override
 
 import syside
 from sysmlc.codegen.python import PythonCodeGen, payload_signature
-from sysmlc.codegen.structured import DataclassRegistry
+from sysmlc.codegen.structured import DataclassRegistry, types_import_lines
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import (
     send_receiver_is_own_port,
@@ -129,25 +129,10 @@ class PreambleNeeds:
         return lines
 
     def companion_module_lines(self) -> list[str]:
-        """Render the ``<basename>_types.py`` module: enums + dataclasses.
-
-        Deferred annotations are required: dataclass blocks are emitted
-        sorted by name, so a field typed by another generated class may
-        precede that class's definition in the module.
-        """
-        lines: list[str] = []
-        if self.dataclasses:
-            lines.append("from __future__ import annotations")
-            lines.append("")
-        enum_lines = self._enum_class_lines()
-        lines.extend(enum_lines)
-        if self.dataclasses:
-            if enum_lines:
-                lines.append("")
-            lines.append("from dataclasses import dataclass")
-            lines.append("")
-            lines.extend(self.dataclasses.class_blocks())
-        return lines
+        """Render the ``<basename>_types.py`` module: enums + dataclasses."""
+        return self.dataclasses.module_lines(
+            preceding_lines=self._enum_class_lines()
+        )
 
     def preamble_lines(self) -> list[str]:
         """Assemble the LF preamble: stdlib imports + type/function imports."""
@@ -160,11 +145,7 @@ class PreambleNeeds:
             assert self.external_module is not None
             lines.append(f"from {self.external_module} import {name}")
         names = sorted(self.enum_defs) + self.dataclasses.names()
-        if names:
-            assert self.types_module is not None, (
-                "types_module must be set before preamble assembly"
-            )
-            lines.append(f"from {self.types_module} import {', '.join(names)}")
+        lines.extend(types_import_lines(self.types_module, names))
         return lines
 
 
