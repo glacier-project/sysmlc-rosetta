@@ -5,6 +5,10 @@ from dataclasses import replace
 
 import syside
 from sysmlc.codegen.python import payload_signature
+from sysmlc.codegen.structured import (
+    constructed_payload_definition,
+    register_dataclass,
+)
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions, transitions
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
@@ -24,13 +28,11 @@ from sysmlc.semantics.statemachine.facts import (
     WhenTrigger,
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
-from sysmlc.sysml.queries import feature_value
 
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
     files_option,
-    py_type,
 )
 from sysmlc_rosetta.program import (
     Connection,
@@ -472,11 +474,14 @@ class RosettaBuilder:
                     self._self_sched_by_scope.setdefault(scope, set()).add(
                         event_name
                     )
-                payload = action.payload_argument
-                if isinstance(payload, syside.ConstructorExpression):
-                    item_type = payload.instantiated_type
-                    if isinstance(item_type, syside.Definition):
-                        self._register_dataclass(item_type)
+                # Rosetta transports payloads as class instances over LF
+                # ports, so every constructed type needs a generated
+                # class, including attribute-less signal markers.
+                definition = constructed_payload_definition(
+                    action, include_empty=True
+                )
+                if definition is not None:
+                    self._register_dataclass(definition)
         for scope, sent in self._sent_by_scope.items():
             for sig in sent:
                 for other, handled in self._handled.items():
@@ -532,36 +537,16 @@ class RosettaBuilder:
         return parameters, state_vars
 
     def _register_dataclass(self, definition: syside.Definition) -> None:
-        """Render ``definition`` as a dataclass and register it on the preamble.
+        """Register ``definition`` on the shared dataclass registry.
 
-        Handles item defs and composite attr defs.  Fields are typed via
-        :func:`py_type` and default to the model's declared default, else
-        ``None`` (every field defaulted, so the dataclass needs no
-        field-ordering care).
+        Initial values render with the init codegen (``self_prefix=False``):
+        a field default executes at import time, outside any reaction.
         """
-        assert definition.name is not None
-        lines: list[str] = ["@dataclass", f"class {definition.name}:"]
-        attrs = definition.owned_attributes.collect()
-        if not attrs:
-            lines.append("    pass")
-        # NOTE: a field whose type is itself a composite is annotated with
-        # that type's name via py_type(), but is NOT recursively registered
-        # here. No current model nests composites; revisit if one does.
-        for attr in attrs:
-            assert attr.name is not None
-            default_expr = feature_value(attr)
-            if default_expr is None:
-                default = "None"
-            else:
-                try:
-                    default = self._init_codegen.render_expression(default_expr)
-                except (ValueError, UnsupportedConstructError):
-                    # Quantity / complex expressions can't render as plain
-                    # Python literals; fall back to None (design note: only
-                    # scalar literal defaults are rendered in the companion).
-                    default = "None"
-            lines.append(f"    {attr.name}: {py_type(attr)} = {default}")
-        self._needs.register_dataclass(definition.name, tuple(lines))
+        register_dataclass(
+            definition,
+            self._needs.dataclasses,
+            self._init_codegen.render_expression,
+        )
 
     def _render_value(self, value: AttributeValue) -> str | None:
         if value is None:

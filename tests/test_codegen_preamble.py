@@ -1,10 +1,11 @@
 from pathlib import Path
 
 import syside
+from sysmlc.codegen.structured import py_type
 from sysmlc.sysml.loading import load_model
 from sysmlc.sysml.queries import resolve
 
-from sysmlc_rosetta.codegen import PreambleNeeds, py_type
+from sysmlc_rosetta.codegen import PreambleNeeds
 
 
 def test_no_types_means_no_module_and_no_import() -> None:
@@ -18,12 +19,15 @@ def test_no_types_means_no_module_and_no_import() -> None:
 def test_dataclass_goes_to_module_preamble_imports_it() -> None:
     needs = PreambleNeeds()
     needs.types_module = "Foo_types"
-    needs.register_dataclass(
-        "Pt", ("@dataclass", "class Pt:", "    x: float = 1.0")
+    needs.dataclasses.register(
+        "Pt", "P::Pt", ("@dataclass", "class Pt:", "    x: float = 1.0")
     )
     assert needs.has_types is True
     assert needs.companion_module_lines() == [
+        "from __future__ import annotations",
+        "",
         "from dataclasses import dataclass",
+        "",
         "@dataclass",
         "class Pt:",
         "    x: float = 1.0",
@@ -37,7 +41,9 @@ def test_preamble_orders_imports_math_then_external_then_types() -> None:
     needs.uses_math = True
     needs.register_external(module="phys", names=frozenset({"step"}))
     needs.used_external.add("step")
-    needs.register_dataclass("Pt", ("@dataclass", "class Pt:", "    pass"))
+    needs.dataclasses.register(
+        "Pt", "P::Pt", ("@dataclass", "class Pt:", "    pass")
+    )
     assert needs.preamble_lines() == [
         "import math",
         "from phys import step",
