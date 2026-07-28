@@ -72,12 +72,10 @@ def _is_transition_trig(trig: str) -> bool:
 SHOWCASE_DIRS = model_dirs_under(SHOWCASE_DIR)
 
 
-def _model_id(model_dir: Path) -> str:
-    return model_dir.relative_to(SHOWCASE_DIR).as_posix()
-
-
-# The support-file policy (single *.py in the folder, else the sweep's
-# curated shared file) lives in one place: the rosetta sweep script.
+# The corpus-relative labeling and the support-file policy (single *.py
+# in the folder, else the curated shared file) live in one place: the
+# rosetta sweep script.
+_model_id = run_all_rosetta._model_name
 _python_arguments = run_all_rosetta._python_arguments
 
 

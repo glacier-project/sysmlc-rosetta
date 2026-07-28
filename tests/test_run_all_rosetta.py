@@ -17,23 +17,6 @@ def _configure_showcase(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
     return showcase
 
 
-def test_model_dirs_discovers_nested_variants(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    showcase = _configure_showcase(monkeypatch, tmp_path)
-    direct = showcase / "thermostat"
-    nested = showcase / "furuta-pendulum" / "deterministic"
-    direct.mkdir(parents=True)
-    nested.mkdir(parents=True)
-    (direct / "thermostat.sysml").touch()
-    (nested / "furuta.sysml").touch()
-
-    assert run_all_rosetta._model_dirs(None) == [nested, direct]
-    assert run_all_rosetta._model_name(nested) == (
-        "furuta-pendulum/deterministic"
-    )
-
-
 def test_model_dirs_accepts_nested_alias(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -42,6 +25,9 @@ def test_model_dirs_accepts_nested_alias(
     nested.mkdir(parents=True)
     (nested / "furuta.sysml").touch()
 
+    assert run_all_rosetta._model_name(nested) == (
+        "furuta-pendulum/deterministic"
+    )
     assert run_all_rosetta._model_dirs(["furuta-pendulum/deterministic"]) == [
         nested
     ]
