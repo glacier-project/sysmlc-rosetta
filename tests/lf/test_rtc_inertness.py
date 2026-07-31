@@ -21,7 +21,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 import pytest
+from sysmlc_models.catalog import model_dirs_under
 from sysmlc_models.showcase import SHOWCASE_DIR
+
+from examples import run_all_rosetta
 
 pytestmark = pytest.mark.lf
 
@@ -66,12 +69,17 @@ def _is_transition_trig(trig: str) -> bool:
     )
 
 
-SHOWCASE_DIRS = sorted(
-    d for d in SHOWCASE_DIR.iterdir() if d.is_dir() and any(d.glob("*.sysml"))
-)
+SHOWCASE_DIRS = model_dirs_under(SHOWCASE_DIR)
 
 
-@pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=lambda d: d.name)
+# The corpus-relative labeling and the support-file policy (single *.py
+# in the folder, else the curated shared file) live in one place: the
+# rosetta sweep script.
+_model_id = run_all_rosetta._model_name
+_python_arguments = run_all_rosetta._python_arguments
+
+
+@pytest.mark.parametrize("model_dir", SHOWCASE_DIRS, ids=_model_id)
 def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
@@ -88,9 +96,7 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         "--timeout",
         "30 sec",
     ]
-    pys = list(model_dir.glob("*.py"))
-    if len(pys) == 1:
-        cmd += ["--python", str(pys[0])]
+    cmd += _python_arguments(model_dir)
     build = subprocess.run(cmd, capture_output=True, text=True)
     assert build.returncode == 0, build.stderr
     lfs = list(src.glob("*.lf"))
@@ -125,4 +131,6 @@ def test_showcase_has_no_1b_collision(model_dir: Path, tmp_path: Path) -> None:
         for key, trigs in fires.items()
         if len({t for t in trigs if _is_transition_trig(t)}) >= 2
     }
-    assert not collisions, f"1B collisions in {model_dir.name}: {collisions}"
+    assert not collisions, (
+        f"1B collisions in {_model_id(model_dir)}: {collisions}"
+    )

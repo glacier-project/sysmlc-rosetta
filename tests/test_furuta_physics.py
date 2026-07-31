@@ -4,11 +4,10 @@ Imports the module by file path since it ships as sysmlc-models package
 data (not as an importable module).  No ``lf`` mark — these are fast,
 deterministic tests.
 
-The physics module's ``step()`` does a runtime import of ``PendulumState``
-from the generated companion module ``furutaSystem_types``.  Tests that call
-``step()`` use the ``generated_types`` session fixture which builds the furuta
-part once, puts ``furutaSystem_types.py`` on ``sys.path``, and imports the
-generated types for use in test assertions.
+Tests that call ``step()`` use the ``generated_types`` session fixture, which
+builds the deterministic Furuta part once and imports its generated companion
+types. This exercises the backend-neutral support module with Rosetta's real
+runtime dataclasses.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
 _MODULE_PATH = model_file("showcase/furuta-pendulum/furuta_physics.py")
 
 _SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
-_MODEL_DIR = _MODULE_PATH.parent
+_MODEL_DIR = _MODULE_PATH.parent / "deterministic"
 
 
 def _load_module() -> ModuleType:
@@ -60,12 +59,9 @@ _fp = _load_module()
 def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     """Generate furutaSystem_types.py by building the furuta part.
 
-    Puts the output dir on sys.path so that the runtime
-    ``from furutaSystem_types import PendulumState`` inside ``step()``
-    resolves.  Also forces a reload of ``furuta_physics`` under its canonical
-    module name so any previously-cached module sees the new path.
-
-    Returns a namespace with ``PendulumState`` and ``AngleReading`` classes.
+    Returns the companion module containing ``PendulumState`` and
+    ``AngleReading`` so the support functions are tested with Rosetta's
+    generated runtime classes.
     """
     out = tmp_path_factory.mktemp("furuta_gen")
     subprocess.run(
@@ -82,18 +78,10 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
         check=True,
         capture_output=True,
     )
-    # Put the generated dir first so furutaSystem_types is importable.
     if str(out) not in sys.path:
         sys.path.insert(0, str(out))
-    # Clear any stale cached module so the fresh one is imported.
     sys.modules.pop("furutaSystem_types", None)
-    types_mod = importlib.import_module("furutaSystem_types")
-    # Reload furuta_physics so its module-level state is consistent
-    # (the runtime import inside step() will now resolve via sys.path).
-    sys.modules.pop("furuta_physics", None)
-    global _fp
-    _fp = _load_module()
-    return types_mod
+    return importlib.import_module("furutaSystem_types")
 
 
 # ---------------------------------------------------------------------------
