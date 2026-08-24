@@ -14,12 +14,11 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from sysmlc.sysml.loading import load_model
-from sysmlc.sysml.textual_representation import (
-    extract_textual,
-    module_function_names,
-    write_module,
+from sysmlc.sysml.foreign_artifact.base import (
+    ForeignArtifact,
+    resolve_foreign_artifact,
 )
+from sysmlc.sysml.loading import load_model
 from sysmlc.values import configure_model
 
 from sysmlc_rosetta.backend import RosettaBackend
@@ -67,16 +66,12 @@ def compile_harness(
         model = configure_model(model, qn, values)
     src = tmp_path / "src"
     src.mkdir()
-    external = None
+    external = []
     if python_file is not None:
-        external = (python_file.stem, module_function_names(python_file))
+        external.append(ForeignArtifact(python_file, "python"))
         shutil.copy(python_file, src / python_file.name)
     else:
-        extracted = extract_textual(model, qn)
-        if extracted is not None:
-            stem, src_lines = extracted
-            module_path = write_module(src_lines, src, stem)
-            external = (stem, module_function_names(module_path))
+        external.extend(resolve_foreign_artifact(model_dir, model, qn))
     program = RosettaBackend().build(model, qn, external=external)
     assert isinstance(program, LfProgram)
     (src / f"{name}.lf").write_text(to_lf(program))
@@ -244,9 +239,9 @@ def run_part(
             ``src/`` so the compiled binary can import it via PYTHONPATH.
     """
     model = load_model(model_dir)
-    external = None
+    external = []
     if python_file is not None:
-        external = (python_file.stem, module_function_names(python_file))
+        external.append(ForeignArtifact(python_file, "python"))
     program = build_part_program(
         model,
         usage_qn,

@@ -161,11 +161,16 @@ def test_assignment_from_builtin_call_renders() -> None:
 
 def test_external_call_renders_with_import() -> None:
     action = _only_effect("sm15-external", "SM15::Ramp", "run")
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
+
     needs = PreambleNeeds()
-    needs.register_external(module="furuta_plant", names=frozenset({"step"}))
+    artifact = ForeignArtifact(
+        SM_EXAMPLES_DIR / "sm15-external" / "ramp.py", "python"
+    )
+    needs.external = [artifact]
     gen = LfPythonCodeGen(frozenset({"x"}), needs=needs)
     assert gen.render_action(action) == "self.x = step(self.x, 0.1)"
-    assert "from furuta_plant import step" in needs.preamble_lines()
+    assert "from ramp import step" in needs.preamble_lines()
 
 
 def _only_send(model_dir: Path, qn: str) -> ActionUsage:

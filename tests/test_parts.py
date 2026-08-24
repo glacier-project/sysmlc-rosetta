@@ -1,5 +1,6 @@
 import pytest
 from sysmlc.errors import UnsupportedConstructError
+from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 from sysmlc.sysml.loading import load_model
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
@@ -73,7 +74,7 @@ def test_build_part_program_with_external_emits_import_and_call() -> None:
     prog = build_part_program(
         load_model(PART_EXT),
         "PartExt::counterSystem",
-        external=("bump", frozenset({"bump"})),
+        external=[ForeignArtifact(PART_EXT / "bump.py", "python")],
     )
     text = to_lf(prog)
     assert "from bump import bump" in text

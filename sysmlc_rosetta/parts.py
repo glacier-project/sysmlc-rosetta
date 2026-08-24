@@ -46,6 +46,7 @@ from sysmlc_rosetta.program import (
 
 if TYPE_CHECKING:
     import syside
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ def build_part_program(
     usage_qn: str,
     *,
     target_options: tuple[tuple[str, str], ...] = (),
-    external: tuple[str, frozenset[str]] | None = None,
+    external: list[ForeignArtifact] | None = None,
 ) -> LfProgram:
     """Build the composed LF program for a top-level part usage.
 
@@ -261,7 +262,7 @@ def build_part_program(
         main=main,
         target_options=target_options,
     )
-    return finalize(program, needs, external)
+    return finalize(program, needs)
 
 
 def _peer_accepts(
@@ -286,7 +287,7 @@ def _build_reactors(
     peer_accepts: dict[str, frozenset[str]],
     *,
     module_name: str,
-    external: tuple[str, frozenset[str]] | None = None,
+    external: list[ForeignArtifact] | None = None,
 ) -> tuple[tuple[Reactor, ...], PreambleNeeds]:
     """Build reactor classes for all part nodes, sharing one preamble.
 
@@ -316,8 +317,8 @@ def _build_reactors(
     """
     needs = PreambleNeeds()
     needs.types_module = module_name
-    if external is not None:
-        needs.register_external(module=external[0], names=external[1])
+    if external:
+        needs.external = external
     seen: set[str] = set()
     reactors: list[Reactor] = []
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import syside
 from sysmlc.codegen.python import payload_signature
@@ -45,6 +46,9 @@ from sysmlc_rosetta.program import (
     Timer,
 )
 from sysmlc_rosetta.serialize import render_duration
+
+if TYPE_CHECKING:
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +256,7 @@ class RosettaBuilder:
             preamble=tuple(self._needs.preamble_lines()),
         )
         if self_defaulted:
-            program = finalize(program, self._needs, None)
+            program = finalize(program, self._needs)
         return program
 
     def _with_constraint_checks(self, machine: Reactor) -> Reactor:
@@ -1502,13 +1506,12 @@ class RosettaBuilder:
 def finalize(
     program: LfProgram,
     needs: PreambleNeeds,
-    external: tuple[str, frozenset[str]] | None,
 ) -> LfProgram:
     """Attach the companion module + ``files:`` to a built program."""
     companion = needs.companion_module_lines()
     file_opt = files_option(
         needs.types_module if companion else None,
-        external[0] if external is not None else None,
+        needs.external,
     )
     options = program.target_options + ((file_opt,) if file_opt else ())
     for event_name, port in sorted(needs.undeliverable_sends):
@@ -1532,7 +1535,7 @@ def build_program(
     model: syside.Model,
     state_def_qn: str,
     *,
-    external: tuple[str, frozenset[str]] | None = None,
+    external: list[ForeignArtifact] | None = None,
 ) -> LfProgram:
     """Build a Lingua Franca program from a SysML state definition.
 
@@ -1552,9 +1555,9 @@ def build_program(
     needs = PreambleNeeds()
     needs.types_module = f"{name}_types"
     if external is not None:
-        needs.register_external(module=external[0], names=external[1])
+        needs.external = external
     result = StateMachineDriver(model).run(
         state_def_qn, RosettaBuilder(name, needs=needs)
     )
     assert isinstance(result, LfProgram)
-    return finalize(result, needs, external)
+    return finalize(result, needs)
