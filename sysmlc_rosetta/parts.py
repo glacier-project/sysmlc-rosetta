@@ -214,11 +214,9 @@ def build_part_program(
         usage_qn: Qualified name of the top-level part usage to assemble.
         target_options: Key/value pairs for the LF ``target Python { … }``
             header (e.g. ``(("fast", "true"), ("timeout", "5 sec"))``).
-        external: Optional ``(module_stem, function_names)`` pair identifying
-            a ``--python`` module whose top-level functions back external
-            calc-def calls.  When supplied, ``module_stem`` and any matched
-            function names are emitted as ``from <module> import <name>`` in
-            the generated preamble.
+        external: Optional foreign artifacts whose top-level Python functions
+            back external ``calc def`` calls. Their module names and matched
+            functions are emitted in the generated preamble.
     """
     g = part_graph(model, usage_qn)
 
@@ -307,9 +305,9 @@ def _build_reactors(
         peer_accepts: Per-usage-name set of signal names accepted by peers.
         module_name: Stem of the companion ``_types`` module (set on the
             shared :class:`PreambleNeeds` before any builder pass).
-        external: Optional ``(module_stem, function_names)`` pair.  When
-            supplied, registered on the shared :class:`PreambleNeeds` before
-            any builder pass so that matched calls land in the preamble.
+        external: Optional foreign artifacts. When supplied, registered on
+            the shared :class:`PreambleNeeds` before any builder pass so that
+            matched calls land in the preamble.
 
     Returns:
         A tuple of ``(reactor_classes, needs)`` where ``needs`` is the shared

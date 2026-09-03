@@ -35,6 +35,7 @@ class RosettaBackend(Backend):
                 "SysML state definitions."
             ),
             formats=(("lf", "Lingua Franca (Python target) program"),),
+            foreign_artifact_languages=("python",),
         )
 
     @override
@@ -132,8 +133,9 @@ class RosettaBackend(Backend):
             model: Loaded syside model.
             usage_qn: Qualified name of the top-level part usage.
             target_options: Key/value pairs for the LF target header.
-            external: Optional ``(module_stem, function_names)`` pair for
-                ``--python`` external calc-def backing.
+            external: Optional foreign artifacts that provide Python
+                implementations for external ``calc def`` calls. Each
+                artifact supplies its module path and declared function names.
         """
         return build_part_program(
             model,

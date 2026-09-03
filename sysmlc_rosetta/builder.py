@@ -1545,8 +1545,9 @@ def build_program(
     Args:
         model: Loaded syside model containing the SysML state def.
         state_def_qn: Qualified name of the SysML ``state def`` to translate.
-        external: Optional ``(module_stem, names)`` pair identifying a Python
-            module that provides external ``calc def`` implementations.
+        external: Optional foreign artifacts providing Python implementations
+            for external ``calc def`` calls. The core parses each artifact's
+            module name and available function names.
 
     Returns:
         The assembled ``LfProgram``.
