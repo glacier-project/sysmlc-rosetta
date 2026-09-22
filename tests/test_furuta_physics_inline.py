@@ -20,8 +20,8 @@ from sysmlc.sysml.foreign_artifact.text_rep import (
 from sysmlc_models.showcase import SHOWCASE_DIR
 
 _SYSMLC = [sys.executable, "-m", "sysmlc.cli"]
-_MODEL_DIR = SHOWCASE_DIR / "furuta-pendulum_inline"
-_SYSML_FILE = str(_MODEL_DIR / "furuta_pendulum_inline.sysml")
+_MODEL_DIR = SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic"
+_SYSML_FILE = str(_MODEL_DIR / "furuta_pendulum.sysml")
 
 
 # ---------------------------------------------------------------------------
@@ -57,12 +57,9 @@ def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
     """Generate furutaSystem_types.py by building the furuta part.
 
-    Puts the output dir on sys.path so that the runtime
-    ``from furutaSystem_types import PendulumState`` inside ``step()``
-    resolves.  Also forces a reload of ``furuta_physics`` under its canonical
-    module name so any previously-cached module sees the new path.
-
-    Returns a namespace with ``PendulumState`` and ``AngleReading`` classes.
+    Returns the companion module containing ``PendulumState`` and
+    ``AngleReading`` so the extracted functions are tested with Rosetta's
+    generated runtime classes.
     """
     out = tmp_path_factory.mktemp("furuta_gen")
     subprocess.run(
@@ -77,14 +74,10 @@ def generated_types(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
         check=True,
         capture_output=True,
     )
-    # Put the generated dir first so furutaSystem_types is importable.
     if str(out) not in sys.path:
         sys.path.insert(0, str(out))
-    # Clear any stale cached module so the fresh one is imported.
     sys.modules.pop("furutaSystem_types", None)
-    types_mod = importlib.import_module("furutaSystem_types")
-
-    return types_mod
+    return importlib.import_module("furutaSystem_types")
 
 
 # ---------------------------------------------------------------------------

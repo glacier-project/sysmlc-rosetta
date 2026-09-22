@@ -184,7 +184,7 @@ _FURUTA_PHYSICS = ForeignArtifact(
 def _build_ctrl() -> LfProgram:
     """Build PendulumController with the physics module's calc-def names."""
     return build_program(
-        load_model(SHOWCASE_DIR / "furuta-pendulum"),
+        load_model(SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic"),
         "FurutaPendulum::PendulumController",
         external=[_FURUTA_PHYSICS],
     )

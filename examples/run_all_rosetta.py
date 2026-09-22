@@ -12,8 +12,9 @@ Pipeline (per model directory in the showcase corpus):
 
 1. **Build** - ``python -m sysmlc.cli rosetta build <model_dir> -o <src>
    --fast --timeout <T>`` auto-selects the single top-level part usage.
-   Models that ship exactly one ``*.py`` file receive ``--python <file>``
-   so the CLI copies the module into ``src/``.
+   Models that ship exactly one ``*.py`` file, or have a curated shared
+   support file, receive ``--python <file>`` so the CLI copies the module
+   into ``src/``. Other models use their textual representations.
 2. **Rename** - the CLI writes ``<Name>.lf`` whose anonymous main reactor
    would clash with a contained reactor of the same name.  We rename the
    single generated ``*.lf`` to ``src/Main.lf`` (``lfc`` names the
@@ -29,7 +30,8 @@ Pipeline (per model directory in the showcase corpus):
    collected for the per-model report.
 
 Usage:
-    python examples/run_all_rosetta.py [--only thermostat microwave]
+    python examples/run_all_rosetta.py
+        [--only thermostat furuta-pendulum/deterministic]
         [--timeout "60 sec"] [--show-states N]
 """
 
@@ -43,9 +45,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from sysmlc_models.catalog import model_dirs_under
 from sysmlc_models.showcase import SHOWCASE_DIR
 
 BUILD_ROOT = Path(__file__).resolve().parent / "build"
+SHARED_PYTHON_SUPPORT = {
+    "furuta-pendulum/deterministic": (
+        SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
+    ),
+}
 
 _ENTERED_RE = re.compile(r"entered (\S+)")
 
@@ -64,18 +72,38 @@ class Result:
 
 
 def _model_dirs(only: list[str] | None) -> list[Path]:
-    dirs = sorted(
-        d
-        for d in SHOWCASE_DIR.iterdir()
-        if d.is_dir() and any(d.glob("*.sysml"))
-    )
+    """Return showcase model directories, including nested variants."""
+    dirs = model_dirs_under(SHOWCASE_DIR)
     if only:
-        chosen = [d for d in dirs if d.name in only]
-        missing = set(only) - {d.name for d in chosen}
+        chosen = []
+        matched = set()
+        for directory in dirs:
+            relative = _model_name(directory)
+            aliases = {directory.name, relative}
+            if aliases.intersection(only):
+                chosen.append(directory)
+                matched.update(aliases)
+        missing = set(only) - matched
         if missing:
             sys.exit(f"unknown model(s): {', '.join(sorted(missing))}")
         return chosen
     return dirs
+
+
+def _model_name(model_dir: Path) -> str:
+    """Return *model_dir* relative to the showcase corpus."""
+    return model_dir.relative_to(SHOWCASE_DIR).as_posix()
+
+
+def _python_arguments(model_dir: Path) -> list[str]:
+    """Return external Python arguments for *model_dir*, if configured."""
+    py_files = sorted(model_dir.glob("*.py"))
+    if len(py_files) == 1:
+        return ["--python", str(py_files[0])]
+    shared = SHARED_PYTHON_SUPPORT.get(_model_name(model_dir))
+    if shared is not None:
+        return ["--python", str(shared)]
+    return []
 
 
 def _build(model_dir: Path, src: Path, timeout: str) -> tuple[bool, str]:
@@ -103,9 +131,7 @@ def _build(model_dir: Path, src: Path, timeout: str) -> tuple[bool, str]:
         "--timeout",
         timeout,
     ]
-    py_files = list(model_dir.glob("*.py"))
-    if len(py_files) == 1:
-        command += ["--python", str(py_files[0])]
+    command += _python_arguments(model_dir)
     completed = subprocess.run(command, capture_output=True, text=True)
     if completed.returncode != 0:
         tail = completed.stderr.strip().splitlines()
@@ -129,7 +155,7 @@ def _run_model(
     Returns:
         A :class:`Result` describing the pipeline outcome.
     """
-    name = model_dir.name
+    name = _model_name(model_dir)
     src = build_root / name / "src"
     src.mkdir(parents=True, exist_ok=True)
     # Drop stale .lf from earlier runs; the rename step expects exactly one.
@@ -215,7 +241,9 @@ def main() -> int:
         "--only",
         nargs="+",
         metavar="MODEL",
-        help="run a subset (directory names, e.g. thermostat microwave)",
+        help=(
+            "run a subset (e.g. thermostat or furuta-pendulum/deterministic)"
+        ),
     )
     parser.add_argument(
         "--timeout",
@@ -237,7 +265,10 @@ def main() -> int:
     results: list[Result] = []
     models = _model_dirs(args.only)
     for index, model_dir in enumerate(models, start=1):
-        print(f"[{index}/{len(models)}] {model_dir.name} ...", flush=True)
+        print(
+            f"[{index}/{len(models)}] {_model_name(model_dir)} ...",
+            flush=True,
+        )
         result = _run_model(model_dir, BUILD_ROOT, args.timeout)
         results.append(result)
         _report(result, args.show_states)

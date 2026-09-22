@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, override
 
 import syside
 from sysmlc.codegen.python import PythonCodeGen, payload_signature
+from sysmlc.codegen.structured import DataclassRegistry, types_import_lines
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import (
     send_receiver_is_own_port,
@@ -43,33 +44,6 @@ if TYPE_CHECKING:
 #   FeatureReferenceExpression.referent -> AttributeUsage (qn resolved)
 # ---------------------------------------------------------------------------
 
-_SCALAR_PY: Final[dict[str, str]] = {
-    "Real": "float",
-    "Rational": "float",
-    "Integer": "int",
-    "Natural": "int",
-    "Boolean": "bool",
-    "String": "str",
-}
-
-
-def py_type(attr: syside.AttributeUsage) -> str:
-    """Map a declared attribute's type to a Python annotation.
-
-    SysML scalars map to Python builtins; a nested composite maps to its
-    own dataclass name; anything unmapped falls back to ``object``.
-    """
-    for definition in attr.attribute_definitions.collect():
-        if definition.name in _SCALAR_PY:
-            return _SCALAR_PY[definition.name]
-        if (
-            isinstance(definition, syside.AttributeDefinition)
-            and definition.owned_attributes.collect()
-        ):
-            assert definition.name is not None
-            return definition.name
-    return "object"
-
 
 class PreambleNeeds:
     """Collects and renders everything the generated LF preamble declares.
@@ -83,7 +57,7 @@ class PreambleNeeds:
 
     def __init__(self) -> None:
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
-        self.dataclass_blocks: dict[str, tuple[str, ...]] = {}
+        self.dataclasses = DataclassRegistry()
         self.uses_math = False
         self.uses_logging = False
         self.types_module: str | None = None
@@ -136,23 +110,10 @@ class PreambleNeeds:
         self.enum_defs[owner.name] = owner
         return f"{owner.name}.{literal.name}"
 
-    def register_dataclass(self, name: str, lines: tuple[str, ...]) -> None:
-        """Register a fully-rendered dataclass block by type name.
-
-        Idempotent for identical blocks; a different block under the same
-        name is a name collision and fails loud.
-        """
-        known = self.dataclass_blocks.get(name)
-        if known is not None and known != lines:
-            raise UnsupportedConstructError(
-                f"two types share the simple name {name!r}; rename one."
-            )
-        self.dataclass_blocks[name] = lines
-
     @property
     def has_types(self) -> bool:
         """Whether any generated type (enum or dataclass) was registered."""
-        return bool(self.enum_defs or self.dataclass_blocks)
+        return bool(self.enum_defs or self.dataclasses)
 
     def _enum_class_lines(self) -> list[str]:
         """Render registered enum defs as Python Enum classes, sorted by name.
@@ -174,20 +135,10 @@ class PreambleNeeds:
         return lines
 
     def companion_module_lines(self) -> list[str]:
-        """Render the ``<basename>_types.py`` module: enums + dataclasses.
-
-        Note: no ``from __future__ import annotations`` here on purpose —
-        annotations evaluate eagerly, so an unregistered nested-composite
-        field type (see ``RosettaBuilder._register_dataclass``) fails loud at
-        import with ``NameError`` rather than silently producing a broken
-        module. Adding deferred annotations would move that to use-time.
-        """
-        lines = self._enum_class_lines()
-        if self.dataclass_blocks:
-            lines.append("from dataclasses import dataclass")
-            for name in sorted(self.dataclass_blocks):
-                lines.extend(self.dataclass_blocks[name])
-        return lines
+        """Render the ``<basename>_types.py`` module: enums + dataclasses."""
+        return self.dataclasses.module_lines(
+            preceding_lines=self._enum_class_lines()
+        )
 
     def preamble_lines(self) -> list[str]:
         """Assemble the LF preamble: stdlib imports + type/function imports."""
@@ -196,7 +147,6 @@ class PreambleNeeds:
             lines.append("import logging")
         if self.uses_math:
             lines.append("import math")
-
         for artifact in self.external:
             names = self.used_external.get(artifact)
             if not names:
@@ -205,13 +155,8 @@ class PreambleNeeds:
                 f"from {artifact.file_name} import {name}"
                 for name in sorted(names)
             )
-
-        names = sorted(self.enum_defs) + sorted(self.dataclass_blocks)
-        if names:
-            assert self.types_module is not None, (
-                "types_module must be set before preamble assembly"
-            )
-            lines.append(f"from {self.types_module} import {', '.join(names)}")
+        names = sorted(self.enum_defs) + self.dataclasses.names()
+        lines.extend(types_import_lines(self.types_module, names))
         return lines
 
 

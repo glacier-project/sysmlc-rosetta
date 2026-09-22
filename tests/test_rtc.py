@@ -8,7 +8,7 @@ from sismic.interpreter import Interpreter
 from sismic.io import import_from_yaml
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
-from sysmlc_quake.backend import QuakeBackend
+from sysmlc_quake.builder import build_statechart
 from sysmlc_quake.serialize import to_yaml as quake_to_yaml
 
 from sysmlc_rosetta.builder import build_program
@@ -68,7 +68,7 @@ A_AT_1S = (
 def _sismic_config(qn: str, events: list[str]) -> set[str]:
     """Build qn through quake, run through sismic, queue events in order."""
     model = load_model(MODEL_DIR)
-    chart = QuakeBackend().build(model, qn)
+    chart = build_statechart(model, qn)
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "chart.yaml"
         p.write_text(quake_to_yaml(chart))
