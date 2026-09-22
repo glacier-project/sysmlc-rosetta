@@ -44,6 +44,7 @@ class RosettaBackend(Backend):
         model: syside.Model,
         element_qn: str,
         external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> object:
         """Build the Lingua Franca program for the given state definition."""
         return build_program(model, element_qn, external=external)
@@ -65,6 +66,7 @@ class RosettaBackend(Backend):
         element_qn: str,
         *,
         external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> LfProgram:
         """Build the composed LF program for a testbench rig.
 
@@ -126,6 +128,7 @@ class RosettaBackend(Backend):
         *,
         target_options: tuple[tuple[str, str], ...] = (),
         external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> object:
         """Build the LF program (main reactor) for a top-level part usage.
 
@@ -136,6 +139,7 @@ class RosettaBackend(Backend):
             external: Optional foreign artifacts that provide Python
                 implementations for external ``calc def`` calls. Each
                 artifact supplies its module path and declared function names.
+            strict_extern: Unused.
         """
         return build_part_program(
             model,
