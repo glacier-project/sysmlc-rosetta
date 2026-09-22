@@ -42,7 +42,9 @@ def test_preamble_orders_imports_math_then_external_then_types() -> None:
     )
     needs.external = [artifact]
     needs.used_external[artifact] = {"step"}
-    needs.register_dataclass("Pt", ("@dataclass", "class Pt:", "    pass"))
+    needs.dataclasses.register(
+        "Pt", "P::Pt", ("@dataclass", "class Pt:", "    pass")
+    )
     assert needs.preamble_lines() == [
         "import math",
         "from ramp import step",

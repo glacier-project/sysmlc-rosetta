@@ -155,7 +155,7 @@ class PreambleNeeds:
                 f"from {artifact.file_name} import {name}"
                 for name in sorted(names)
             )
-        names = sorted(self.enum_defs) + self.dataclass_blocks.names()
+        names = sorted(self.enum_defs) + self.dataclasses.names()
         lines.extend(types_import_lines(self.types_module, names))
         return lines
 
