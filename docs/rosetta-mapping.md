@@ -256,9 +256,10 @@ module**, NOT inline in the preamble. The `.lf` preamble holds only
 the `.lf` target header lists the module in `files:` so `lfc` copies it into
 `src-gen` (importable at runtime with no `PYTHONPATH`). The module is
 generated whenever ≥1 type exists; a type-less model emits neither the module
-nor a `files:` entry. The same module is what a `--python` file imports (e.g.
-`from furutaSystem_types import PendulumState`), giving both sides one shared,
-typed definition — no `SimpleNamespace`, no duck-typing.
+nor a `files:` entry. A `--python` file may import this module when it needs
+the concrete generated class. It may also operate structurally: the shared
+Furuta support module reconstructs `type(x)`, which keeps it compatible with
+different backend companion-module names without duplicating the physics.
 
 - An enum def referenced anywhere renders as a companion-module
   `class LightColor(Enum):` with literals valued by **name**
@@ -652,11 +653,11 @@ package FurutaPendulum {
 Because collection is model-wide (not call-site-driven), every rep-backed
 calc def lands in the same module: a body may freely call another rep-backed
 calc def, the way `swingup_torque` calls `restrict_angle` in
-`showcase/furuta-pendulum_inline` (the full inline twin of the furuta
-showcase). Scaffolding helpers enter the external-name set like any function
-in a `--python` module, but a SysML call site can only reference a `calc def`
-declared in the model, so a helper backs a call only when a calc def of that
-name exists.
+`showcase/furuta-pendulum/nondeterministic`. The sibling `deterministic`
+variant uses the shared external `furuta_physics.py` instead. Scaffolding
+helpers enter the external-name set like any function in a `--python` module,
+but a SysML call site can only reference a `calc def` declared in the model,
+so a helper backs a call only when a calc def of that name exists.
 
 The purity / determinism contract of `--python` applies unchanged: a rep
 body must be a pure, deterministic function of its inputs.

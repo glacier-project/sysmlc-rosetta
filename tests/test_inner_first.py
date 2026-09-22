@@ -9,7 +9,7 @@ from sismic.io import import_from_yaml
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.sysml.loading import load_model
-from sysmlc_quake.backend import QuakeBackend
+from sysmlc_quake.builder import build_statechart
 from sysmlc_quake.serialize import to_yaml as quake_to_yaml
 
 from sysmlc_rosetta.builder import RosettaBuilder, build_program
@@ -61,7 +61,7 @@ def test_sibling_composites_are_not_a_conflict() -> None:
 def _quake_config_after_ev(qn: str) -> set[str]:
     """Build qn through quake, run it through sismic, fire one Ev."""
     model = load_model(MODEL_DIR)
-    chart = QuakeBackend().build(model, qn)
+    chart = build_statechart(model, qn)
     with tempfile.TemporaryDirectory() as d:
         yaml_path = Path(d) / "chart.yaml"
         yaml_path.write_text(quake_to_yaml(chart))
