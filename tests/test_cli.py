@@ -135,11 +135,10 @@ def test_build_reps_generates_module_beside_lf(tmp_path: Path) -> None:
     assert "def step(x, dt):" in (out / "Ramp_impl.py").read_text()
 
 
-def test_rep_build_rejects_duplicate_explicit_python_artifact(
+def test_rep_build_accepts_generated_module_as_explicit_override(
     tmp_path: Path,
 ) -> None:
-    # The explicit artifact is added to the model's rep artifacts. Reusing
-    # the generated module therefore conflicts with the generated output.
+    # A previously generated implementation replaces model representations.
     rep_out = tmp_path / "rep"
     rc = main(
         [
@@ -167,11 +166,14 @@ def test_rep_build_rejects_duplicate_explicit_python_artifact(
             str(rep_out / "Ramp_impl.py"),
         ]
     )
-    assert rc != 0
+    assert rc == 0
+    assert (python_out / "Ramp_impl.py").read_text() == (
+        rep_out / "Ramp_impl.py"
+    ).read_text()
 
 
-def test_explicit_python_is_bundled_alongside_reps(tmp_path: Path) -> None:
-    # A user-supplied --python module is bundled alongside model reps.
+def test_explicit_python_replaces_model_reps(tmp_path: Path) -> None:
+    # Explicit input replaces representation resolution in its language.
     py = tmp_path / "ramp.py"
     py.write_text("def step(x, dt):\n    return x + dt\n")
     out = tmp_path / "out"
@@ -192,8 +194,8 @@ def test_explicit_python_is_bundled_alongside_reps(tmp_path: Path) -> None:
     lf = (out / "Ramp.lf").read_text()
     assert "from ramp import step" in lf
     assert '"ramp.py"' in lf
-    assert '"Ramp_impl.py"' in lf
-    assert (out / "Ramp_impl.py").exists()
+    assert '"Ramp_impl.py"' not in lf
+    assert not (out / "Ramp_impl.py").exists()
 
 
 def test_build_part_system_emits_main_reactor(tmp_path: Path) -> None:

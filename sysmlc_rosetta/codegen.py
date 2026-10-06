@@ -221,9 +221,10 @@ class LfPythonCodeGen(PythonCodeGen):
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
     ) -> None:
-        super().__init__(context)
-        self._attribute_names = attribute_names
         self._needs = needs if needs is not None else PreambleNeeds()
+        super().__init__(context, external=self._needs.external)
+        self._used_external = self._needs.used_external
+        self._attribute_names = attribute_names
         self._self_prefix = self_prefix
         self._local_names = local_names
         self._port_signals = port_signals
