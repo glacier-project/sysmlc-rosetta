@@ -69,9 +69,10 @@ def compile_harness(
     external = []
     if python_file is not None:
         external.append(ForeignArtifact(python_file, "python"))
-        shutil.copy(python_file, src / python_file.name)
     else:
         external.extend(resolve_foreign_artifact(model_dir, model, qn))
+    for artifact in external:
+        shutil.copy(artifact.path, src / artifact.file_name)
     program = RosettaBackend().build(model, qn, external=external)
     assert isinstance(program, LfProgram)
     (src / f"{name}.lf").write_text(to_lf(program))
