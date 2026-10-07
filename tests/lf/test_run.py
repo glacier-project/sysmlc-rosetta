@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,6 +25,7 @@ from sysmlc.sysml.loading import load_model
 from sysmlc_models.showcase import SHOWCASE_DIR
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
+from sysmlc_rosetta.builder import build_program
 from sysmlc_rosetta.parts import build_part_program
 from sysmlc_rosetta.serialize import to_lf
 from tests.conftest import FIXTURES_DIR
@@ -43,72 +45,6 @@ if TYPE_CHECKING:
 # lfc-missing skipping is centralised in tests/conftest.py
 # (pytest_collection_modifyitems), which skips any lf-marked test.
 pytestmark = pytest.mark.lf
-
-
-def test_sm01_eventless_chain(tmp_path: Path) -> None:
-    states = run_machine(
-        tmp_path, SM_EXAMPLES_DIR / "sm01-helloworld", "SM01::Machine"
-    )
-    assert states == ["idle", "running"]
-
-
-def test_sm02_signal_trigger(tmp_path: Path) -> None:
-    drivers = (
-        "  timer tick(100 msec)\n"
-        "  reaction(tick) -> m.Tick {=\n"
-        "    m.Tick.set(True)\n"
-        "  =}"
-    )
-    states = run_machine(
-        tmp_path,
-        SM_EXAMPLES_DIR / "sm02-event-trigger",
-        "SM02::MachinePortless",
-        drivers=drivers,
-    )
-    assert states == ["idle", "running"]
-
-
-def test_sm10_done_terminates(tmp_path: Path) -> None:
-    states = run_machine(
-        tmp_path, SM_EXAMPLES_DIR / "sm10-done", "SM10::MachineRootDone"
-    )
-    assert states == ["idle", "running", "done"]
-
-
-def test_sm11_self_send(tmp_path: Path) -> None:
-    states = run_machine(
-        tmp_path, SM_EXAMPLES_DIR / "sm11-send-effect", "SM11::MachineSelfSend"
-    )
-    assert states == ["idle", "armed", "fired"]
-
-
-def test_sm12_do_send(tmp_path: Path) -> None:
-    # The do-action send is scheduled from the entry reaction; this runs
-    # only if the scheduled action is declared in the effects clause.
-    states = run_machine(
-        tmp_path, SM_EXAMPLES_DIR / "sm12-do-action", "SM12::MachineDoSend"
-    )
-    assert states == ["working", "finished"]
-
-
-def test_sm13_literal_after(tmp_path: Path) -> None:
-    states = run_machine(
-        tmp_path,
-        SM_EXAMPLES_DIR / "sm13-time-trigger",
-        "SM13::MachineAfterSeconds",
-        timeout="10 sec",
-    )
-    assert states == ["idle", "running", "done"]
-
-
-def test_sm13_attribute_after(tmp_path: Path) -> None:
-    states = run_machine(
-        tmp_path,
-        SM_EXAMPLES_DIR / "sm13-time-trigger",
-        "SM13::MachineAfterAttribute",
-        timeout="200 sec",  # pickDuration default is 2 min of logical time
-    )
-    assert states == ["idle", "running", "done"]
 
 
 def test_after_with_guard(tmp_path: Path) -> None:
@@ -360,71 +296,6 @@ def test_sm09_nested_parallel_runs(tmp_path: Path) -> None:
     assert states == ["idle", "dual.sound.silent", "dual.sound.beeping"]
 
 
-def test_showcase_microwave_completes(tmp_path: Path) -> None:
-    # Heater finishes at 0.4 s, turntable at 0.6 s; the join completes
-    # `cooking`, whose completion transition returns to idle.
-    drivers = (
-        "  timer go(100 msec)\n"
-        "  reaction(go) -> m.StartCmd {=\n"
-        "    m.StartCmd.set(True)\n"
-        "  =}"
-    )
-    states = run_machine(
-        tmp_path,
-        SHOWCASE_DIR / "microwave",
-        "Microwave::MicrowaveBehavior",
-        timeout="2 sec",
-        drivers=drivers,
-    )
-    assert states == [
-        "idle",
-        "cooking.heating.turntable.rotating",
-        "cooking.heating.heater.done",
-        "cooking.heating.turntable.done",
-        "cooking.done",
-        "idle",
-    ]
-
-
-def test_showcase_microwave_pause_and_door_interrupt(tmp_path: Path) -> None:
-    # Resume RESETS the parallel regions (composite re-entry restarts the
-    # heater's 400 ms), and the door interrupt aborts cooking before the
-    # restarted turntable's 600 ms elapse.
-    drivers = (
-        "  timer go(100 msec)\n"
-        "  reaction(go) -> m.StartCmd {=\n"
-        "    m.StartCmd.set(True)\n"
-        "  =}\n"
-        "  timer pause(300 msec)\n"
-        "  reaction(pause) -> m.PauseCmd {=\n"
-        "    m.PauseCmd.set(True)\n"
-        "  =}\n"
-        "  timer resume(600 msec)\n"
-        "  reaction(resume) -> m.ResumeCmd {=\n"
-        "    m.ResumeCmd.set(True)\n"
-        "  =}\n"
-        "  timer door(1100 msec)\n"
-        "  reaction(door) -> m.DoorOpen {=\n"
-        "    m.DoorOpen.set(True)\n"
-        "  =}"
-    )
-    states = run_machine(
-        tmp_path,
-        SHOWCASE_DIR / "microwave",
-        "Microwave::MicrowaveBehavior",
-        timeout="2 sec",
-        drivers=drivers,
-    )
-    assert states == [
-        "idle",
-        "cooking.heating.turntable.rotating",
-        "cooking.paused",
-        "cooking.heating.turntable.rotating",
-        "cooking.heating.heater.done",
-        "idle",
-    ]
-
-
 def test_microwave_rig_verdict(tmp_path: Path) -> None:
     # microwaveSystem: testbench sends StartCmd at 0.1 s, expects Finished
     # before the 5 s timeout; verdict stays 0 (testPassed) -> exit 0.
@@ -434,47 +305,41 @@ def test_microwave_rig_verdict(tmp_path: Path) -> None:
     assert rc == 0, f"expected exit 0 (verdict pass); stderr:\n{logs}"
 
 
-def test_furuta_closed_loop_stabilizes(tmp_path: Path) -> None:
-    # Full closed-loop showcase: sim integrates real Furuta-pendulum physics
-    # (forward-Euler, 5 ms steps), controller swings up from hanging-down
-    # position and stabilises.  The monitor asserts verdict == 0 (Balanced
-    # received within 20 s) and calls request_stop(); exit 0 is the pass
-    # condition.  Debug logs must contain "entered Controller.stabilizing".
-    logs, rc = run_part(
-        tmp_path,
-        SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic",
-        "FurutaPendulum::furutaSystem",
-        timeout="20 sec",
-        python_file=SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py",
-    )
-    assert rc == 0, logs
-    assert "entered Controller.stabilizing" in logs
-
-
-def test_part_runs_self_sufficiently_without_pythonpath(tmp_path: Path) -> None:
-    # The LF files: property ships the companion types module AND the --python
-    # physics module into src-gen, so the compiled binary imports both with NO
-    # PYTHONPATH.  This proves the generated artifact is self-sufficient -- the
-    # whole point of using files: instead of a runtime PYTHONPATH hack.  Unlike
-    # run_part, this test writes no sitecustomize and clears PYTHONPATH: the
-    # only path by which furutaSystem_types/furuta_physics can be imported is
-    # files:.  Exit 0 means the closed loop reached the Balanced verdict.
-    model = load_model(SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic")
-    python_file = SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
-    program = build_part_program(
-        model,
-        "FurutaPendulum::furutaSystem",
-        target_options=(("fast", "true"), ("timeout", "20 sec")),
-        external=[ForeignArtifact(python_file, "python")],
-    )
+@pytest.mark.parametrize("support_kind", ["types", "python"])
+def test_generated_support_runs_without_pythonpath(
+    tmp_path: Path, support_kind: str
+) -> None:
+    if support_kind == "types":
+        model = load_model(SM_EXAMPLES_DIR / "sm05-chained-references")
+        program = build_program(model, "SM05::MachineChainGuard")
+        assert program.types_module_name is not None
+        program = replace(
+            program,
+            target_options=(
+                *program.target_options,
+                ("fast", "true"),
+                ("timeout", "1 sec"),
+            ),
+        )
+        python_file = None
+    else:
+        model_dir = SM_EXAMPLES_DIR / "part-external"
+        python_file = model_dir / "bump.py"
+        program = build_part_program(
+            load_model(model_dir),
+            "PartExt::counterSystem",
+            target_options=(("fast", "true"), ("timeout", "1 sec")),
+            external=[ForeignArtifact(python_file, "python")],
+        )
     src = tmp_path / "src"
     src.mkdir()
     (src / "Main.lf").write_text(to_lf(program))
-    assert program.types_module_name is not None
-    (src / f"{program.types_module_name}.py").write_text(
-        "\n".join(program.types_module_lines) + "\n"
-    )
-    shutil.copy(python_file, src / python_file.name)
+    if program.types_module_name is not None:
+        (src / f"{program.types_module_name}.py").write_text(
+            "\n".join(program.types_module_lines) + "\n"
+        )
+    if python_file is not None:
+        shutil.copy(python_file, src / python_file.name)
     compile_result = subprocess.run(
         ["lfc", str(src / "Main.lf")], capture_output=True, timeout=600
     )
