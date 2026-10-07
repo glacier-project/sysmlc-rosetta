@@ -109,3 +109,25 @@ uv run pre-commit install        # once after cloning
 The inner-first and run-to-completion tests compare rosetta's output against
 [quake](https://github.com/glacier-project/sysmlc-quake)'s statecharts, which
 is why quake is a test dependency of this repository.
+
+## Citation
+
+If you use rosetta in your research, please cite:
+
+> S. Gaiardelli, M. Libro, P. Turco, E. Fraccaroli, M. Lora, S. Chakraborty and
+> F. Fummi, "Rosetta: Compiling SysML v2 Behavior into Lingua Franca Modal
+> Reactors," *IEEE Embedded Systems Letters*, 2026,
+> doi: [10.1109/LES.2026.3730614](https://doi.org/10.1109/LES.2026.3730614).
+
+```bibtex
+@article{gaiardelli2026rosetta,
+  author  = {Gaiardelli, Sebastiano and Libro, Mario and Turco, Pietro and
+             Fraccaroli, Enrico and Lora, Michele and Chakraborty, Samarjit and
+             Fummi, Franco},
+  title   = {Rosetta: Compiling {SysML} v2 Behavior into {Lingua Franca} Modal
+             Reactors},
+  journal = {IEEE Embedded Systems Letters},
+  year    = {2026},
+  doi     = {10.1109/LES.2026.3730614},
+}
+```
