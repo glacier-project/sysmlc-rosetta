@@ -1,0 +1,36 @@
+name: Notify sysmlc of a release
+
+on:
+  push:
+    tags:
+    - v*
+
+permissions:
+  contents: read
+
+jobs:
+  notify-sysmlc:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+    - name: Verify and notify the umbrella
+      env:
+        GH_TOKEN: ${{ secrets.GH_REPOS_READ_TOKEN }}
+        REPO_NAME: ${{ github.event.repository.name }}
+        TAG_NAME: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+        sha=$(git rev-parse 'HEAD^{commit}')
+        if ! git merge-base --is-ancestor "$sha" origin/main; then
+          echo "::error::Release tag $TAG_NAME is outside main."
+          exit 1
+        fi
+
+        jq -n --arg sub "$REPO_NAME" --arg sha "$sha" --arg tag "$TAG_NAME" \
+          '{event_type: "submodule-updated", client_payload: {submodule: $sub, sha: $sha, tag: $tag, branch: "main"}}' \
+          | gh api --method POST repos/glacier-project/sysmlc/dispatches --input -
