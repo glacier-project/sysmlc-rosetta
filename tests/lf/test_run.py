@@ -13,13 +13,13 @@ for a fast local loop when lfc is installed.
 
 from __future__ import annotations
 
-import ast
 import os
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
+from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 from sysmlc.sysml.loading import load_model
 from sysmlc_models.showcase import SHOWCASE_DIR
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
@@ -461,16 +461,11 @@ def test_part_runs_self_sufficiently_without_pythonpath(tmp_path: Path) -> None:
     # files:.  Exit 0 means the closed loop reached the Balanced verdict.
     model = load_model(SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic")
     python_file = SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py"
-    names = frozenset(
-        n.name
-        for n in ast.parse(python_file.read_text()).body
-        if isinstance(n, ast.FunctionDef)
-    )
     program = build_part_program(
         model,
         "FurutaPendulum::furutaSystem",
         target_options=(("fast", "true"), ("timeout", "20 sec")),
-        external=(python_file.stem, names),
+        external=[ForeignArtifact(python_file, "python")],
     )
     src = tmp_path / "src"
     src.mkdir()

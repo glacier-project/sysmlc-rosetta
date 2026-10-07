@@ -46,6 +46,7 @@ from sysmlc_rosetta.program import (
 
 if TYPE_CHECKING:
     import syside
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ def build_part_program(
     usage_qn: str,
     *,
     target_options: tuple[tuple[str, str], ...] = (),
-    external: tuple[str, frozenset[str]] | None = None,
+    external: list[ForeignArtifact] | None = None,
 ) -> LfProgram:
     """Build the composed LF program for a top-level part usage.
 
@@ -213,11 +214,9 @@ def build_part_program(
         usage_qn: Qualified name of the top-level part usage to assemble.
         target_options: Key/value pairs for the LF ``target Python { … }``
             header (e.g. ``(("fast", "true"), ("timeout", "5 sec"))``).
-        external: Optional ``(module_stem, function_names)`` pair identifying
-            a ``--python`` module whose top-level functions back external
-            calc-def calls.  When supplied, ``module_stem`` and any matched
-            function names are emitted as ``from <module> import <name>`` in
-            the generated preamble.
+        external: Optional foreign artifacts whose top-level Python functions
+            back external ``calc def`` calls. Their module names and matched
+            functions are emitted in the generated preamble.
     """
     g = part_graph(model, usage_qn)
 
@@ -261,7 +260,7 @@ def build_part_program(
         main=main,
         target_options=target_options,
     )
-    return finalize(program, needs, external)
+    return finalize(program, needs)
 
 
 def _peer_accepts(
@@ -286,7 +285,7 @@ def _build_reactors(
     peer_accepts: dict[str, frozenset[str]],
     *,
     module_name: str,
-    external: tuple[str, frozenset[str]] | None = None,
+    external: list[ForeignArtifact] | None = None,
 ) -> tuple[tuple[Reactor, ...], PreambleNeeds]:
     """Build reactor classes for all part nodes, sharing one preamble.
 
@@ -306,9 +305,9 @@ def _build_reactors(
         peer_accepts: Per-usage-name set of signal names accepted by peers.
         module_name: Stem of the companion ``_types`` module (set on the
             shared :class:`PreambleNeeds` before any builder pass).
-        external: Optional ``(module_stem, function_names)`` pair.  When
-            supplied, registered on the shared :class:`PreambleNeeds` before
-            any builder pass so that matched calls land in the preamble.
+        external: Optional foreign artifacts. When supplied, registered on
+            the shared :class:`PreambleNeeds` before any builder pass so that
+            matched calls land in the preamble.
 
     Returns:
         A tuple of ``(reactor_classes, needs)`` where ``needs`` is the shared
@@ -316,8 +315,8 @@ def _build_reactors(
     """
     needs = PreambleNeeds()
     needs.types_module = module_name
-    if external is not None:
-        needs.register_external(module=external[0], names=external[1])
+    if external:
+        needs.external = external
     seen: set[str] = set()
     reactors: list[Reactor] = []
 

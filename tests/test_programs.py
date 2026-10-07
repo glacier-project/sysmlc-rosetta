@@ -474,10 +474,12 @@ def test_build_program_no_types_module_when_no_types() -> None:
 
 
 def test_part_program_sets_types_module_and_files() -> None:
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
+
     prog = build_part_program(
         load_model(PART_EXT),
         "PartExt::counterSystem",
-        external=("bump", frozenset({"bump"})),
+        external=[ForeignArtifact(PART_EXT / "bump.py", "python")],
     )
     # part-external has no composite attribute types, only external functions.
     # files: must still include the --python module.

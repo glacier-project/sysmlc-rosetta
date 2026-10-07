@@ -13,6 +13,7 @@ from sysmlc.semantics.statemachine.interface import (
 
 if TYPE_CHECKING:
     from sysmlc.codegen.python import PythonCodeGenContext
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
 # ---------------------------------------------------------------------------
 # Verified syside node shapes for call-effect transitions (2026-06-15)
@@ -60,12 +61,22 @@ class PreambleNeeds:
         self.uses_math = False
         self.uses_logging = False
         self.types_module: str | None = None
-        self.external_module: str | None = None
-        self.external_names: frozenset[str] = frozenset()
-        self.used_external: set[str] = set()
+        self.external: list[ForeignArtifact] = []
+        self._used_external: dict[ForeignArtifact, set[str]] = {}
         # (event_name, via_port) for `via` sends with no connected peer;
         # surfaced as build warnings (see builder.finalize).
         self.undeliverable_sends: set[tuple[str, str]] = set()
+
+    @property
+    def used_external(self) -> dict[ForeignArtifact, set[str]]:
+        """Foreign artifacts and function names actually invoked so far.
+
+        Populated incrementally as calc-def calls backed by an external
+        artifact are emitted. Callers (typically a backend that needs to
+        know which support modules to bundle) should read this only after
+        generation is complete.
+        """
+        return self._used_external
 
     def register_enum(self, literal: syside.EnumerationUsage) -> str:
         """Register the literal's enum def; return ``Def.literal`` source.
@@ -104,11 +115,6 @@ class PreambleNeeds:
         """Whether any generated type (enum or dataclass) was registered."""
         return bool(self.enum_defs or self.dataclasses)
 
-    def register_external(self, *, module: str, names: frozenset[str]) -> None:
-        """Record the --python module and the function names it provides."""
-        self.external_module = module
-        self.external_names = names
-
     def _enum_class_lines(self) -> list[str]:
         """Render registered enum defs as Python Enum classes, sorted by name.
 
@@ -141,23 +147,29 @@ class PreambleNeeds:
             lines.append("import logging")
         if self.uses_math:
             lines.append("import math")
-        for name in sorted(self.used_external):
-            assert self.external_module is not None
-            lines.append(f"from {self.external_module} import {name}")
+        for artifact in self.external:
+            names = self.used_external.get(artifact)
+            if not names:
+                continue
+            lines.extend(
+                f"from {artifact.file_name} import {name}"
+                for name in sorted(names)
+            )
         names = sorted(self.enum_defs) + self.dataclasses.names()
         lines.extend(types_import_lines(self.types_module, names))
         return lines
 
 
 def files_option(
-    types_module: str | None, external_module: str | None
+    types_module: str | None, external: list[ForeignArtifact] | None
 ) -> tuple[str, str] | None:
     """Build the ``files:`` target option, or None when nothing to ship."""
     names: list[str] = []
     if types_module is not None:
         names.append(f"{types_module}.py")
-    if external_module is not None:
-        names.append(f"{external_module}.py")
+    if external:
+        for artifact in external:
+            names.append(artifact.path.name)
     if not names:
         return None
     listed = ", ".join(f'"{n}"' for n in names)
@@ -209,9 +221,10 @@ class LfPythonCodeGen(PythonCodeGen):
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
     ) -> None:
-        super().__init__(context)
-        self._attribute_names = attribute_names
         self._needs = needs if needs is not None else PreambleNeeds()
+        super().__init__(context, external=self._needs.external)
+        self._used_external = self._needs.used_external
+        self._attribute_names = attribute_names
         self._self_prefix = self_prefix
         self._local_names = local_names
         self._port_signals = port_signals
@@ -359,8 +372,7 @@ class LfPythonCodeGen(PythonCodeGen):
             return source
         external_call = self._emit_external_calculation_invocation(
             expr,
-            external_module=self._needs.external_module,
-            external_names=self._needs.external_names,
+            external=self._needs.external,
             used_external=self._needs.used_external,
         )
         if external_call is not None:

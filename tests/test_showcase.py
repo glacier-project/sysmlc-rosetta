@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 from sysmlc.sysml.loading import load_model
 from sysmlc_models.showcase import SHOWCASE_DIR
 
@@ -175,14 +176,8 @@ def test_vending_dispense_constructs_payload_class() -> None:
 
 # -- furuta-pendulum: external calc-defs + port-based signals --
 
-_FURUTA_PHYSICS = frozenset(
-    {
-        "step",
-        "swingup_torque",
-        "catch_torque",
-        "stabilize_torque",
-        "restrict_angle",
-    }
+_FURUTA_PHYSICS = ForeignArtifact(
+    SHOWCASE_DIR / "furuta-pendulum" / "furuta_physics.py", "python"
 )
 
 
@@ -191,7 +186,7 @@ def _build_ctrl() -> LfProgram:
     return build_program(
         load_model(SHOWCASE_DIR / "furuta-pendulum" / "nondeterministic"),
         "FurutaPendulum::PendulumController",
-        external=("furuta_physics", _FURUTA_PHYSICS),
+        external=[_FURUTA_PHYSICS],
     )
 
 

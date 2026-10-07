@@ -13,9 +13,9 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 import syside
-from sysmlc.sysml.textual_representation import (
-    extract_textual,
-    write_module,
+from sysmlc.sysml.foreign_artifact.text_rep import (
+    extract_text_rep,
+    write_file,
 )
 from sysmlc_models.showcase import SHOWCASE_DIR
 
@@ -36,13 +36,13 @@ def physics_module(tmp_path_factory: pytest.TempPathFactory) -> ModuleType:
 
     model, _ = syside.load_model([_SYSML_FILE])
 
-    result = extract_textual(
+    result = extract_text_rep(
         model, "furuta::physics", module_name="furuta_physics_inline"
     )
     assert result is not None
     stem, src_lines = result
 
-    write_module(src_lines, out, stem)
+    write_file(src_lines, out, stem)
 
     if str(out) not in sys.path:
         sys.path.insert(0, str(out))

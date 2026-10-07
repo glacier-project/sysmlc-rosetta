@@ -48,6 +48,12 @@ def test_formats(backend: RosettaBackend) -> None:
     assert backend.default_format() == "lf"
 
 
+def test_supported_foreign_artifact_languages(backend: RosettaBackend) -> None:
+    assert backend.supported_foreign_artifact_languages() == frozenset(
+        {"python"}
+    )
+
+
 def test_build_returns_lf_program(artifact: LfProgram) -> None:
     assert artifact.reactor.name == "Machine"
 

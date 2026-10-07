@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import syside
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class RosettaBackend(Backend):
                 "SysML state definitions."
             ),
             formats=(("lf", "Lingua Franca (Python target) program"),),
+            foreign_artifact_languages=("python",),
         )
 
     @override
@@ -41,8 +43,8 @@ class RosettaBackend(Backend):
         self,
         model: syside.Model,
         element_qn: str,
-        *,
-        external: tuple[str, frozenset[str]] | None = None,
+        external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> object:
         """Build the Lingua Franca program for the given state definition."""
         return build_program(model, element_qn, external=external)
@@ -63,7 +65,8 @@ class RosettaBackend(Backend):
         model: syside.Model,
         element_qn: str,
         *,
-        external: tuple[str, frozenset[str]] | None = None,
+        external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> LfProgram:
         """Build the composed LF program for a testbench rig.
 
@@ -103,8 +106,8 @@ class RosettaBackend(Backend):
         composite_name = element_qn.split("::")[-1]
         needs = PreambleNeeds()
         needs.types_module = f"{composite_name}_types"
-        if external is not None:
-            needs.register_external(module=external[0], names=external[1])
+        if external:
+            needs.external = external
         children, composite = compose_exhibits(
             model,
             composite_name,
@@ -115,7 +118,7 @@ class RosettaBackend(Backend):
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
         )
-        return finalize(program, needs, external)
+        return finalize(program, needs)
 
     @override
     def build_part(
@@ -124,7 +127,8 @@ class RosettaBackend(Backend):
         usage_qn: str,
         *,
         target_options: tuple[tuple[str, str], ...] = (),
-        external: tuple[str, frozenset[str]] | None = None,
+        external: list[ForeignArtifact] | None = None,
+        strict_extern: bool = False,
     ) -> object:
         """Build the LF program (main reactor) for a top-level part usage.
 
@@ -132,8 +136,10 @@ class RosettaBackend(Backend):
             model: Loaded syside model.
             usage_qn: Qualified name of the top-level part usage.
             target_options: Key/value pairs for the LF target header.
-            external: Optional ``(module_stem, function_names)`` pair for
-                ``--python`` external calc-def backing.
+            external: Optional foreign artifacts that provide Python
+                implementations for external ``calc def`` calls. Each
+                artifact supplies its module path and declared function names.
+            strict_extern: Unused.
         """
         return build_part_program(
             model,

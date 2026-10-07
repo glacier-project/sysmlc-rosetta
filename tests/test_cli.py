@@ -135,9 +135,10 @@ def test_build_reps_generates_module_beside_lf(tmp_path: Path) -> None:
     assert "def step(x, dt):" in (out / "Ramp_impl.py").read_text()
 
 
-def test_rep_build_matches_explicit_python_build(tmp_path: Path) -> None:
-    # The rep path and the --python path are one pipeline: feeding the
-    # generated module back through --python yields a byte-identical .lf.
+def test_rep_build_accepts_generated_module_as_explicit_override(
+    tmp_path: Path,
+) -> None:
+    # A previously generated implementation replaces model representations.
     rep_out = tmp_path / "rep"
     rc = main(
         [
@@ -166,14 +167,13 @@ def test_rep_build_matches_explicit_python_build(tmp_path: Path) -> None:
         ]
     )
     assert rc == 0
-    rep_lf = (rep_out / "Ramp.lf").read_text()
-    python_lf = (python_out / "Ramp.lf").read_text()
-    assert rep_lf == python_lf
+    assert (python_out / "Ramp_impl.py").read_text() == (
+        rep_out / "Ramp_impl.py"
+    ).read_text()
 
 
-def test_explicit_python_wins_over_reps(tmp_path: Path) -> None:
-    # A user-supplied --python module overrides the model's reps: the
-    # explicit stem backs the calls and no module is generated.
+def test_explicit_python_replaces_model_reps(tmp_path: Path) -> None:
+    # Explicit input replaces representation resolution in its language.
     py = tmp_path / "ramp.py"
     py.write_text("def step(x, dt):\n    return x + dt\n")
     out = tmp_path / "out"

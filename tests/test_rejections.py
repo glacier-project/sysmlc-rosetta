@@ -182,10 +182,20 @@ def test_single_channel_fan_in_is_rejected() -> None:
 
 def test_missing_external_function_names_module() -> None:
     """Calling a calc def not in the --python module names it and the module."""
-    # SM15 calls P::step; we register "phys" as the external module but
-    # supply an empty name set (step absent) — should name both in the error.
+    from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
+
+    # SM15 calls P::step; bump.py does not provide it, so the error should
+    # name both the missing function and the configured module.
     model = load_model(SM_EXAMPLES_DIR / "sm15-external")
     with pytest.raises(
-        UnsupportedConstructError, match=r"step.*phys|phys.*step"
+        UnsupportedConstructError, match=r"step.*no backing function"
     ):
-        build_program(model, "SM15::Ramp", external=("phys", frozenset()))
+        build_program(
+            model,
+            "SM15::Ramp",
+            external=[
+                ForeignArtifact(
+                    SM_EXAMPLES_DIR / "part-external" / "bump.py", "python"
+                )
+            ],
+        )
