@@ -52,9 +52,9 @@ build-backend = "hatchling.build"
 packages = ["sysmlc_rosetta"]
 
 [tool.uv.sources]
-sysmlc = { git = "https://github.com/glacier-project/sysmlc-core", branch = "dev" }
-sysmlc-models = { git = "https://github.com/glacier-project/sysmlc-models", branch = "dev" }
-sysmlc-quake = { git = "https://github.com/glacier-project/sysmlc-quake", branch = "dev" }
+sysmlc = { git = "https://github.com/glacier-project/sysmlc-core", branch = "main" }
+sysmlc-models = { git = "https://github.com/glacier-project/sysmlc-models", branch = "main" }
+sysmlc-quake = { git = "https://github.com/glacier-project/sysmlc-quake", branch = "main" }
 
 [tool.pyrefly]
 python-version = "3.12.0"
