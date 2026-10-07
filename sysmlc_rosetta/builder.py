@@ -711,7 +711,12 @@ class RosettaBuilder:
             ]
             flags.append(f"{r_simple}_done")
         join_body: list[str] = []
+        completing_regions = [
+            region for region in regions if region.name in self._needs_done
+        ]
         for region, flag in zip(regions, flags, strict=True):
+            if region.name not in self._needs_done:
+                continue
             inst = f"c_{_simple(region.name)}"
             join_body += [
                 f"if {inst}.{COMPLETED_PORT}.is_present:",
@@ -719,13 +724,19 @@ class RosettaBuilder:
             ]
         condition = " and ".join(f"self.{flag}" for flag in flags)
         join_body += [f"if {condition}:", f"{_PY_INDENT}request_stop()"]
-        reactions.append(
-            Reaction(
-                tuple(f"c_{_simple(r.name)}.{COMPLETED_PORT}" for r in regions),
-                (),
-                tuple(join_body),
+        # Unwritten LF ports cannot be read by Python reactions. Keep the
+        # missing region's flag false so a partial completion cannot join.
+        if completing_regions:
+            reactions.append(
+                Reaction(
+                    tuple(
+                        f"c_{_simple(r.name)}.{COMPLETED_PORT}"
+                        for r in completing_regions
+                    ),
+                    (),
+                    tuple(join_body),
+                )
             )
-        )
         parameters, state_vars = self._attribute_split()
         state_vars += [StateVar(flag, "False", reset=True) for flag in flags]
         ported = tuple(self._exported.get("", {}))
@@ -1217,7 +1228,10 @@ class RosettaBuilder:
                     entry_body += self._statements(region.do_action, gen)
                 all_exit_stmts += self._statements(region.exit_action, gen)
             all_exit_stmts += exit_stmts
-            if eventless:
+            completing_regions = [
+                region for region in regions if region.name in self._needs_done
+            ]
+            if eventless and completing_regions:
                 flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
                 extra_state += [
                     StateVar(flag, "False", reset=True) for flag in flags
@@ -1225,6 +1239,8 @@ class RosettaBuilder:
                 entry_body += [f"self.{flag} = False" for flag in flags]
                 join_body: list[str] = []
                 for region, flag in zip(regions, flags, strict=True):
+                    if region.name not in self._needs_done:
+                        continue
                     inst = f"c_{_simple(region.name)}"
                     join_body += [
                         f"if {inst}.{COMPLETED_PORT}.is_present:",
@@ -1240,7 +1256,7 @@ class RosettaBuilder:
                     self._reaction(
                         tuple(
                             f"c_{_simple(r.name)}.{COMPLETED_PORT}"
-                            for r in regions
+                            for r in completing_regions
                         ),
                         targets,
                         tuple(join_body),
