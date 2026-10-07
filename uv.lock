@@ -1242,7 +1242,7 @@ wheels = [
 [[package]]
 name = "sysmlc"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-core?branch=dev#0c4a2355827ec8b5b5dc8013e0ff367a6bde6be5" }
+source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#0c4a2355827ec8b5b5dc8013e0ff367a6bde6be5" }
 dependencies = [
     { name = "pyyaml" },
     { name = "syside" },
@@ -1253,12 +1253,12 @@ dependencies = [
 [[package]]
 name = "sysmlc-models"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-models?branch=dev#6e798609ac929c5625f9c682566779c532aa54a6" }
+source = { git = "https://github.com/glacier-project/sysmlc-models?branch=main#6e798609ac929c5625f9c682566779c532aa54a6" }
 
 [[package]]
 name = "sysmlc-quake"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-quake?branch=dev#bf2c25164fe62000faadf738dfabb0fa2c60feb1" }
+source = { git = "https://github.com/glacier-project/sysmlc-quake?branch=main#bf2c25164fe62000faadf738dfabb0fa2c60feb1" }
 dependencies = [
     { name = "sismic" },
     { name = "syside" },
@@ -1315,9 +1315,9 @@ requires-dist = [
     { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=2.2,<4" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5,<1" },
     { name = "syside", specifier = "==0.8.6" },
-    { name = "sysmlc", git = "https://github.com/glacier-project/sysmlc-core?branch=dev" },
-    { name = "sysmlc-models", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-models?branch=dev" },
-    { name = "sysmlc-quake", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-quake?branch=dev" },
+    { name = "sysmlc", git = "https://github.com/glacier-project/sysmlc-core?branch=main" },
+    { name = "sysmlc-models", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-models?branch=main" },
+    { name = "sysmlc-quake", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-quake?branch=main" },
     { name = "tox", marker = "extra == 'dev'", specifier = ">=4.50.1,<5" },
     { name = "tox-uv", marker = "extra == 'dev'", specifier = ">=1.15,<2" },
 ]
