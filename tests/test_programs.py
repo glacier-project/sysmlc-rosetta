@@ -419,8 +419,8 @@ def test_sm09_parallel_root_instantiates_regions_at_reactor_scope() -> None:
     )
 
 
-def test_sm09_parallel_root_join_requests_stop() -> None:
-    program = _build("sm09-parallel", "SM09::MachineParallel")
+def test_parallel_root_join_requests_stop_after_all_regions() -> None:
+    program = _build("sm10-done", "SM10::MachineParallelDone")
     machine = program.reactor
     (join,) = [
         r

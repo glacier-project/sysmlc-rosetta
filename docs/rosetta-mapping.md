@@ -103,6 +103,9 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   entry). For a parallel child it is a **join**: reactor-scope flags
   (`heating_heater_done`, …) are reset in the mode's entry reaction and
   set as each region completes; the transition fires when all are set.
+  A region without a scoped `done` keeps its flag false and blocks the join.
+  Its unwritten `completed` port is omitted from the reaction triggers and
+  body because LF's Python runtime cannot read that port.
 - **Group interrupts** — signal/after transitions sourced AT a composite
   state are reactions of its mode in the parent: they run the composite's
   exit action and switch modes. The active substates' own exit actions do
