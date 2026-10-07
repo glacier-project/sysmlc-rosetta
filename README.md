@@ -96,6 +96,10 @@ sysmlc_rosetta/
 
 ## Development
 
+Bundled model behavior is owned by [sysmlc-models](https://github.com/glacier-project/sysmlc-models). The scenario wrapper in this repository runs those shared contracts with this backend.
+
+Local tests verify LF reactions, reactor wiring and runtime integration, using small fixtures for target-specific behavior. Shared parsing and neutral semantic checks belong in [sysmlc-core](https://github.com/glacier-project/sysmlc-core).
+
 ```bash
 uv run tox                       # tests, type checking, formatting, coverage, docs
 uv run pytest tests              # tests only (excludes the lf-marked tests)

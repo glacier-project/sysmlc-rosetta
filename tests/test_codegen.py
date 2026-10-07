@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING
 import pytest
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions
-from sysmlc_models.showcase import SHOWCASE_DIR
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc_rosetta.codegen import LfPythonCodeGen, PreambleNeeds
@@ -99,37 +98,23 @@ def test_send_renders_schedule_with_payload_constructor() -> None:
     )
 
 
-def _entry_assigns(model_dir: Path, qn: str, state: str) -> list[ActionUsage]:
-    """Return the inline actions from a named state's entry action."""
-    recorded = record(model_dir, qn)
-    (fact,) = [s for s in recorded.states if s.name == state]
-    return actions.inline_actions(fact.entry_action)
-
-
 def test_enum_literal_renders_and_registers() -> None:
-    (assign, _) = _entry_assigns(
-        SHOWCASE_DIR / "traffic-light",
-        "TrafficLight::TrafficLightBehavior",
-        "showRed",
+    assign = _only_effect(
+        "sm18-enum-literals", "SM18::MachineStringEnum", "idle"
     )
     needs = PreambleNeeds()
-    gen = LfPythonCodeGen(frozenset({"color", "requested"}), needs=needs)
-    assert gen.render_action(assign) == "self.color = LightColor.red"
+    gen = LfPythonCodeGen(frozenset({"c"}), needs=needs)
+    assert gen.render_action(assign) == "self.c = LightColor.green"
     assert list(needs.enum_defs) == ["LightColor"]
 
 
 def test_payload_local_renders_bare_and_attr_check_skipped() -> None:
-    recorded = record(
-        SHOWCASE_DIR / "vending-machine",
-        "VendingMachine::VendingMachineBehavior",
-    )
-    guards = [t.guard for t in recorded.transitions if t.guard is not None]
+    guard = _only_guard("sm11-send-effect", "SM11::MachineReadablePayloadGuard")
     gen = LfPythonCodeGen(
-        frozenset({"credit", "price"}),
-        local_names=frozenset({"coin"}),
+        frozenset({"current"}),
+        local_names=frozenset({"reading"}),
     )
-    rendered = {gen.render_expression(g) for g in guards}
-    assert "self.credit + coin.value < self.price" in rendered
+    assert gen.render_expression(guard) == "reading.value > 0.5"
 
 
 def test_whitelisted_functions_render() -> None:
