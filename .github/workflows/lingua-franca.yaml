@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      LF_VERSION: 0.13.0
       SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
     steps:
     - uses: actions/checkout@v6
@@ -37,12 +38,16 @@ jobs:
         java-version: '17'
     - name: Install Lingua Franca Compiler
       run: |
-        curl -Ls https://install.lf-lang.org | bash -s cli
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-    - name: Verify lfc installation
+        mkdir -p "$RUNNER_TEMP/lf-cli"
+        curl -fL --retry 3 -o "$RUNNER_TEMP/lf-cli.tar.gz" \
+          "https://github.com/lf-lang/lingua-franca/releases/download/v${LF_VERSION}/lf-cli-${LF_VERSION}-Linux-x86_64.tar.gz"
+        tar -xzf "$RUNNER_TEMP/lf-cli.tar.gz" -C "$RUNNER_TEMP/lf-cli" --strip-components=1
+        echo "$RUNNER_TEMP/lf-cli/bin" >> "$GITHUB_PATH"
+    - name: Verify lfc version
       run: |
-        which lfc
-        lfc --version
+        lfc_version="$(lfc --version)"
+        echo "$lfc_version"
+        test "$lfc_version" = "lfc ${LF_VERSION}"
     - uses: ./.github/actions/setup-python-uv
       with:
         python-version: ${{ env.PYTHON_VERSION }}
