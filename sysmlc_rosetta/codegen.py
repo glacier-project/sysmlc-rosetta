@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from sysmlc.codegen.python import PythonCodeGenContext
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
+    from sysmlc_rosetta.program import LfConstraint
+
 # ---------------------------------------------------------------------------
 # Verified syside node shapes for call-effect transitions (2026-06-15)
 # Fixture: sm-examples/sm14-call-effect/sm14.sysml (sysmlc-models corpus)
@@ -53,6 +55,9 @@ class PreambleNeeds:
     they are encountered, and :meth:`preamble_lines` assembles the preamble
     import lines from them (type definitions go to the companion module via
     :meth:`companion_module_lines`).
+
+    Source identities for generated constraint checks are retained for
+    consumers of the assembled program.
     """
 
     def __init__(self) -> None:
@@ -62,6 +67,7 @@ class PreambleNeeds:
         self.uses_logging = False
         self.types_module: str | None = None
         self.external: list[ForeignArtifact] = []
+        self.constraints: dict[tuple[str, int], LfConstraint] = {}
         self._used_external: dict[ForeignArtifact, set[str]] = {}
         # (event_name, via_port) for `via` sends with no connected peer;
         # surfaced as build warnings (see builder.finalize).

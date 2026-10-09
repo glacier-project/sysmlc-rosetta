@@ -130,10 +130,12 @@ def test_constraints_run_at_startup_and_after_assignments() -> None:
         for reaction in program.reactor.reactions
         if reaction.triggers == ("startup",)
     ]
-    assert startup.body == (
-        'assert self.value >= 0.0, "SysML constraint nonnegative violated"',
-        'assert self.limit > 0.0, "SysML constraint positiveLimit violated"',
-    )
+    assert startup.body[0].startswith("assert self.value >= 0.0, ")
+    assert startup.body[1].startswith("assert self.limit > 0.0, ")
+    assert [constraint.name for constraint in program.constraints] == [
+        "nonnegative",
+        "positiveLimit",
+    ]
     run = _mode(program, "run")
     assert run.reactions[1].body[-2:] == startup.body
     assert not any(line.startswith("assert ") for line in run.reactions[0].body)
@@ -149,9 +151,9 @@ def test_negated_constraint_renders_wrapped_assert() -> None:
         for reaction in program.reactor.reactions
         if reaction.triggers == ("startup",)
     ]
-    assert startup.body == (
-        'assert not (self.level > 2.0), "SysML constraint tooHigh violated"',
-    )
+    assert len(startup.body) == 1
+    assert startup.body[0].startswith("assert not (self.level > 2.0), ")
+    assert program.constraints[0].name == "tooHigh"
 
 
 def test_deep_exit_propagates_through_region_and_composite() -> None:

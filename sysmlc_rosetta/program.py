@@ -124,6 +124,25 @@ class MainReactor:
 
 
 @dataclass(frozen=True)
+class LfConstraint:
+    """Source identity of an assertion in a generated reactor.
+
+    Attributes:
+        reactor: Generated reactor class containing the assertion.
+        check_id: Constraint ordinal within the compiled behavior.
+        scope: Neutral SysML state path, empty for the behavior root.
+        name: Declared constraint name, or ``None`` for an anonymous check.
+        behavior: Qualified name of the original SysML state definition.
+    """
+
+    reactor: str
+    check_id: int
+    scope: str
+    name: str | None
+    behavior: str
+
+
+@dataclass(frozen=True)
 class LfProgram:
     """A Lingua Franca program: reactor classes plus a main.
 
@@ -135,6 +154,8 @@ class LfProgram:
     ``target Python { ... }`` header (run config); empty -> bare ``target
     Python``. ``types_module_name`` and ``types_module_lines`` describe the
     companion ``<basename>_types.py`` module written beside the ``.lf``.
+    ``constraints`` preserves source identities carried by generated
+    assertion diagnostics.
     """
 
     reactors: tuple[Reactor, ...]
@@ -143,6 +164,7 @@ class LfProgram:
     target_options: tuple[tuple[str, str], ...] = ()
     types_module_name: str | None = None
     types_module_lines: tuple[str, ...] = ()
+    constraints: tuple[LfConstraint, ...] = ()
 
     @property
     def reactor(self) -> Reactor:

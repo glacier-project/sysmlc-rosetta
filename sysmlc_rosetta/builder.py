@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import TYPE_CHECKING
 
 import syside
@@ -38,6 +39,7 @@ from sysmlc_rosetta.codegen import (
 from sysmlc_rosetta.program import (
     Connection,
     Instantiation,
+    LfConstraint,
     LfProgram,
     LogicalAction,
     Mode,
@@ -117,6 +119,7 @@ class RosettaBuilder:
         peer_accepts: frozenset[str] = frozenset(),
         needs: PreambleNeeds | None = None,
         observe: bool = False,
+        source_qn: str | None = None,
     ) -> None:
         """Initialize the builder.
 
@@ -128,8 +131,11 @@ class RosettaBuilder:
             observe: When True, inject ``logging.debug`` on each state's
                 entry and exit (opt-in; the part assembler sets it). Off by
                 default, so existing build paths emit byte-identical output.
+            source_qn: Qualified name of the original SysML state definition.
+                Defaults to the reactor name for manually supplied facts.
         """
         self._name = name
+        self._source_qn = source_qn if source_qn is not None else name
         self._peer_accepts = peer_accepts
         self._observe = observe
         self._constraints: list[ConstraintFact] = []
@@ -256,6 +262,11 @@ class RosettaBuilder:
         program = LfProgram(
             reactors=tuple(self._reactors),
             preamble=tuple(self._needs.preamble_lines()),
+            constraints=tuple(
+                constraint
+                for constraint in self._needs.constraints.values()
+                if constraint.reactor == self._name
+            ),
         )
         if self_defaulted:
             program = finalize(program, self._needs)
@@ -272,13 +283,17 @@ class RosettaBuilder:
         """
         checks: list[str] = []
         for index, fact in enumerate(self._constraints):
-            label = fact.name or f"constraint{index}"
+            constraint = LfConstraint(
+                self._name, index, fact.scope, fact.name, self._source_qn
+            )
+            self._needs.constraints[(self._name, index)] = constraint
+            message = "SysML constraint violated: " + json.dumps(
+                asdict(constraint), separators=(",", ":")
+            )
             rendered = self._codegen.render_expression(fact.expression)
             if fact.is_negated:
                 rendered = f"not ({rendered})"
-            checks.append(
-                f'assert {rendered}, "SysML constraint {label} violated"'
-            )
+            checks.append(f"assert {rendered}, {json.dumps(message)}")
         if not checks:
             return machine
         markers = tuple(f"self.{name} = " for name in self._attribute_names)
@@ -1557,7 +1572,8 @@ def build_program(
     if external is not None:
         needs.external = external
     result = StateMachineDriver(model).run(
-        state_def_qn, RosettaBuilder(name, needs=needs)
+        state_def_qn,
+        RosettaBuilder(name, needs=needs, source_qn=state_def_qn),
     )
     assert isinstance(result, LfProgram)
     return finalize(result, needs)

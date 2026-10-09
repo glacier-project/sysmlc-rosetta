@@ -97,7 +97,9 @@ def compose_exhibits(
     ):
         result = driver.run(
             qn,
-            RosettaBuilder(_simple(qn), peer_accepts=peer_acc, needs=needs),
+            RosettaBuilder(
+                _simple(qn), peer_accepts=peer_acc, needs=needs, source_qn=qn
+            ),
         )
         assert isinstance(result, LfProgram)
         child_reactors.extend(result.reactors)
@@ -259,6 +261,7 @@ def build_part_program(
         preamble=tuple(needs.preamble_lines()),
         main=main,
         target_options=target_options,
+        constraints=tuple(needs.constraints.values()),
     )
     return finalize(program, needs)
 
@@ -336,6 +339,7 @@ def _build_reactors(
                 peer_accepts=frozenset(union[def_name]),
                 needs=needs,
                 observe=True,
+                source_qn=behavior_qn,
             ),
         )
         assert isinstance(result, LfProgram)
