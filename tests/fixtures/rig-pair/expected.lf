@@ -64,7 +64,7 @@ reactor PlantTest {
   state verdict = {= 0 =}
   state waiting_fired = {= False =}
   reaction(startup) {=
-    assert self.verdict == 0, "SysML constraint testPassed violated"
+    assert self.verdict == 0, "SysML constraint violated: {\"reactor\":\"PlantTest\",\"check_id\":0,\"scope\":\"\",\"name\":\"testPassed\",\"behavior\":\"RigPair::PlantTest\"}"
   =}
   initial mode kicking {
     timer t_kicking(100 msec)
@@ -98,7 +98,7 @@ reactor PlantTest {
       current_state.set("fail")
       self.verdict = 1
       done.set()
-      assert self.verdict == 0, "SysML constraint testPassed violated"
+      assert self.verdict == 0, "SysML constraint violated: {\"reactor\":\"PlantTest\",\"check_id\":0,\"scope\":\"\",\"name\":\"testPassed\",\"behavior\":\"RigPair::PlantTest\"}"
     =}
   }
   mode done {

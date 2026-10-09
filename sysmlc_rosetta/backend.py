@@ -117,6 +117,7 @@ class RosettaBackend(Backend):
         program = LfProgram(
             reactors=(*children, composite),
             preamble=tuple(needs.preamble_lines()),
+            constraints=tuple(needs.constraints.values()),
         )
         return finalize(program, needs)
 
