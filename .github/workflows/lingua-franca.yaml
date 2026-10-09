@@ -4,9 +4,24 @@ on:
   push:
     branches:
     - main
+    paths-ignore:
+    - docs/**
+    - README.md
+    - LICENSE
+    - AGENTS.md
+    - CLAUDE.md
+    - .github/workflows/notify-sysmlc.yml
   pull_request:
     branches:
     - main
+    paths-ignore:
+    - docs/**
+    - README.md
+    - LICENSE
+    - AGENTS.md
+    - CLAUDE.md
+    - .github/workflows/notify-sysmlc.yml
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
