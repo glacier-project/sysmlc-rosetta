@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
     - main
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +22,9 @@ env:
 jobs:
   pre-commit:
     name: Pre-commit
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ fromJSON(github.event.pull_request.head.repo.fork != true
+        && vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v6
@@ -34,7 +37,9 @@ jobs:
 
   type:
     name: Type checks
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ fromJSON(github.event.pull_request.head.repo.fork != true
+        && vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
     - uses: actions/checkout@v6

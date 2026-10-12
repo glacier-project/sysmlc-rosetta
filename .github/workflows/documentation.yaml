@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
     - main
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +22,9 @@ env:
 jobs:
   docs:
     name: Build documentation
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ fromJSON(github.event.pull_request.head.repo.fork != true
+        && vars.CI_RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 15
     env:
       SYSIDE_LICENSE_KEY: ${{ secrets.SYSIDE_LICENSE_KEY }}
