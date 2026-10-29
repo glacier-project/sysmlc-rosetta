@@ -41,6 +41,12 @@ types emits a bare `target Python` and no companion module. See §9.
 
 ## 2. States and hierarchy
 
+Entry, exit and transition-effect actions support inline bodies, including
+shorthand `assign`/`send`, named or anonymous untyped blocks and empty slots.
+Referenced or typed wrappers are rejected with a phase-specific diagnostic,
+even when they contain local statements. Only inline one-shot `do` bodies are
+supported. These are compiler subset limits, not SysML source restrictions.
+
 **Leaf states** become modes. Mode entry is announced on the
 `current_state` output by a `reaction(reset, startup)` whose body also runs
 the state's `entry` (and inline one-shot `do`) actions, in declaration
