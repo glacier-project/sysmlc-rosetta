@@ -216,6 +216,32 @@ or action referencing a machine attribute from inside a composite state
 fails loudly — author models within this limit (per-scope attributes are
 planned, §11).
 
+Bound values (`=`) pass shared admission checks before rendering. Supported
+forms are Boolean, Integer, Rational and String literals, unary numeric signs,
+symbolic enumeration literals, enumeration literals whose projected values
+satisfy the same literal subset, and literal quantities with standard-library
+units.
+Dynamic bindings and other expressions, including function calls with constant
+results, are unsupported. Whole-value bindings of structured attributes are
+also rejected; their fields are otherwise materialized individually.
+
+Whole-value assignments must preserve fixed fields. When the type fixes a field
+with `=`, an unverified replacement such as a calculation result is rejected;
+a compatible referenced value passes this admission check. Fixed fields on the
+particular usage, including configuration-created fields, prevent whole-value
+replacement. Default fields can be overridden by explicit new values. Constructor
+expressions as assignment values remain unsupported.
+
+Assignments to effective bound features are rejected in entry, exit, do and
+transition-effect actions, including assignments of the same value. This is a
+SysMLC supported-subset restriction, not a general SysML prohibition on
+assignments consistent with an equality. `default =` remains overridable before
+instantiation and remains a binding when it applies. `:=` and `default :=`
+provide initial values that may subsequently change. Use `:=` in place of `=`
+only when initialization is the intended semantics. These checks do not
+provide general enforcement of the separate `constant` modifier or arbitrary
+mutations by external Python code.
+
 Initial values are **configurable at build time** with `--values FILE`
 (any backend): a hierarchical YAML whose nesting mirrors qualified names.
 Overrides are applied in place on the loaded model through syside's
