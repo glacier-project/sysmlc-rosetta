@@ -47,10 +47,21 @@ Referenced or typed wrappers are rejected with a phase-specific diagnostic,
 even when they contain local statements. Only inline one-shot `do` bodies are
 supported. These are compiler subset limits, not SysML source restrictions.
 
+Inline entry, exit, do and transition-effect bodies without explicit
+sequencing execute in declaration order. This is a deterministic SysMLC
+convention, not an ordering requirement imposed by SysML declarations. A
+complete explicit unconditional linear sequence of single-occurrence actions
+takes precedence over declaration order;
+supported `then` shorthands follow the same rule. Unsupported branching,
+conditional sequencing, cycles and incomplete or disconnected sequences are
+rejected rather than flattened into declaration order. Feature-chain endpoints
+and optional or repeated multiplicities in explicit sequences are also
+unsupported; explicit `[1]` multiplicity is accepted.
+
 **Leaf states** become modes. Mode entry is announced on the
 `current_state` output by a `reaction(reset, startup)` whose body also runs
-the state's `entry` (and inline one-shot `do`) actions, in declaration
-order:
+the state's `entry` actions followed by its inline one-shot `do` actions,
+using the body-ordering rules above:
 
 ```lf
 initial mode stopped {
