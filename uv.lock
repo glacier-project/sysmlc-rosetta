@@ -1242,7 +1242,7 @@ wheels = [
 [[package]]
 name = "sysmlc"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#0e0bc8a1a6f11e8ee29056b3645b40a829d62a8a" }
+source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#cfb5a668c428fca72d9541cfa8420f592971a742" }
 dependencies = [
     { name = "pyyaml" },
     { name = "syside" },
@@ -1253,7 +1253,7 @@ dependencies = [
 [[package]]
 name = "sysmlc-models"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-models?branch=main#10cb20bd5d72e4e816850c331c1953ac15992a6d" }
+source = { git = "https://github.com/glacier-project/sysmlc-models?branch=main#18a27739943089234287ec75996276703fb8f0a9" }
 
 [[package]]
 name = "sysmlc-quake"
