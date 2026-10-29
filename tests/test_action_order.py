@@ -29,7 +29,6 @@ def order_model() -> syside.Model:
         "Guarded",
         "Chained",
         "Foreign",
-        "ShadowStart",
         "Multiplicity",
         "EndMultiplicity",
         "ActionMultiplicity",

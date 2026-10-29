@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+import syside
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions
+from sysmlc.sysml.loading import load_model
+from sysmlc.sysml.queries import iter_elements
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
 from sysmlc_rosetta.codegen import LfPythonCodeGen, PreambleNeeds
@@ -199,3 +203,39 @@ def test_foreign_to_receiver_is_rejected() -> None:
     gen = LfPythonCodeGen(frozenset())
     with pytest.raises(UnsupportedConstructError, match="cross-machine"):
         gen.render_action(send)
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("equipment.flag", "equipment.flag"),
+        ("(plant.equipment).flag", "plant.equipment.flag"),
+    ],
+)
+def test_member_assignment_mutates_the_resolved_receiver(
+    tmp_path: Path, target: str, expected: str
+) -> None:
+    source = """package Targets {
+    private import ScalarValues::*;
+    part def Equipment { attribute flag : Boolean; }
+    part def Plant { part equipment : Equipment; }
+    state def Machine {
+        in ref equipment : Equipment;
+        in ref plant : Plant;
+        entry; then idle;
+        state idle { entry assign TARGET := true; }
+    }
+}"""
+    (tmp_path / "model.sysml").write_text(source.replace("TARGET", target))
+    model = load_model(tmp_path)
+    (assign,) = list(iter_elements(model, syside.AssignmentActionUsage))
+    gen = LfPythonCodeGen(frozenset({"equipment", "plant"}))
+    equipment = SimpleNamespace(flag=False)
+    plant = SimpleNamespace(equipment=SimpleNamespace(flag=False))
+    receiver = SimpleNamespace(equipment=equipment, plant=plant, flag=False)
+    context = {"self": receiver}
+    assert gen.render_assignment_target(assign) == "self." + expected
+    exec(gen.render_action(assign), context)
+    assert equipment.flag is (target == "equipment.flag")
+    assert plant.equipment.flag is (target != "equipment.flag")
+    assert receiver.flag is False

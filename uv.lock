@@ -1226,23 +1226,20 @@ wheels = [
 
 [[package]]
 name = "syside"
-version = "0.8.6"
+version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/85/4ed791e699464737cdb48ce11b44b48ab83a20a5b7882843fb3f9ba5acb1/syside-0.8.6-cp312-abi3-macosx_10_13_x86_64.whl", hash = "sha256:8577a27033ee4cbd3b7ff87639c66fad44207b6ee0f8ea7e0cdbaaa6db2301f3", size = 10461492, upload-time = "2026-03-09T11:36:48.25Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/86/8647bb4aa2abee13be3c27937dd8f643d6d9a8e3d892f7ba36d6b30edd66/syside-0.8.6-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:81141c4f09bea114384c215ac8a74ab97936f1e34b0d01a7349fab96fd6be5a8", size = 9399740, upload-time = "2026-03-09T11:36:43.541Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/b8/ac08b03d8e2d01f98aa5413d5b99d7b540d9232e378dee13e087c4ec8643/syside-0.8.6-cp312-abi3-manylinux_2_31_x86_64.whl", hash = "sha256:eac551c5fe800b9a6cee273a60d1d33c719ccfa0d2fb9449087834a632ae9a71", size = 12319291, upload-time = "2026-03-09T11:36:50.74Z" },
-    { url = "https://files.pythonhosted.org/packages/26/0e/24ee6af0d964503ee2e8f8f784d2f54677dccdd23e979b1a260420d309b6/syside-0.8.6-cp312-abi3-win_amd64.whl", hash = "sha256:c7eb5bcb10661e5b31b64f283e3b06c8bc9cf3853c45e2e0e4a73cc5bd453387", size = 10431751, upload-time = "2026-03-09T11:36:46.043Z" },
-    { url = "https://files.pythonhosted.org/packages/d1/80/faa1f0eda52802a24e016495a4ffcf27d72ea4b5be48a9296ff7e1ac6680/syside-0.8.6-cp312-abi3-win_arm64.whl", hash = "sha256:44e961c0f56c943613e00d65aaa1f805593573821b41106edddd7a36666139f0", size = 9733000, upload-time = "2026-03-09T11:36:41.28Z" },
+    { url = "https://files.pythonhosted.org/packages/87/80/19e15bed76b69cb3b8c638399167c65282599c6bdeffceeccb7c78544781/syside-0.11.0-cp312-abi3-macosx_10_15_x86_64.whl", hash = "sha256:95f0137298e4115539f19e0194d15866cf36b895a5ddab71772f738a2b320611", size = 20808558, upload-time = "2026-09-29T11:03:46.333Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/12/ac4e454e2abc3c7ce92ea2baaf7b425ffe89e5e8e8c33aae2a54e50efd48/syside-0.11.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:aaa1c1ae3f197a43d899afdee07566fadd5fab9bfcea4862a38a01fc3bec4b0f", size = 19154803, upload-time = "2026-09-29T11:03:48.77Z" },
+    { url = "https://files.pythonhosted.org/packages/40/8f/d1bea47b20405e97d155c4799bfebff963cea9d47b4500b4b0d2a61bd353/syside-0.11.0-cp312-abi3-manylinux_2_31_x86_64.whl", hash = "sha256:326a45cd9766f4bdf8a38c35409d66d3ef7c6fd5a8b729ee2d5f47bfc2a79fa5", size = 24363838, upload-time = "2026-09-29T11:03:51.437Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/22/16f5bcbd5bf30bad3159c85a0ac546ba440674feed18678386798ab792ca/syside-0.11.0-cp312-abi3-win_amd64.whl", hash = "sha256:78322d2285b213822783d542bb55b5a4d5706214234ccccc7729be4db2f8fcc0", size = 21112234, upload-time = "2026-09-29T11:03:43.689Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/f9/43ddf8f3b500c9f4084f3a80749950b46baca1c1430b81015c840003e90d/syside-0.11.0-cp312-abi3-win_arm64.whl", hash = "sha256:850b343bc493b9b93859cc1a28a2b2cc32abb33b27291d6c11021029337bdf59", size = 19909954, upload-time = "2026-09-29T11:03:54.209Z" },
 ]
 
 [[package]]
 name = "sysmlc"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#cfb5a668c428fca72d9541cfa8420f592971a742" }
+source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#2ccaf6bb4ea7dbcdfe1870d31597ff2ef8240047" }
 dependencies = [
     { name = "pyyaml" },
     { name = "syside" },
@@ -1253,12 +1250,12 @@ dependencies = [
 [[package]]
 name = "sysmlc-models"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-models?branch=main#18a27739943089234287ec75996276703fb8f0a9" }
+source = { git = "https://github.com/glacier-project/sysmlc-models?branch=main#2f38fe611feed78b12804edb6ec5bad08789f16b" }
 
 [[package]]
 name = "sysmlc-quake"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-quake?branch=main#9f2668c927e8cbf11d8f2d0c103866e6960a02da" }
+source = { git = "https://github.com/glacier-project/sysmlc-quake?branch=main#824f043242f3d0c1a2ab2784bf10a6711f2a8a72" }
 dependencies = [
     { name = "sismic" },
     { name = "syside" },
@@ -1314,7 +1311,7 @@ requires-dist = [
     { name = "sphinx-autobuild", marker = "extra == 'docs'", specifier = ">=2024.10.3,<2027" },
     { name = "sphinx-autodoc-typehints", marker = "extra == 'docs'", specifier = ">=2.2,<4" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5,<1" },
-    { name = "syside", specifier = "==0.8.6" },
+    { name = "syside", specifier = "==0.11.0" },
     { name = "sysmlc", git = "https://github.com/glacier-project/sysmlc-core?branch=main" },
     { name = "sysmlc-models", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-models?branch=main" },
     { name = "sysmlc-quake", marker = "extra == 'dev'", git = "https://github.com/glacier-project/sysmlc-quake?branch=main" },

@@ -183,20 +183,6 @@ package ActionOrder {
             }
         }
     }
-    state def ShadowStart {
-        attribute c : Integer := 0;
-        entry;
-        then idle;
-        state idle {
-            entry action {
-                action multiply assign c := c * 10;
-                action initialize assign c := 1;
-                ref occurrence start;
-                first start then initialize;
-                first initialize then multiply;
-            }
-        }
-    }
     state def Multiplicity {
         attribute c : Integer := 0;
         entry;
@@ -271,30 +257,6 @@ package ActionOrder {
                 action initialize assign c := 1;
                 first initialize then multiply;
                 first initialize then multiply;
-            }
-        }
-    }
-    state def LocalStart {
-        attribute c : Integer := 0;
-        entry;
-        then idle;
-        state idle {
-            entry action {
-                action start assign c := c * 10;
-                action initialize assign c := 1;
-                first initialize then start;
-            }
-        }
-    }
-    state def LocalDone {
-        attribute c : Integer := 0;
-        entry;
-        then idle;
-        state idle {
-            entry action {
-                action done assign c := c * 10;
-                action initialize assign c := 1;
-                first initialize then done;
             }
         }
     }
