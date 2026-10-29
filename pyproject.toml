@@ -10,9 +10,8 @@ readme = "README.md"
 license = "BSD-2-Clause"
 dependencies = [
     "sysmlc",
-    # Pinned to the certified release: newer syside rejects models the
-    # corpora still use.
-    "syside==0.8.6",
+    # Validate parser and semantic API changes before upgrading this pin.
+    "syside==0.11.0",
 ]
 
 [project.optional-dependencies]
