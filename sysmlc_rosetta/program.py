@@ -165,6 +165,25 @@ class LfProgram:
     types_module_name: str | None = None
     types_module_lines: tuple[str, ...] = ()
     constraints: tuple[LfConstraint, ...] = ()
+    signal_channels: tuple[tuple[str, str], ...] = ()
+    signal_aliases: tuple[tuple[str, str], ...] = ()
+
+    def resolve_signal(self, name: str) -> str:
+        """Resolve a qualified input name or an unambiguous simple name.
+
+        Raises:
+            ValueError: If the name is unknown or ambiguous.
+        """
+        channels = dict(self.signal_channels)
+        if name in channels:
+            return channels[name]
+        aliases = dict(self.signal_aliases)
+        if name not in aliases:
+            raise ValueError(
+                f"signal {name!r} is unknown or ambiguous; "
+                "use a qualified type name"
+            )
+        return aliases[name]
 
     @property
     def reactor(self) -> Reactor:

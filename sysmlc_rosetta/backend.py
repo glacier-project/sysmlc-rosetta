@@ -7,6 +7,7 @@ import syside as _syside
 from sysmlc.backends.base import Backend, OutputOptions
 from sysmlc.errors import SerializationError, UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import machine_interface
+from sysmlc.semantics.statemachine.signals import SignalCatalog
 from sysmlc.sysml.queries import exhibited_state_defs, resolve
 
 from sysmlc_rosetta.builder import build_program, finalize
@@ -84,8 +85,9 @@ class RosettaBackend(Backend):
                 f"rig {rig.name!r} exhibits {qn_a!r} twice; a rig composes "
                 "two distinct state defs"
             )
-        face_a = machine_interface(model, qn_a)
-        face_b = machine_interface(model, qn_b)
+        catalog = SignalCatalog(model, [qn_a, qn_b])
+        face_a = machine_interface(model, qn_a, catalog=catalog)
+        face_b = machine_interface(model, qn_b, catalog=catalog)
         both = (face_a.sent & face_b.accepted) & (face_b.sent & face_a.accepted)
         if both:
             raise UnsupportedConstructError(
@@ -104,7 +106,7 @@ class RosettaBackend(Backend):
                     sig,
                 )
         composite_name = element_qn.split("::")[-1]
-        needs = PreambleNeeds()
+        needs = PreambleNeeds(catalog)
         needs.types_module = f"{composite_name}_types"
         if external:
             needs.external = external

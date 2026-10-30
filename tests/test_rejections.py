@@ -95,7 +95,7 @@ def test_non_constant_omitted_payload_default_is_rejected() -> None:
 
 
 def test_payload_writeback_is_rejected() -> None:
-    # Payload locals are read-only: `local_names` applies to expression
+    # Payload bindings are read-only: feature mapping applies to expression
     # rendering, never to assignment targets, so `assign r.value := 0`
     # fails on the unknown base name `r`.
     model = load_model(FIXTURES_DIR / "payload-guard")
@@ -104,15 +104,13 @@ def test_payload_writeback_is_rejected() -> None:
 
 
 def test_payload_referencing_guard_builds_and_binds() -> None:
-    # A guard that reads the accept payload (``if r.value > 0``) must now
-    # build successfully: the payload name is added as a local and a binding
-    # line ``r = Reading.value`` is prepended to the reaction body.
+    # The accept payload's source feature maps to the delivered occurrence;
+    # its value field must remain readable in the guard.
     model = load_model(FIXTURES_DIR / "payload-guard")
     program = build_program(model, "PayloadGuard::Machine")
     (idle,) = [m for m in program.reactor.modes if m.name == "idle"]
     reading_reaction = idle.reactions[1]
-    assert reading_reaction.body[0] == "r = Reading.value"
-    assert reading_reaction.body[1] == "if r.value > 0:"
+    assert reading_reaction.body[0] == "if Reading.value.value > 0:"
 
 
 def test_scoped_attribute_is_rejected() -> None:

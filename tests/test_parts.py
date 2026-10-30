@@ -1,10 +1,16 @@
 import pytest
 from sysmlc.errors import UnsupportedConstructError
+from sysmlc.semantics.parts.graph import part_graph
+from sysmlc.semantics.parts.routing import validated_routes
 from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 from sysmlc.sysml.loading import load_model
 from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 
-from sysmlc_rosetta.parts import build_part_program
+from sysmlc_rosetta.parts import (
+    _build_reactors,
+    _peer_accepts,
+    build_part_program,
+)
 from sysmlc_rosetta.program import LfProgram, MainReactor
 from sysmlc_rosetta.serialize import to_lf
 
@@ -79,3 +85,24 @@ def test_build_part_program_with_external_emits_import_and_call() -> None:
     text = to_lf(prog)
     assert "from bump import bump" in text
     assert "bump(self.x)" in text
+
+
+def test_legacy_reactor_builder_keeps_catalog_optional() -> None:
+    model = load_model(FIX)
+    graph = part_graph(model, "Part01::pingSystem")
+    faces, _ = validated_routes(model, graph, graph.parts)
+    reactors, needs = _build_reactors(
+        model,
+        graph.parts,
+        (),
+        _peer_accepts(graph, faces),
+        module_name="Legacy_types",
+    )
+    assert {reactor.name for reactor in reactors} >= {"Plant", "Tester"}
+    assert needs.catalog is None
+    assert needs.types_module == "Legacy_types"
+    assert "import Legacy_types as _sysmlc_types" in needs.preamble_lines()
+    plant = next(reactor for reactor in reactors if reactor.name == "Plant")
+    tester = next(reactor for reactor in reactors if reactor.name == "Tester")
+    assert "Ping" in plant.inputs and "Pong" in plant.outputs
+    assert "Pong" in tester.inputs and "Ping" in tester.outputs

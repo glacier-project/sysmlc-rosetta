@@ -19,8 +19,8 @@ def test_constant_bindings_render_as_unassigned_state() -> None:
     assert {v.name: v.init for v in reactor.state_vars} == {
         "k": "1",
         "ratio": "-2.5",
-        "setting": "Mode.busy",
-        "light": "Light.green",
+        "setting": "_sysmlc_types.Mode.busy",
+        "light": "_sysmlc_types.Light.green",
         "positive": "+4",
         "holdTime": "2.0",
         "limit": "3",
@@ -36,8 +36,8 @@ def test_constant_bindings_render_as_unassigned_state() -> None:
     assert "self.a = 5" in lines
     assert "self.seen = self.a + self.k + self.limit" in lines
     assert (
-        "if self.a == 5 and self.k == 1 and self.setting == Mode.busy"
-        " and self.light == Light.green:"
+        "if self.a == 5 and self.k == 1 and self.setting == _sysmlc_types.Mode.busy"
+        " and self.light == _sysmlc_types.Light.green:"
     ) in lines
     constants = (
         "k",
