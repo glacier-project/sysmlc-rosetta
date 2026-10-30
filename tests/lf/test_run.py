@@ -155,7 +155,7 @@ def test_rig_overlap_serves_local_and_peer(tmp_path: Path) -> None:
 
 def test_rig_payload_serves_local_and_peer(tmp_path: Path) -> None:
     # A ported send carrying a payload: the reaction parameter shadows the
-    # preamble dataclass, so the constructor must be reached via globals().
+    # bare class name, so construction uses the generated types module.
     # Without the fix the set line raises TypeError.
     process, states = run_rig(
         tmp_path, FIXTURES_DIR / "rig-payload", "RigPayload::CounterRig"

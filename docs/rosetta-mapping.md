@@ -166,14 +166,23 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
 
 ## 4. Triggers and signals
 
-Every signal accepted anywhere in the machine becomes an **input port** of
-the machine reactor (event identity = the payload type's simple name).
+Each known concrete signal type conforming to an accept becomes an **input
+port** of the machine reactor. Identity is the resolved qualified type;
+unambiguous simple external names stay unchanged. A compile-scoped catalog
+includes loaded subtypes even when no action constructs them. Same-source
+matching accepts use declaration order: the first true guard (or guardless
+accept) wins, without specificity sorting. One send produces one concrete
+event, with no additional ancestor events. `LfProgram.signal_channels` records
+the qualified identity/channel mapping; `resolve_signal` accepts qualified or
+unambiguous simple external names and diagnoses ambiguity.
 Signals accepted inside a composite scope also become inputs of that
 child reactor, and the parent's mode forwards them down
 (`Tick -> c_x.Tick`). Signals are forwarded only where accepted.
 
-- **Payload access**: `accept r : Reading` binds the payload first
-  (`r = Reading.value`), so guards and effects can read `r.value`.
+- **Payload access**: `accept r : Reading` maps the source payload feature
+  to the delivered value, so guards and effects can read `r.value`. Different
+  transitions may use different aliases, including an alias whose spelling
+  matches a machine attribute; references retain their source identities.
   Payloads are duck-typed; payload **writes** are not currently supported
   (planned via copy-on-accept semantics — §11).
 - **`accept after 4 [s]`** (literal) → a mode-local timer
@@ -298,7 +307,7 @@ is visible — pin sequences accordingly in tests.
 Generated types (enums, sent-item dataclasses, composite attribute-def
 dataclasses) are emitted into a sibling **`<basename>_types.py` companion
 module**, NOT inline in the preamble. The `.lf` preamble holds only
-`from <basename>_types import <names>` (plus stdlib/`--python` imports), and
+`import <basename>_types as _sysmlc_types` (plus stdlib/`--python` imports), and
 the `.lf` target header lists the module in `files:` so `lfc` copies it into
 `src-gen` (importable at runtime with no `PYTHONPATH`). The module is
 generated whenever ≥1 type exists; a type-less model emits neither the module
@@ -309,8 +318,8 @@ different backend companion-module names without duplicating the physics.
 
 - An enum def referenced anywhere renders as a companion-module
   `class LightColor(Enum):` with literals valued by **name**
-  (`red = "red"`); literals render as `LightColor.red`.
-- Item defs that the machine **sends**, and composite `attribute def`s used as
+  (`red = "red"`); literals render as `_sysmlc_types.LightColor.red`.
+- Concrete accepted and sent item defs, and composite `attribute def`s used as
   attribute values, render as companion-module `@dataclass` classes. Fields
   are typed by mapping SysML scalars (`Real`→`float`, `Integer`→`int`,
   `Boolean`→`bool`, `String`→`str`, else `object`) and carry the model's
@@ -394,11 +403,13 @@ quantity default such as `default 0.5 [s]` is rejected with an unsupported
 scalar-quantity state-machine initialization, which converts values to SI
 magnitudes before rendering.
 
-Because
-the LF input/output port named `Sig` shadows the preamble payload dataclass
-of the same name, a **ported payload** send renders the constructor as
-`globals()["Sig"](…)` (resolving the dataclass past the port parameter
-shadow).
+Catalog-backed payload constructors and enum references use the reserved
+`_sysmlc_types` module alias, including nested structured values. Direct
+catalog-free builders establish their companion module identity before code
+generation and also import bare type symbols for catalog-free composite values. Qualified definitions with
+colliding simple names receive distinct generated class symbols; class symbols
+are independent of channel names. Unresolved collisions with generated LF
+identifiers produce explicit diagnostics.
 
 ### Input ports and up-chaining
 
@@ -488,13 +499,11 @@ design.
 | long-running / non-inline `do` bodies                                                                         | only inline one-shot bodies fuse into entry                                                        |
 | unstable eventless self-loops                                                                                 | would never stabilize — a model error                                                              |
 | state names colliding with generated names (`done`, `current_state`, `completed`, ports)                      | rename the state; plain generated names keep the LF readable                                       |
-| mixed payload names for one signal                                                                            | use one name — a model error                                                                       |
-| duplicate enum / item simple names                                                                            | rename one — preamble classes are keyed by simple name                                             |
 | `in` attribute without a default                                                                              | LF reactor parameters require one                                                                  |
 | a signal sent by **both** machines of a composition (bidirectional same name)                                 | LF port direction clashes; neither side can keep the matching input — split the name per direction |
 | a composing part not exhibiting **two or more named** state defs (anonymous exhibit, or a non-exhibit member) | name every exhibit                                                                                 |
 | the **same state def exhibited twice** in one part                                                            | a composition combines distinct machines                                                           |
-| cross-machine reactor / enum / payload **name collisions** across a composition's machines                    | the merged program and preamble are keyed by simple name — rename a state, machine, or item        |
+| cross-machine reactor **name collisions** across a composition's machines                                     | reactor names remain keyed by simple name — rename a state or machine                              |
 | a Python **textual representation** outside a package or calc def                                             | its text would execute at import time in the generated module (§12)                                |
 | a rep body that is not valid Python, or whose `def` does not match the calc def's name                        | fails at build naming the calc def, instead of at run time (§12)                                   |
 | **two Python reps** on one calc def, or two rep bodies defining the **same function differently**             | the generated module's namespace is flat; the last definition would silently win (§12)             |

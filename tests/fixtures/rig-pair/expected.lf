@@ -3,7 +3,7 @@ target Python {
 }
 
 preamble {=
-  from PlantRig_types import Done, Go
+  import PlantRig_types as _sysmlc_types
 =}
 
 reactor Plant_working {

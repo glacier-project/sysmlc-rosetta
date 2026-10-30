@@ -29,7 +29,11 @@ def _build_peer(
 
 def test_default_peer_accepts_is_byte_identical() -> None:
     qn = "RigPair::Plant"
-    bare = to_lf(build_program(load_model(FIXTURES_DIR / "rig-pair"), qn))
+    bare_program = StateMachineDriver(
+        load_model(FIXTURES_DIR / "rig-pair")
+    ).run(qn, RosettaBuilder("Plant"))
+    assert isinstance(bare_program, LfProgram)
+    bare = to_lf(bare_program)
     explicit = to_lf(_build_peer(FIXTURES_DIR / "rig-pair", qn, frozenset()))
     assert bare == explicit
 
@@ -77,10 +81,10 @@ def test_overlap_send_emits_port_only() -> None:
     assert "Tick_act.schedule(0)" not in text
 
 
-def test_overlap_payload_send_emits_port_only_via_globals() -> None:
+def test_overlap_payload_send_uses_types_module() -> None:
     # A ported payload send: the reaction parameter named after the port
-    # shadows the preamble dataclass, so the constructor is reached via
-    # globals(). Only the port `.set` line is emitted (one transfer).
+    # shadows a bare class name, so use the types module for construction.
+    # Only the port `.set` line is emitted (one transfer).
     program = RosettaBackend().build_composition(
         load_model(FIXTURES_DIR / "rig-payload"),
         "RigPayload::CounterRig",
@@ -88,7 +92,7 @@ def test_overlap_payload_send_emits_port_only_via_globals() -> None:
     plant = next(r for r in program.reactors if r.name == "Counter")
     text = to_lf(program)
     assert "Report" in plant.outputs
-    assert 'Report.set(globals()["Report"](n=7))' in text
+    assert "Report.set(_sysmlc_types.Report(n=7))" in text
     assert "Report_act.schedule" not in text
 
 

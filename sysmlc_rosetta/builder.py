@@ -29,6 +29,7 @@ from sysmlc.semantics.statemachine.facts import (
     WhenTrigger,
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
+from sysmlc.semantics.statemachine.signals import SignalCatalog
 
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
@@ -139,6 +140,9 @@ class RosettaBuilder:
         self._observe = observe
         self._constraints: list[ConstraintFact] = []
         self._needs = needs if needs is not None else PreambleNeeds()
+        self._finalize_types = self._needs.types_module is None
+        if self._finalize_types:
+            self._needs.types_module = f"{name}_types"
         self._init_codegen = LfPythonCodeGen(
             frozenset(), needs=self._needs, self_prefix=False
         )
@@ -255,9 +259,6 @@ class RosettaBuilder:
                 self._with_change_notifications(machine)
             )
         )
-        self_defaulted = self._needs.types_module is None
-        if self_defaulted:
-            self._needs.types_module = f"{self._name}_types"
         program = LfProgram(
             reactors=tuple(self._reactors),
             preamble=tuple(self._needs.preamble_lines()),
@@ -267,7 +268,7 @@ class RosettaBuilder:
                 if constraint.reactor == self._name
             ),
         )
-        if self_defaulted:
+        if self._finalize_types:
             program = finalize(program, self._needs)
         return program
 
@@ -380,6 +381,21 @@ class RosettaBuilder:
                     )
             self._scope_transitions.setdefault(src_scope, []).append(t)
 
+    def _channels(self, trigger: SignalTrigger) -> tuple[str, ...]:
+        """Resolve an accept to its concrete delivery channels."""
+        if self._needs.catalog is None:
+            return (trigger.signal_name,)
+        return tuple(sorted(self._needs.catalog.matching_channels(trigger)))
+
+    def _concrete_transitions(self) -> list[tuple[TransitionFact, str]]:
+        """Expand channels while preserving original transition identities."""
+        return [
+            (transition, channel)
+            for transition in self._transitions
+            if isinstance(transition.trigger, SignalTrigger)
+            for channel in self._channels(transition.trigger)
+        ]
+
     def _collect_signals(self) -> None:
         """Map accepted signals to every scope that must port them.
 
@@ -388,16 +404,18 @@ class RosettaBuilder:
         includes signals accepted somewhere below ``s`` (the scope's input
         ports, forwarded down by connections).
         """
-        for t in self._transitions:
+        for t, signal in self._concrete_transitions():
             trigger = t.trigger
             if not isinstance(trigger, SignalTrigger):
                 continue
+            if self._needs.catalog is not None:
+                definition = self._needs.catalog.definition_for(signal)
+                assert isinstance(definition, syside.Definition)
+                self._register_dataclass(definition)
             src_scope = _scope_of(t.source)
-            self._handled.setdefault(src_scope, set()).add(trigger.signal_name)
+            self._handled.setdefault(src_scope, set()).add(signal)
             for scope in _enclosing(src_scope):
-                self._accepted.setdefault(scope, {}).setdefault(
-                    trigger.signal_name, None
-                )
+                self._accepted.setdefault(scope, {}).setdefault(signal, None)
 
     def _collect_consumed(self) -> None:
         """Plan inner-first plumbing for cross-level priority conflicts.
@@ -409,7 +427,7 @@ class RosettaBuilder:
         and intermediate scopes re-emit upward, terminating at ``C`` (a
         composite) or at each consuming region (a parallel state).
         """
-        for t in self._transitions:
+        for t, signal in self._concrete_transitions():
             trigger = t.trigger
             if not isinstance(trigger, SignalTrigger):
                 continue
@@ -417,7 +435,6 @@ class RosettaBuilder:
             fact = self._facts.get(composite)
             if fact is None or fact.kind is StateKind.LEAF:
                 continue  # not a group interrupt on a composite/parallel state
-            signal = trigger.signal_name
             inner_scopes = [
                 scope
                 for scope, handled in self._handled.items()
@@ -485,6 +502,10 @@ class RosettaBuilder:
                 if not isinstance(action, syside.SendActionUsage):
                     continue
                 event_name, _pairs = payload_signature(action)
+                if self._needs.catalog is not None:
+                    definition = constructed_payload_definition(action)
+                    assert definition is not None
+                    event_name = self._needs.catalog.channel_for(definition)
                 self._sent_by_scope.setdefault(scope, {}).setdefault(
                     event_name, None
                 )
@@ -579,6 +600,7 @@ class RosettaBuilder:
         self,
         attribute_names: frozenset[str],
         local_names: frozenset[str] = frozenset(),
+        payload_bindings: dict[syside.Feature, str] | None = None,
     ) -> LfPythonCodeGen:
         """Build a peer-aware code generator sharing the preamble registry."""
         return LfPythonCodeGen(
@@ -586,6 +608,7 @@ class RosettaBuilder:
             needs=self._needs,
             port_signals=self._port_sigs,
             local_names=local_names,
+            payload_bindings=payload_bindings,
         )
 
     def _scope_codegen(self, scope: str) -> LfPythonCodeGen:
@@ -790,7 +813,9 @@ class RosettaBuilder:
             if trigger is None:
                 continue
             if isinstance(trigger, SignalTrigger):
-                signals.setdefault(t.source, set()).add(trigger.signal_name)
+                signals.setdefault(t.source, set()).update(
+                    self._channels(trigger)
+                )
             elif isinstance(trigger, (AfterTrigger, AtTrigger, WhenTrigger)):
                 afters[t.source] = afters.get(t.source, 0) + 1
         out: set[str] = set()
@@ -806,9 +831,23 @@ class RosettaBuilder:
         inputs: list[str],
         sent: list[str],
     ) -> None:
-        # Only state names are checked; attributes shadowing generated
-        # identifiers (an attribute named `current_state`) and the mode-local
-        # timer/action names are not validated yet.
+        channels = set(inputs) | set(self._exported.get(scope, {})) | set(sent)
+        generated = {
+            DONE_MODE,
+            OUTPUT_PORT,
+            COMPLETED_PORT,
+            "_sysmlc_types",
+            *(f"{sig}_act" for sig in sent),
+            *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
+            *(f"{name}_fired" for name in self._multi_trigger_states(scope)),
+            *((CHANGE_ACT,) if self._has_when else ()),
+        }
+        conflicts = channels & generated
+        if conflicts:
+            raise UnsupportedConstructError(
+                f"signal channels {sorted(conflicts)!r} collide with "
+                "Rosetta generated identifiers"
+            )
         reserved = {
             DONE_MODE,
             OUTPUT_PORT,
@@ -868,9 +907,8 @@ class RosettaBuilder:
             if trigger is None:
                 eventless.append(transition)
             elif isinstance(trigger, SignalTrigger):
-                signal_groups.setdefault(trigger.signal_name, []).append(
-                    transition
-                )
+                for channel in self._channels(trigger):
+                    signal_groups.setdefault(channel, []).append(transition)
             elif isinstance(trigger, AfterTrigger):
                 afters.append(transition)
             elif isinstance(trigger, AtTrigger):
@@ -1034,6 +1072,8 @@ class RosettaBuilder:
             )
 
         for signal, group in signal_groups.items():
+            if all(t.declaration_order is not None for t in group):
+                group.sort(key=lambda t: t.declaration_order or 0)
             triggers: tuple[str, ...]
             is_input = signal not in self._omitted_inputs
             is_self_sched = signal in self._self_sched_by_scope.get(
@@ -1057,34 +1097,27 @@ class RosettaBuilder:
                 )
                 continue
             triggers = tuple(trig)
-            payload_names = {
-                t.trigger.payload_name
-                for t in group
-                if isinstance(t.trigger, SignalTrigger)
-                and t.trigger.payload_name is not None
-            }
-            if len(payload_names) > 1:
-                raise UnsupportedConstructError(
-                    f"transitions on {signal!r} declare different payload "
-                    f"names {sorted(payload_names)!r}; use one name."
-                )
             prelude: list[str] = []
             group_gen = gen
-            if payload_names:
-                (payload_name,) = payload_names
-                if is_input and is_self_sched:
-                    value = (
-                        f"({signal}.value if {signal}.is_present "
-                        f"else {signal}_act.value)"
-                    )
-                elif is_input:
-                    value = f"{signal}.value"
-                else:
-                    value = f"{signal}_act.value"
-                prelude = [f"{payload_name} = {value}"]
+            if is_input and is_self_sched:
+                value = (
+                    f"({signal}.value if {signal}.is_present "
+                    f"else {signal}_act.value)"
+                )
+            elif is_input:
+                value = f"{signal}.value"
+            else:
+                value = f"{signal}_act.value"
+            bindings = {
+                t.trigger.payload_feature: value
+                for t in group
+                if isinstance(t.trigger, SignalTrigger)
+                and t.trigger.payload_feature is not None
+            }
+            if bindings:
                 group_gen = self._make_codegen(
                     self._scope_attribute_names(scope),
-                    local_names=frozenset({payload_name}),
+                    payload_bindings=bindings,
                 )
             group_exit = [
                 *exit_log,
@@ -1525,11 +1558,25 @@ def finalize(
             event_name,
             port,
         )
+    aliases: dict[str, list[str]] = {}
+    if needs.catalog is not None:
+        for channel in needs.catalog.qualified_channels.values():
+            definition = needs.catalog.definition_for(channel)
+            if definition.name is not None:
+                aliases.setdefault(definition.name, []).append(channel)
     return replace(
         program,
         target_options=options,
         types_module_name=needs.types_module if companion else None,
         types_module_lines=tuple(companion),
+        signal_aliases=tuple(
+            (name, channels[0])
+            for name, channels in sorted(aliases.items())
+            if len(channels) == 1
+        ),
+        signal_channels=tuple(
+            needs.catalog.qualified_channels.items() if needs.catalog else ()
+        ),
     )
 
 
@@ -1555,7 +1602,7 @@ def build_program(
         The assembled ``LfProgram``.
     """
     name = state_def_qn.split("::")[-1]
-    needs = PreambleNeeds()
+    needs = PreambleNeeds(SignalCatalog(model, [state_def_qn]))
     needs.types_module = f"{name}_types"
     if external is not None:
         needs.external = external

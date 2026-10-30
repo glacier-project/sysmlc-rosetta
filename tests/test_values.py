@@ -55,5 +55,5 @@ def test_configured_values_render_as_lf_python(tmp_path: Path) -> None:
     assert initializers["temperature"] == "25.0"
     assert initializers["label"] == '"on"'
     assert initializers["armed"] == "True"
-    assert initializers["pt"] == "Point(x=0.7, y=1.0)"
+    assert initializers["pt"] == "_sysmlc_types.Point(x=0.7, y=1.0)"
     assert initializers["warmUp"] == "90.0"

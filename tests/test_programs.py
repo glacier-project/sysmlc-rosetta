@@ -73,7 +73,7 @@ def test_sm02_named_payload_without_guard_use_still_builds() -> None:
     # The binding line is emitted even when nothing reads the payload; a
     # harmless unused local keeps the generation rule uniform.
     idle = _mode(program, "idle")
-    assert idle.reactions[1].body[0] == "reading = Tick.value"
+    assert idle.reactions[1].body == ("running.set()",)
 
 
 # -- sm03: guards --
@@ -115,7 +115,7 @@ def test_sm05_chained_guard_and_composite_state_var() -> None:
     program = _build("sm05-chained-references", "SM05::MachineChainGuard")
     (pt,) = program.reactor.state_vars
     assert pt.name == "pt"
-    assert pt.init == "Point(x=0.5)"
+    assert pt.init == "_sysmlc_types.Point(x=0.5)"
     entry = _mode(program, "idle").reactions[0]
     assert "if self.pt.x > 0.0:" in entry.body
 

@@ -8,7 +8,11 @@ from sysmlc.codegen.python import (
     payload_fields,
     payload_signature,
 )
-from sysmlc.codegen.structured import DataclassRegistry, types_import_lines
+from sysmlc.codegen.structured import (
+    DataclassRegistry,
+    constructed_payload_definition,
+    types_import_lines,
+)
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import (
     send_receiver_is_own_port,
@@ -17,6 +21,7 @@ from sysmlc.semantics.statemachine.interface import (
 
 if TYPE_CHECKING:
     from sysmlc.codegen.python import PythonCodeGenContext
+    from sysmlc.semantics.statemachine.signals import SignalCatalog
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.program import LfConstraint
@@ -64,9 +69,12 @@ class PreambleNeeds:
     consumers of the assembled program.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, catalog: SignalCatalog | None = None) -> None:
+        self.catalog = catalog
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
-        self.dataclasses = DataclassRegistry()
+        self.dataclasses = DataclassRegistry(
+            symbols=catalog.definition_symbols if catalog else None
+        )
         self.uses_math = False
         self.uses_logging = False
         self.types_module: str | None = None
@@ -110,15 +118,21 @@ class PreambleNeeds:
                 node=literal,
             )
         assert owner.name is not None and literal.name is not None
-        known = self.enum_defs.get(owner.name)
+        symbol = (
+            self.catalog.definition_symbols[str(owner.qualified_name)]
+            if self.catalog
+            else owner.name
+        )
+        known = self.enum_defs.get(symbol)
         if known is not None and known != owner:
             raise UnsupportedConstructError(
                 f"two enum definitions share the simple name {owner.name!r};"
                 " rename one.",
                 node=owner,
             )
-        self.enum_defs[owner.name] = owner
-        return f"{owner.name}.{literal.name}"
+        self.enum_defs[symbol] = owner
+        prefix = "_sysmlc_types." if self.types_module else ""
+        return f"{prefix}{symbol}.{literal.name}"
 
     @property
     def has_types(self) -> bool:
@@ -166,7 +180,12 @@ class PreambleNeeds:
                 for name in sorted(names)
             )
         names = sorted(self.enum_defs) + self.dataclasses.names()
-        lines.extend(types_import_lines(self.types_module, names))
+        if self.types_module and names:
+            lines.append(f"import {self.types_module} as _sysmlc_types")
+            if self.catalog is None:
+                # Catalog-free composite values use bare type references.
+                # Keep these valid alongside qualified payload constructors.
+                lines.extend(types_import_lines(self.types_module, names))
         return lines
 
 
@@ -190,9 +209,9 @@ class LfPythonCodeGen(PythonCodeGen):
     """Python code generator for Lingua Franca reaction bodies.
 
     Reaction bodies run as methods of the generated reactor, so attribute
-    references render as ``self.<name>``. Only the state definition's bound
-    attributes are valid names: anything else (in particular an accept
-    payload parameter) fails loud rather than generating broken code.
+    references render as ``self.<name>``. Payload bindings resolve by source
+    feature identity to the delivered value. Unknown references produce
+    diagnostics.
 
     For chained references (``a.b``), the base feature is prefixed with
     ``self.`` automatically: the chain handler in the base class calls
@@ -214,8 +233,9 @@ class LfPythonCodeGen(PythonCodeGen):
         self_prefix: When ``False`` the ``self.`` prefix is suppressed and
             the attribute-name check is skipped.  Used by the init codegen
             that renders outside of any reaction method.
-        local_names: Names that are in scope as plain locals (e.g. accept
-            payload parameters) and must not receive a ``self.`` prefix.
+        local_names: Names explicitly in scope as plain locals.
+            Payload bindings use source feature identity instead.
+        payload_bindings: Source payload features mapped to delivered values.
         port_signals: Signals a connected peer accepts, so a ``via`` send of
             one sets the LF output port; a ``via`` send of any other signal
             is dropped and recorded in ``needs.undeliverable_sends``.
@@ -230,9 +250,22 @@ class LfPythonCodeGen(PythonCodeGen):
         self_prefix: bool = True,
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
+        payload_bindings: dict[syside.Feature, str] | None = None,
     ) -> None:
         self._needs = needs if needs is not None else PreambleNeeds()
-        super().__init__(context, external=self._needs.external)
+        super().__init__(
+            context,
+            external=self._needs.external,
+            definition_symbols={
+                qn: f"_sysmlc_types.{symbol}"
+                for qn, symbol in (
+                    self._needs.catalog.definition_symbols.items()
+                    if self._needs.catalog
+                    else ()
+                )
+            },
+        )
+        self._payload_bindings = payload_bindings or {}
         self._used_external = self._needs.used_external
         self._attribute_names = attribute_names
         self._self_prefix = self_prefix
@@ -266,6 +299,8 @@ class LfPythonCodeGen(PythonCodeGen):
             ValueError: If the referent has no resolved name.
         """
         ref = expr.referent
+        if ref in self._payload_bindings:
+            return self._payload_bindings[ref]
         if isinstance(ref, syside.EnumerationUsage):
             return self._needs.register_enum(ref)
         name = super()._emit_feature_reference(expr)
@@ -323,9 +358,8 @@ class LfPythonCodeGen(PythonCodeGen):
         order. An omitted field without a value keeps the class's
         placeholder. A type without fields is sent as a bare signal.
 
-        On the ported ``.set`` path ``<Event>`` is the reaction's port
-        parameter, shadowing the preamble dataclass; the payload constructor
-        is reached through ``globals()["<Event>"](...)``.
+        Payload constructors use the generated types module alias so LF
+        port parameters cannot shadow their class symbols.
 
         Args:
             send: The ``send new <Type>(<args>)`` action to translate.
@@ -343,6 +377,18 @@ class LfPythonCodeGen(PythonCodeGen):
                 does not bind exactly one field.
         """
         event_name, _arguments = payload_signature(send)
+        definition = constructed_payload_definition(send)
+        if self._needs.catalog is not None:
+            assert definition is not None
+            event_name = self._needs.catalog.channel_for(definition)
+        symbol = (
+            self._needs.dataclasses.symbol_for(definition)
+            if definition is not None
+            else event_name
+        )
+        constructor = (
+            f"_sysmlc_types.{symbol}" if self._needs.types_module else symbol
+        )
         if send.receiver_argument is not None and not send_receiver_is_own_port(
             send
         ):
@@ -359,14 +405,9 @@ class LfPythonCodeGen(PythonCodeGen):
             return ""
         fields = payload_fields(send)
         args = self.render_fields((field.name, field.value) for field in fields)
+        payload = f"{constructor}({args})" if fields else None
         if via_port is not None:
-            # `{event_name}` is the reaction's port parameter here, shadowing
-            # the preamble class; reach the class through globals().
-            ported_payload = (
-                f'globals()["{event_name}"]({args})' if fields else None
-            )
-            return f"{event_name}.set({ported_payload or 'True'})"
-        payload = f"{event_name}({args})" if fields else None
+            return f"{event_name}.set({payload or 'True'})"
         return (
             f"{event_name}_act.schedule(0, {payload})"
             if payload

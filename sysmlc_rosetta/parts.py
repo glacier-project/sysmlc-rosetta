@@ -21,6 +21,7 @@ import logging
 from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
+from sysmlc.codegen.structured import DataclassRegistry
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.parts.graph import PartGraph, PartNode, part_graph
 from sysmlc.semantics.parts.routing import PortSignalRoute, validated_routes
@@ -29,6 +30,7 @@ from sysmlc.semantics.statemachine.interface import (
     MachineInterface,
     machine_interface,
 )
+from sysmlc.semantics.statemachine.signals import SignalCatalog
 
 from sysmlc_rosetta.builder import (
     OUTPUT_PORT,
@@ -77,7 +79,15 @@ def compose_exhibits(
         needs: Shared preamble registry (caller populates before this call).
     """
     # Build the machine interface for each exhibit.
-    faces = [(inst, qn, machine_interface(model, qn)) for inst, qn in exhibits]
+    if needs.catalog is None:
+        needs.catalog = SignalCatalog(model, [qn for _, qn in exhibits])
+        needs.dataclasses = DataclassRegistry(
+            symbols=needs.catalog.definition_symbols
+        )
+    faces = [
+        (inst, qn, machine_interface(model, qn, catalog=needs.catalog))
+        for inst, qn in exhibits
+    ]
 
     # Per exhibit: peer_accepts = union of every OTHER exhibit's accepted set.
     peer_accepts_map: list[frozenset[str]] = []
@@ -166,7 +176,7 @@ def _cross_all(
             target_reactor = machine_reactors[j]
             source_reactor = machine_reactors[i]
             for sig in source_reactor.outputs:
-                if sig == OUTPUT_PORT:
+                if sig == OUTPUT_PORT or sig not in faces[j][2].accepted:
                     continue
                 assert sig in target_reactor.inputs, (
                     f"{sig!r} missing from {target_reactor.name!r} inputs; "
@@ -237,7 +247,10 @@ def build_part_program(
                 )
 
     # Port-based machinery applies to single-exhibit nodes only.
-    faces, routes = validated_routes(model, g, single_nodes)
+    catalog = SignalCatalog(
+        model, [qn for node in g.parts for _, qn in node.behaviors]
+    )
+    faces, routes = validated_routes(model, g, single_nodes, catalog=catalog)
 
     module_name = f"{_simple(usage_qn)}_types"
     peer_accepts = _peer_accepts(g, faces)
@@ -247,6 +260,7 @@ def build_part_program(
         multi_nodes,
         peer_accepts,
         module_name=module_name,
+        catalog=catalog,
         external=external,
     )
 
@@ -288,6 +302,7 @@ def _build_reactors(
     peer_accepts: dict[str, frozenset[str]],
     *,
     module_name: str,
+    catalog: SignalCatalog | None = None,
     external: list[ForeignArtifact] | None = None,
 ) -> tuple[tuple[Reactor, ...], PreambleNeeds]:
     """Build reactor classes for all part nodes, sharing one preamble.
@@ -306,6 +321,8 @@ def _build_reactors(
         single_nodes: Part nodes with exactly one exhibited behavior.
         multi_nodes: Part nodes with two or more exhibited behaviors.
         peer_accepts: Per-usage-name set of signal names accepted by peers.
+        catalog: Optional concrete signal identities for the complete
+            composition. Omission preserves catalog-free caller behavior.
         module_name: Stem of the companion ``_types`` module (set on the
             shared :class:`PreambleNeeds` before any builder pass).
         external: Optional foreign artifacts. When supplied, registered on
@@ -316,7 +333,7 @@ def _build_reactors(
         A tuple of ``(reactor_classes, needs)`` where ``needs`` is the shared
         preamble registry, ready for :func:`_finalize`.
     """
-    needs = PreambleNeeds()
+    needs = PreambleNeeds(catalog)
     needs.types_module = module_name
     if external:
         needs.external = external

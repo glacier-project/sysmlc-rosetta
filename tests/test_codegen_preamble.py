@@ -27,7 +27,10 @@ def test_dataclass_goes_to_module_preamble_imports_it() -> None:
         "class Pt:",
         "    x: float = 1.0",
     ]
-    assert needs.preamble_lines() == ["from Foo_types import Pt"]
+    assert needs.preamble_lines() == [
+        "import Foo_types as _sysmlc_types",
+        "from Foo_types import Pt",
+    ]
 
 
 def test_preamble_orders_imports_math_then_external_then_types() -> None:
@@ -48,5 +51,6 @@ def test_preamble_orders_imports_math_then_external_then_types() -> None:
     assert needs.preamble_lines() == [
         "import math",
         "from ramp import step",
+        "import Foo_types as _sysmlc_types",
         "from Foo_types import Pt",
     ]

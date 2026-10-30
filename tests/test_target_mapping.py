@@ -31,14 +31,12 @@ def test_enum_companion_import_initializer_and_effect() -> None:
     assert "class LightColor(Enum):" in program.types_module_lines
     for name in ("red", "green", "yellow"):
         assert f'    {name} = "{name}"' in program.types_module_lines
-    assert any(
-        "from MachineStringEnum_types import" in line and "LightColor" in line
-        for line in program.preamble
-    )
+    assert "import MachineStringEnum_types as _sysmlc_types" in program.preamble
     color = next(var for var in program.reactor.state_vars if var.name == "c")
-    assert color.init == "LightColor.red"
+    assert color.init == "_sysmlc_types.LightColor.red"
     assert (
-        "self.c = LightColor.green" in _mode(program, "idle").reactions[0].body
+        "self.c = _sysmlc_types.LightColor.green"
+        in _mode(program, "idle").reactions[0].body
     )
 
 
@@ -88,9 +86,8 @@ def test_payload_branches_share_one_reaction_and_bind_the_occurrence() -> None:
     assert len(idle.reactions) == 2
     reaction = idle.reactions[1]
     assert reaction.triggers == ("Reading",)
-    assert reaction.body[0] == "reading = Reading.value"
-    assert "if reading.value < self.limit:" in reaction.body
-    assert "elif reading.value == self.limit:" in reaction.body
+    assert "if Reading.value.value < self.limit:" in reaction.body
+    assert "elif Reading.value.value == self.limit:" in reaction.body
     assert "else:" in reaction.body
     assert "    overflow.set()" in reaction.body
     assert "class Reply:" in program.types_module_lines
