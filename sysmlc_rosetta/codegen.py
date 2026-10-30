@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, override
 
 import syside
-from sysmlc.codegen.python import PythonCodeGen, payload_signature
+from sysmlc.codegen.python import (
+    PythonCodeGen,
+    payload_fields,
+    payload_signature,
+)
 from sysmlc.codegen.structured import DataclassRegistry, types_import_lines
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import (
@@ -312,6 +316,13 @@ class LfPythonCodeGen(PythonCodeGen):
         - A ``to <own port>`` send (or a bare send) is an internal
           self-event: ``<Event>_act.schedule(0[, <payload>])``.
 
+        The payload constructs the type's generated class with its fields
+        by keyword: first each constructor argument, named by the field it
+        binds, then each omitted field with the value its type gives it, so
+        the arguments are evaluated once, at the send, in constructor
+        order. An omitted field without a value keeps the class's
+        placeholder. A type without fields is sent as a bare signal.
+
         On the ported ``.set`` path ``<Event>`` is the reaction's port
         parameter, shadowing the preamble dataclass; the payload constructor
         is reached through ``globals()["<Event>"](...)``.
@@ -325,12 +336,13 @@ class LfPythonCodeGen(PythonCodeGen):
 
         Raises:
             UnsupportedConstructError: If the ``to`` receiver is not the
-                machine's own port.
+                machine's own port, or an omitted field's value from its
+                type is not a literal constant.
             ValueError: If the payload is not a ``new <Type>(...)``
                 constructor resolving to a named definition, or an argument
-                has no corresponding named attribute.
+                does not bind exactly one field.
         """
-        event_name, pairs = payload_signature(send)
+        event_name, _arguments = payload_signature(send)
         if send.receiver_argument is not None and not send_receiver_is_own_port(
             send
         ):
@@ -342,25 +354,19 @@ class LfPythonCodeGen(PythonCodeGen):
                 node=send,
             )
         via_port = send_via_port(send)
+        if via_port is not None and event_name not in self._port_signals:
+            self._needs.undeliverable_sends.add((event_name, via_port))
+            return ""
+        fields = payload_fields(send)
+        args = self.render_fields((field.name, field.value) for field in fields)
         if via_port is not None:
-            if event_name not in self._port_signals:
-                self._needs.undeliverable_sends.add((event_name, via_port))
-                return ""
-            args = ", ".join(
-                f"{name}={self.render_expression(argument)}"
-                for name, argument in pairs
-            )
             # `{event_name}` is the reaction's port parameter here, shadowing
             # the preamble class; reach the class through globals().
             ported_payload = (
-                f'globals()["{event_name}"]({args})' if pairs else None
+                f'globals()["{event_name}"]({args})' if fields else None
             )
             return f"{event_name}.set({ported_payload or 'True'})"
-        args = ", ".join(
-            f"{name}={self.render_expression(argument)}"
-            for name, argument in pairs
-        )
-        payload = f"{event_name}({args})" if pairs else None
+        payload = f"{event_name}({args})" if fields else None
         return (
             f"{event_name}_act.schedule(0, {payload})"
             if payload

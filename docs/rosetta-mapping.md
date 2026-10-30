@@ -314,8 +314,11 @@ different backend companion-module names without duplicating the physics.
   attribute values, render as companion-module `@dataclass` classes. Fields
   are typed by mapping SysML scalars (`Real`→`float`, `Integer`→`int`,
   `Boolean`→`bool`, `String`→`str`, else `object`) and carry the model's
-  declared default, else `None` (every field defaulted, so field order is
-  unconstrained).
+  effective default, including inherited fields and defaults replaced through
+  redefinition. Unspecified fields default to `None`; fields whose values
+  need runtime construction are supplied by keyword. A nonliteral class
+  default, such as an enum member, makes that field required and the class
+  keyword-only.
 - Standard-library function calls in expressions are whitelisted:
   `abs`, `max`, `min` and `sin`/`cos`/`tan` (adding `import math`).
   Unlisted functions are rejected; extend the shared library-function mapping
@@ -373,7 +376,25 @@ signal classifies:
 | locally **and** peer-accepted | **both statements** (overlap case)           |
 | accepted by nobody            | void self-event                              |
 
-Bare sends render `Sig.set(True)`; payload sends `Sig.set(Sig(…))`. Because
+Types without application fields render `Sig.set(True)`; data-bearing types
+render `Sig.set(Sig(…))`, including constructors with no explicit arguments.
+Positional and named arguments bind to their resolved fields and evaluate
+once at the send in constructor order. Omitted fields carry effective constant
+defaults, including inherited and redefined defaults: with `x default 7` and
+`y default 9`, `new Data(y = 42)` constructs `Data(y=42, x=7)`, and
+`new Data()` constructs `Data(x=7, y=9)`. Omitted structured fields materialize
+their nested values; unspecified fields retain their generated class
+placeholders. Nonconstant omitted defaults are diagnosed and must be passed
+explicitly as constructor arguments. Self-events construct the same values
+in `Sig_act.schedule(0, Sig(…))`.
+
+Constant eligibility does not imply expression-renderer support: a direct
+quantity default such as `default 0.5 [s]` is rejected with an unsupported
+`Quantity` operator diagnostic during send emission. This is separate from
+scalar-quantity state-machine initialization, which converts values to SI
+magnitudes before rendering.
+
+Because
 the LF input/output port named `Sig` shadows the preamble payload dataclass
 of the same name, a **ported payload** send renders the constructor as
 `globals()["Sig"](…)` (resolving the dataclass past the port parameter
