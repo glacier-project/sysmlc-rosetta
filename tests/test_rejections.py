@@ -83,6 +83,17 @@ def test_cross_scope_send_is_rejected() -> None:
         build_program(model, "CrossScopeSend::Machine")
 
 
+def test_non_constant_omitted_payload_default_is_rejected() -> None:
+    # `new Derived()` omits b, whose default `a + 1` refers to the payload's
+    # own field; it is diagnosed instead of being sent without a value.
+    model = load_model(FIXTURES_DIR / "payload-construction")
+    with pytest.raises(
+        UnsupportedConstructError,
+        match=r"Derived::b'.*not a literal constant",
+    ):
+        build_program(model, "PayloadConstruction::NonConstantDefault")
+
+
 def test_payload_writeback_is_rejected() -> None:
     # Payload locals are read-only: `local_names` applies to expression
     # rendering, never to assignment targets, so `assign r.value := 0`

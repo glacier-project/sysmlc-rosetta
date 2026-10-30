@@ -21,7 +21,6 @@ from sysmlc.semantics.statemachine.facts import (
     AttributeValue,
     AtTrigger,
     CompletionTarget,
-    CompositeValue,
     ConstraintFact,
     SignalTrigger,
     StateFact,
@@ -566,21 +565,10 @@ class RosettaBuilder:
         )
 
     def _render_value(self, value: AttributeValue) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, CompositeValue):
-            self._register_dataclass(value.definition)
-            fields = ", ".join(
-                f"{name}={self._render_value(field)}"
-                for name, field in value.fields
-            )
-            return f"{value.type_name}({fields})"
-        if isinstance(value, float):
-            return repr(value)
         # Initial values render with the init codegen (self_prefix=False):
         # they execute outside a reaction, where `self.<attr>` does not
         # exist.
-        return self._init_codegen.render_expression(value)
+        return self._init_codegen.render_value(value, self._register_dataclass)
 
     # -- scope assembly --
 
