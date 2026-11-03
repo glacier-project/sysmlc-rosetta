@@ -107,9 +107,13 @@ leave with the parallel state).
 
 ## 3. Transitions
 
-Within one scope, same-trigger transitions render as a single reaction
+Within one scope, ordinary eventless alternatives or alternatives for the
+same delivered signal render as a single reaction
 whose body is a first-match `if`/`elif` chain — declaration order is firing
-priority; a guardless branch closes the chain. Each branch runs the source
+priority, including for same-source alternatives declared in different
+lexical scopes (for example `transition first outer.a …` in the parent beside
+`transition first a …` inside `outer`); a guardless branch closes the chain.
+Each branch runs the source
 state's `exit` actions, then the transition `effect`, then sets the target
 mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
 

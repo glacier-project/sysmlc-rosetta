@@ -915,6 +915,8 @@ class RosettaBuilder:
                 ats.append(transition)
             else:
                 whens.append(transition)
+        if all(t.declaration_order is not None for t in eventless):
+            eventless.sort(key=lambda t: t.declaration_order or 0)
 
         # Observation exit log: prepended to BOTH exit-statement threads (the
         # default one below and the payload-aware ``group_exit`` for signal
