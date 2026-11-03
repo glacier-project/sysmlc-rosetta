@@ -123,9 +123,10 @@ by side in the parallel state's mode. A parallel **root** machine has no
 modes at all: region instances and their wiring sit at reactor scope.
 Region `entry`/`do`/`exit` actions run in the parent. In a nested parallel
 state, region entry/do actions run on parallel-state entry. Its completion
-join runs region exits in declaration order before the parallel state's
-exit; triggered departures and deep escapes do not include those regional
-exits. For a parallel root,
+join runs each region's exit when that region reports readiness, before
+the parallel state's outgoing guards are evaluated (§3); triggered
+departures and deep escapes do not include those regional exits. For a
+parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that
 region reports local readiness (§7). Sibling regions' substates enter in no specified
@@ -148,8 +149,14 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
 - **Eventless from a composite/parallel child** — *completion semantics*:
   the reaction triggers on the child's `completed` output (never on
   entry). For a parallel child it is a **join**: reactor-scope flags
-  (`heating_heater_done`, …) are reset in the mode's entry reaction and
-  set as each region completes; the transition fires when all are set.
+  (`heating_heater_done`, …) are reset in the mode's entry reaction. When
+  a region reports readiness, the join runs its own `exit` and sets its
+  flag at the same tag, without waiting for unfinished siblings; regions
+  completing at the same tag exit in declaration order. Once all flags are
+  set, the join evaluates the outgoing guards, so they observe the regional
+  exits' assignments; only the chosen branch runs the parallel state's own
+  `exit` and the transition effect. If no guard holds, the parallel state
+  stays active with its regions finalized.
   A region without a scoped `done` keeps its flag false and blocks the join.
   Its unwritten `completed` port is omitted from the reaction triggers and
   body because LF's Python runtime cannot read that port.

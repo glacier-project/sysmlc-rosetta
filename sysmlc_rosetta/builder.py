@@ -1251,7 +1251,7 @@ class RosettaBuilder:
                 )
         else:  # StateKind.PARALLEL
             regions = self._regions(fact)
-            all_exit_stmts: list[str] = []
+            region_exits: list[list[str]] = []
             for region in regions:
                 r_simple = _simple(region.name)
                 inst = f"c_{r_simple}"
@@ -1282,13 +1282,13 @@ class RosettaBuilder:
                     inst, region.name, exit_stmts, scope, sent
                 )
                 # The region's own entry/do run on parallel-state entry; its
-                # exit runs on any transition leaving the parallel state.
+                # exit runs in the completion join when the region is ready.
                 entry_body += self._statements(region.entry_action, gen)
                 if region.do_action is not None:
                     actions.require_inline_one_shot(region.do_action)
                     entry_body += self._statements(region.do_action, gen)
-                all_exit_stmts += self._statements(region.exit_action, gen)
-            all_exit_stmts += exit_stmts
+                # Render even without a completion path, to validate it.
+                region_exits.append(self._statements(region.exit_action, gen))
             completing_regions = [
                 region for region in regions if region.name in self._needs_done
             ]
@@ -1298,17 +1298,22 @@ class RosettaBuilder:
                     StateVar(flag, "False", reset=True) for flag in flags
                 ]
                 entry_body += [f"self.{flag} = False" for flag in flags]
+                # Each ready region exits before the parent's guards are
+                # evaluated; same-tag regions exit in declaration order.
                 join_body: list[str] = []
-                for region, flag in zip(regions, flags, strict=True):
+                for region, flag, region_exit in zip(
+                    regions, flags, region_exits, strict=True
+                ):
                     if region.name not in self._needs_done:
                         continue
                     inst = f"c_{_simple(region.name)}"
+                    join_body.append(f"if {inst}.{COMPLETED_PORT}.is_present:")
                     join_body += [
-                        f"if {inst}.{COMPLETED_PORT}.is_present:",
-                        f"{_PY_INDENT}self.{flag} = True",
+                        f"{_PY_INDENT}{line}"
+                        for line in (*region_exit, f"self.{flag} = True")
                     ]
                 body, targets = self._dispatch(
-                    eventless, all_exit_stmts, scope, gen
+                    eventless, exit_stmts, scope, gen
                 )
                 condition = " and ".join(f"self.{flag}" for flag in flags)
                 join_body.append(f"if {condition}:")
