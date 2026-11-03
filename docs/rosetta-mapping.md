@@ -308,15 +308,24 @@ override aborts at startup.
 
 Context-sensitive:
 
-- **Root scope**: a synthesized final mode `done` announces itself and
-  calls `request_stop()` — the program winds down.
+- **Root scope**: a synthesized final mode `done` announces itself, runs
+  the root's own `exit` action, and calls `request_stop()` — the program
+  winds down. The root exit runs only on this completion, after the
+  completing transition's source exit and effect.
 - **Child scope** (composite or region): the `done` mode announces itself
   and sets the reactor's `completed` output instead; the parent reacts per
   §3. Multiple `then done` transitions share one mode. Child reactors
   always declare `completed` (a machine that never completes simply never
   sets it).
-- A parallel root joins all regions' `completed` ports into
-  `request_stop()`.
+- A parallel root joins all regions' `completed` ports; once every region
+  has reported local `done`, the join runs the root's `exit` action and
+  calls `request_stop()`. A partial join runs neither. This does not
+  implement parallel-root region exits, which remain omitted (§2).
+- Host shutdown (a run timeout, an empty event queue or a peer machine's
+  `request_stop()`) only ends observation: it never runs a root exit, so a
+  machine still waiting for input is not exited. A root exit on a machine
+  without a completion path is still checked against the supported subset
+  at compile time, but never executes.
 
 ## 8. Observability
 
