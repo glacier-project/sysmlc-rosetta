@@ -99,7 +99,8 @@ class RosettaBuilder:
     reactor class; its direct child states become modes. A composite child's
     mode instantiates the child's reactor and forwards accepted signals down;
     a parallel child's mode instantiates one reactor per region. ``then
-    done`` is context-sensitive: the root requests stop, a child sets its
+    done`` is context-sensitive: the root runs its exit and requests stop
+    (host shutdown alone never runs it), a child sets its
     ``completed`` output, and an eventless transition out of a composite
     fires on that port (completion semantics). Transitions escaping a scope
     raise dedicated ``exit_<k>`` outputs that enclosing scopes resolve or
@@ -184,6 +185,7 @@ class RosettaBuilder:
         #   identity-equal to _port_sigs today (named separately because
         #   use sites read "interface rule" vs "codegen rule").
         self._omitted_inputs: frozenset[str] = frozenset()
+        self._root_exit: list[str] = []
         # Populated during assembly:
         self._exit_ports: dict[str, dict[str, str]] = {}
         self._needs_done: set[str] = set()
@@ -248,6 +250,9 @@ class RosettaBuilder:
         # The port/self signal sets must exist (populated by _collect_sends)
         # before any peer-aware code generator is created.
         self._codegen = self._make_codegen(self._attribute_names)
+        # Rendered even without a completion path so an unsupported root
+        # exit is still diagnosed.
+        self._root_exit = self._statements(root.exit_action, self._codegen)
         if root.kind is StateKind.PARALLEL:
             machine = self._parallel_root_reactor(root)
         elif root.kind is StateKind.COMPOSITE:
@@ -651,7 +656,7 @@ class RosettaBuilder:
             for kid in kids
         ]
         if scope in self._needs_done:
-            modes.append(self._done_mode(is_root))
+            modes.append(self._done_mode(is_root, sent))
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
         ported = tuple(self._exported.get(scope, {}))
@@ -701,7 +706,7 @@ class RosettaBuilder:
         """Assemble a parallel ROOT machine: regions wired at reactor scope.
 
         The machine has no modes; completion is a join over all regions'
-        ``completed`` ports that requests stop.
+        ``completed`` ports that runs the root's exit and requests stop.
         """
         regions = self._regions(root)
         sent = list(self._sent_by_scope.get("", {}))
@@ -753,18 +758,24 @@ class RosettaBuilder:
                 f"{_PY_INDENT}self.{flag} = True",
             ]
         condition = " and ".join(f"self.{flag}" for flag in flags)
-        join_body += [f"if {condition}:", f"{_PY_INDENT}request_stop()"]
+        join_body.append(f"if {condition}:")
+        join_body += [
+            f"{_PY_INDENT}{line}"
+            for line in (*self._root_exit, "request_stop()")
+        ]
         # Unwritten LF ports cannot be read by Python reactions. Keep the
         # missing region's flag false so a partial completion cannot join.
         if completing_regions:
             reactions.append(
-                Reaction(
+                self._reaction(
                     tuple(
                         f"c_{_simple(r.name)}.{COMPLETED_PORT}"
                         for r in completing_regions
                     ),
                     (),
                     tuple(join_body),
+                    sent,
+                    self._scope_ports(""),
                 )
             )
         parameters, state_vars = self._attribute_split()
@@ -1507,19 +1518,22 @@ class RosettaBuilder:
             effects[consumed] = None
         return body, tuple(effects)
 
-    def _done_mode(self, is_root: bool) -> Mode:
+    def _done_mode(self, is_root: bool, sent: list[str]) -> Mode:
+        """The final mode: the root exits and stops; a child completes."""
         body = [f'{OUTPUT_PORT}.set("{DONE_MODE}")']
         effects = [OUTPUT_PORT]
         if is_root:
-            body.append("request_stop()")
+            body += [*self._root_exit, "request_stop()"]
         else:
             body.append(f"{COMPLETED_PORT}.set(True)")
             effects.append(COMPLETED_PORT)
-        entry = Reaction(
+        entry = self._reaction(
             ("reset", "startup"),
             tuple(effects),
             tuple(body),
-            () if is_root else (ENTRY_ORDER_PORT,),
+            sent,
+            self._scope_ports("") if is_root else (),
+            sources=() if is_root else (ENTRY_ORDER_PORT,),
         )
         return Mode(name=DONE_MODE, reactions=(entry,))
 
@@ -1530,7 +1544,7 @@ class RosettaBuilder:
         ports: tuple[str, ...] = (),
         regions: list[StateFact] | None = None,
     ) -> list[Reaction]:
-        """Render root/region startup actions and the root's shutdown exit."""
+        """Render the root/region startup entry and ``do`` actions."""
         gen = self._codegen
         body: list[str] = []
         for fact in (root, *(regions or ())):
@@ -1546,11 +1560,6 @@ class RosettaBuilder:
             )
             out.append(
                 self._reaction(("startup",), order, tuple(body), sent, ports)
-            )
-        exit_body = self._statements(root.exit_action, gen)
-        if exit_body:
-            out.append(
-                self._reaction(("shutdown",), (), tuple(exit_body), sent, ports)
             )
         return out
 
