@@ -60,6 +60,7 @@ OUTPUT_PORT = "current_state"
 COMPLETED_PORT = "completed"
 DONE_MODE = "done"
 CHANGE_ACT = "_change_act"
+ENTRY_ORDER_PORT = "_entry_order"
 _PY_INDENT = "    "
 
 
@@ -102,9 +103,10 @@ class RosettaBuilder:
     ``completed`` output, and an eventless transition out of a composite
     fires on that port (completion semantics). Transitions escaping a scope
     raise dedicated ``exit_<k>`` outputs that enclosing scopes resolve or
-    re-raise. Capability rejections (deep entry, cross-scope sends,
-    ``at``/``when``, non-inline ``do`` bodies, unstable self-loops, name
-    collisions) also live here.
+    re-raise. Non-trigger ``_entry_order`` dependencies order parent
+    entry/do before child entry at the same tag. Capability rejections (deep
+    entry, cross-scope sends, ``at``/``when``, non-inline ``do`` bodies,
+    unstable self-loops, name collisions) also live here.
 
     In ``peer_accepts`` mode (the named signals are accepted by a peer
     machine), a matching send becomes an LF output port that the sending
@@ -650,6 +652,8 @@ class RosettaBuilder:
         ]
         if scope in self._needs_done:
             modes.append(self._done_mode(is_root))
+        if not is_root:
+            inputs.append(ENTRY_ORDER_PORT)
         ported = tuple(self._exported.get(scope, {}))
         consumed = tuple(
             f"{sig}_consumed" for sig in self._consumed.get(scope, {})
@@ -710,7 +714,7 @@ class RosettaBuilder:
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
         reactions: list[Reaction] = list(
-            self._root_reactions(root, sent, self._scope_ports(""))
+            self._root_reactions(root, sent, self._scope_ports(""), regions)
         )
         flags: list[str] = []
         for region in regions:
@@ -836,6 +840,7 @@ class RosettaBuilder:
             DONE_MODE,
             OUTPUT_PORT,
             COMPLETED_PORT,
+            ENTRY_ORDER_PORT,
             "_sysmlc_types",
             *(f"{sig}_act" for sig in sent),
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
@@ -852,6 +857,7 @@ class RosettaBuilder:
             DONE_MODE,
             OUTPUT_PORT,
             COMPLETED_PORT,
+            ENTRY_ORDER_PORT,
             *inputs,
             *self._exported.get(scope, {}),
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
@@ -864,9 +870,9 @@ class RosettaBuilder:
             if _simple(fact.name) in reserved:
                 raise UnsupportedConstructError(
                     f"state name {_simple(fact.name)!r} collides with a name "
-                    "rosetta generates (done, current_state, completed, a "
-                    "signal port/action, or a <state>_fired single-fire flag); "
-                    "rename the state."
+                    "rosetta generates (done, current_state, completed, "
+                    "_entry_order, a signal port/action, or a <state>_fired "
+                    "single-fire flag); rename the state."
                 )
 
     # -- mode assembly --
@@ -1194,6 +1200,7 @@ class RosettaBuilder:
             child = self._composite_reactor(fact.name, fact, is_root=False)
             self._reactors.append(child)
             instantiations.append(Instantiation(inst, child.name))
+            entry_effects.append(f"{inst}.{ENTRY_ORDER_PORT}")
             connections += [
                 Connection(sig, f"{inst}.{sig}")
                 for sig in self._accepted.get(fact.name, {})
@@ -1238,6 +1245,7 @@ class RosettaBuilder:
                 )
                 self._reactors.append(child)
                 instantiations.append(Instantiation(inst, child.name))
+                entry_effects.append(f"{inst}.{ENTRY_ORDER_PORT}")
                 connections += [
                     Connection(sig, f"{inst}.{sig}")
                     for sig in self._accepted.get(region.name, {})
@@ -1309,6 +1317,7 @@ class RosettaBuilder:
             tuple(entry_body),
             sent,
             self._scope_ports(scope),
+            sources=() if scope == "" else (ENTRY_ORDER_PORT,),
         )
         return Mode(
             name=simple,
@@ -1418,6 +1427,8 @@ class RosettaBuilder:
         body: tuple[str, ...],
         sent: list[str],
         ports: tuple[str, ...] = (),
+        *,
+        sources: tuple[str, ...] = (),
     ) -> Reaction:
         """Build a reaction, declaring scheduled actions and set ports.
 
@@ -1439,7 +1450,7 @@ class RosettaBuilder:
             sig for sig in ports if any(f"{sig}.set(" in line for line in body)
         )
         all_effects = tuple(dict.fromkeys((*effects, *scheduled, *set_ports)))
-        return Reaction(triggers, all_effects, body)
+        return Reaction(triggers, all_effects, body, sources)
 
     def _dispatch(
         self,
@@ -1504,21 +1515,37 @@ class RosettaBuilder:
         else:
             body.append(f"{COMPLETED_PORT}.set(True)")
             effects.append(COMPLETED_PORT)
-        entry = Reaction(("reset", "startup"), tuple(effects), tuple(body))
+        entry = Reaction(
+            ("reset", "startup"),
+            tuple(effects),
+            tuple(body),
+            () if is_root else (ENTRY_ORDER_PORT,),
+        )
         return Mode(name=DONE_MODE, reactions=(entry,))
 
     def _root_reactions(
-        self, root: StateFact, sent: list[str], ports: tuple[str, ...] = ()
+        self,
+        root: StateFact,
+        sent: list[str],
+        ports: tuple[str, ...] = (),
+        regions: list[StateFact] | None = None,
     ) -> list[Reaction]:
+        """Render root/region startup actions and the root's shutdown exit."""
         gen = self._codegen
-        body = self._statements(root.entry_action, gen)
-        if root.do_action is not None:
-            actions.require_inline_one_shot(root.do_action)
-            body += self._statements(root.do_action, gen)
+        body: list[str] = []
+        for fact in (root, *(regions or ())):
+            body += self._statements(fact.entry_action, gen)
+            if fact.do_action is not None:
+                actions.require_inline_one_shot(fact.do_action)
+                body += self._statements(fact.do_action, gen)
         out: list[Reaction] = []
         if body:
+            order = tuple(
+                f"c_{_simple(region.name)}.{ENTRY_ORDER_PORT}"
+                for region in regions or ()
+            )
             out.append(
-                self._reaction(("startup",), (), tuple(body), sent, ports)
+                self._reaction(("startup",), order, tuple(body), sent, ports)
             )
         exit_body = self._statements(root.exit_action, gen)
         if exit_body:

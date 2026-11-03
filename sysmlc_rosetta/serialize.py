@@ -154,8 +154,11 @@ def _mode_lines(mode: Mode) -> list[str]:
 
 def _reaction_lines(reaction: Reaction, depth: int) -> list[str]:
     pad = _INDENT * depth
+    sources = f" {', '.join(reaction.sources)}" if reaction.sources else ""
     effects = f" -> {', '.join(reaction.effects)}" if reaction.effects else ""
-    lines = [f"{pad}reaction({', '.join(reaction.triggers)}){effects} {{="]
+    lines = [
+        f"{pad}reaction({', '.join(reaction.triggers)}){sources}{effects} {{="
+    ]
     lines.extend(f"{pad}{_INDENT}{line}" for line in reaction.body)
     lines.append(f"{pad}=}}")
     return lines

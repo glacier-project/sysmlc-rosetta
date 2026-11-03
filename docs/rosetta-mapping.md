@@ -81,7 +81,7 @@ instance plus the wiring:
 mode cooking {
   c_cooking = new Microwave_cooking()
   PauseCmd -> c_cooking.PauseCmd      // signal forwarding (§4)
-  reaction(reset, startup) -> current_state {= … =}
+  reaction(reset, startup) -> current_state, c_cooking._entry_order {= … =}
   reaction(c_cooking.current_state) -> current_state {=
     current_state.set("cooking." + c_cooking.current_state.value)
   =}
@@ -99,11 +99,34 @@ reactor (mode entry reaction and transition dispatches), so they may use
 the machine's attributes. Actions on substates run inside the child
 reactor, which deliberately sees **no** attributes (§5).
 
+A state's entry finishes before its substates' entries begin, as required
+by entry-before-middle. SysMLC also finishes supported finite inline `do`
+work before activating children, as its serialization policy. Every child
+reactor declares an `_entry_order` input. The parent's entry reaction lists
+it as an effect, and each of the child's mode entry reactions reads it as a
+non-trigger source:
+
+```lf
+reaction(reset, startup) _entry_order -> current_state {= … =}
+```
+
+LF's precedence graph then runs the parent entry reaction first at the same
+tag. The port is never set and never triggers a reaction, so the ordering
+adds no signal, token, reaction activation or microstep. It does add a
+static input and dependency per child reactor. The root's own `entry`/`do`
+is a `reaction(startup)` declared before the modes, so it runs before the
+initial mode's entry in the same reactor. A state named `_entry_order` is
+rejected.
+
 **Parallel states** become one reactor class per region, instantiated side
 by side in the parallel state's mode. A parallel **root** machine has no
 modes at all: region instances and their wiring sit at reactor scope.
 Region `entry`/`do`/`exit` actions run in the parent (regions enter and
-leave with the parallel state).
+leave with the parallel state). For a parallel root, the root's
+`entry`/`do` and then each region's, in declaration order, run in the
+root's `reaction(startup)`. Region `exit` actions of a parallel root are
+not rendered. Sibling regions' substates enter in no specified relative
+order.
 
 ## 3. Transitions
 

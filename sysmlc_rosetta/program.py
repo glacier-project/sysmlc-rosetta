@@ -58,16 +58,18 @@ class Connection:
 
 @dataclass(frozen=True)
 class Reaction:
-    """One LF reaction: trigger names, effect names, Python body lines.
+    """One LF reaction: triggers, effects, Python body lines and sources.
 
-    ``triggers`` and ``effects`` are rendered LF identifiers (``"startup"``,
-    ``"Tick"``, ``"reset(running)"``); ``body`` holds unindented Python
-    lines (nested Python indentation included in the line itself).
+    ``triggers``, ``effects`` and ``sources`` are rendered LF identifiers
+    (``"startup"``, ``"Tick"``, ``"reset(running)"``); ``body`` holds
+    unindented Python lines, including nested indentation. ``sources`` are
+    non-triggering port dependencies.
     """
 
     triggers: tuple[str, ...]
     effects: tuple[str, ...] = ()
     body: tuple[str, ...] = ()
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
