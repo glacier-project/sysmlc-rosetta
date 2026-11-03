@@ -68,6 +68,38 @@ package RootExit {
         }
     }
 
+    // A region exit falsifies the guard of the parent's completion.
+    state def NestedParallelGuard {
+        port selfPort;
+        attribute allow : Boolean := true;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            exit assign n := mark("working.exit");
+            state motor {
+                exit action {
+                    assign allow := false;
+                    assign n := mark("motor.exit");
+                    send new Bye() to selfPort;
+                }
+                entry; then on;
+                state on;
+                transition first on accept after 0.1 [s] then done;
+            }
+            state light {
+                exit assign n := mark("light.exit");
+                entry; then lit;
+                state lit;
+                transition first lit accept after 0.2 [s] then done;
+            }
+        }
+        state dest { entry assign n := mark("dest.entry"); }
+        transition first working
+            if allow
+            do assign n := mark("effect")
+            then dest;
+    }
+
     state def BadExitNoDone {
         attribute n : Integer := 0;
         exit assign n := unbacked(1);

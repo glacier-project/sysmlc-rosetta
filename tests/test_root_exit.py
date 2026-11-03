@@ -164,6 +164,24 @@ def test_ready_parallel_join_exits_root_once(
 
 
 @pytest.mark.lf
+def test_nested_region_exits_precede_parent_guard(tmp_path: Path) -> None:
+    marks = _run(tmp_path, "NestedParallelGuard", "300 msec", tagged=True)
+    labels = [m.split()[0] for m in marks]
+    exits = [m.split() for m in marks if ".exit " in m]
+    # Each region exits when ready, not at the later join.
+    assert [f"{label} {ms}" for label, ms, _ in exits] == [
+        "motor.exit 100",
+        "light.exit 200",
+    ]
+    # motor.exit set allow to false before the parent guard was evaluated.
+    assert "effect" not in labels
+    assert "dest.entry" not in labels
+    states = [m.split()[1] for m in marks if m.startswith("state ")]
+    assert states[-1].startswith("working.")
+    assert marks[-1].startswith("shutdown 300 ")
+
+
+@pytest.mark.lf
 def test_peer_completion_does_not_exit_unfinished_peer(
     tmp_path: Path,
 ) -> None:
