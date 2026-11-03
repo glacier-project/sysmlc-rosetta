@@ -706,7 +706,8 @@ class RosettaBuilder:
         """Assemble a parallel ROOT machine: regions wired at reactor scope.
 
         The machine has no modes; completion is a join over all regions'
-        ``completed`` ports that runs the root's exit and requests stop.
+        ``completed`` ports that runs each completing region's exit, then,
+        once all regions are finalized, the root's exit and requests stop.
         """
         regions = self._regions(root)
         sent = list(self._sent_by_scope.get("", {}))
@@ -749,13 +750,16 @@ class RosettaBuilder:
         completing_regions = [
             region for region in regions if region.name in self._needs_done
         ]
+        # Validate exits even when their regions have no completion path.
         for region, flag in zip(regions, flags, strict=True):
+            region_exit = self._statements(region.exit_action, self._codegen)
             if region.name not in self._needs_done:
                 continue
             inst = f"c_{_simple(region.name)}"
+            join_body.append(f"if {inst}.{COMPLETED_PORT}.is_present:")
             join_body += [
-                f"if {inst}.{COMPLETED_PORT}.is_present:",
-                f"{_PY_INDENT}self.{flag} = True",
+                f"{_PY_INDENT}{line}"
+                for line in (*region_exit, f"self.{flag} = True")
             ]
         condition = " and ".join(f"self.{flag}" for flag in flags)
         join_body.append(f"if {condition}:")
