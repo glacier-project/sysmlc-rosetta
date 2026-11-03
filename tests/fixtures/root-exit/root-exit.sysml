@@ -37,29 +37,34 @@ package RootExit {
         attribute n : Integer := 0;
         exit assign n := mark("root.exit");
         state r1 {
+            exit assign n := mark("r1.exit");
             entry; then a;
             state a;
-            transition first a accept after 0.1 [s] then done;
+            transition first a accept after 0.2 [s] then done;
         }
         state r2 {
-            entry; then b;
-            state b;
-            transition first b accept after 0.2 [s] then done;
-        }
-    }
-
-    state def ParallelSimultaneous parallel {
-        attribute n : Integer := 0;
-        exit assign n := mark("root.exit");
-        state r1 {
-            entry; then a;
-            state a;
-            transition first a accept after 0.1 [s] then done;
-        }
-        state r2 {
+            exit assign n := mark("r2.exit");
             entry; then b;
             state b;
             transition first b accept after 0.1 [s] then done;
+        }
+    }
+
+    // Declared out of name order: same-tag region exits follow declaration.
+    state def ParallelSimultaneous parallel {
+        attribute n : Integer := 0;
+        exit assign n := mark("root.exit");
+        state r2 {
+            exit assign n := mark("r2.exit");
+            entry; then b;
+            state b;
+            transition first b accept after 0.1 [s] then done;
+        }
+        state r1 {
+            exit assign n := mark("r1.exit");
+            entry; then a;
+            state a;
+            transition first a accept after 0.1 [s] then done;
         }
     }
 
@@ -79,16 +84,28 @@ package RootExit {
         }
     }
 
-    state def FinisherBehavior {
+    state def BadRegionExitNoDone parallel {
+        attribute n : Integer := 0;
+        state r1 {
+            exit assign n := unbacked(1);
+            entry; then a;
+            state a;
+        }
+    }
+
+    state def FinisherBehavior parallel {
         port tx;
         attribute n : Integer := 0;
-        exit action {
-            assign n := mark("finisher.exit");
-            send new Bye() via tx;
+        exit assign n := mark("finisher.exit");
+        state work {
+            exit action {
+                assign n := mark("finisher.work.exit");
+                send new Bye() via tx;
+            }
+            entry; then idle;
+            state idle;
+            transition first idle accept after 0.1 [s] then done;
         }
-        entry; then idle;
-        state idle;
-        transition first idle accept after 0.1 [s] then done;
     }
 
     state def WaiterBehavior {

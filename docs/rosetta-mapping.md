@@ -121,12 +121,15 @@ rejected.
 **Parallel states** become one reactor class per region, instantiated side
 by side in the parallel state's mode. A parallel **root** machine has no
 modes at all: region instances and their wiring sit at reactor scope.
-Region `entry`/`do`/`exit` actions run in the parent (regions enter and
-leave with the parallel state). For a parallel root, the root's
-`entry`/`do` and then each region's, in declaration order, run in the
-root's `reaction(startup)`. Region `exit` actions of a parallel root are
-not rendered. Sibling regions' substates enter in no specified relative
-order.
+Region `entry`/`do`/`exit` actions run in the parent. In a nested parallel
+state, region entry/do actions run on parallel-state entry. Its completion
+join runs region exits in declaration order before the parallel state's
+exit; triggered departures and deep escapes do not include those regional
+exits. For a parallel root,
+the root's `entry`/`do` and then each region's, in declaration order, run
+in the root's `reaction(startup)`; each region's `exit` runs when that
+region reports local readiness (§7). Sibling regions' substates enter in no specified
+relative order.
 
 ## 3. Transitions
 
@@ -317,15 +320,19 @@ Context-sensitive:
   §3. Multiple `then done` transitions share one mode. Child reactors
   always declare `completed` (a machine that never completes simply never
   sets it).
-- A parallel root joins all regions' `completed` ports; once every region
-  has reported local `done`, the join runs the root's `exit` action and
-  calls `request_stop()`. A partial join runs neither. This does not
-  implement parallel-root region exits, which remain omitted (§2).
+- A parallel root joins all regions' `completed` ports. A region's
+  `completed` only reports that its middle has finished; the join then
+  runs that region's own `exit` and marks the region finalized, at the
+  same tag and without waiting for unfinished siblings. Regions completing
+  at the same tag exit in declaration order, a SysMLC deterministic
+  refinement. A tag includes the logical time and microstep. Once every region is
+  finalized, the join runs the root's `exit` action and calls
+  `request_stop()`. A partial join runs no root exit.
 - Host shutdown (a run timeout, an empty event queue or a peer machine's
-  `request_stop()`) only ends observation: it never runs a root exit, so a
-  machine still waiting for input is not exited. A root exit on a machine
-  without a completion path is still checked against the supported subset
-  at compile time, but never executes.
+  `request_stop()`) only ends observation: it never runs a root or region
+  exit, so a machine still waiting for input is not exited. A root or
+  parallel-root region exit without a completion path is still checked against the
+  supported subset at compile time, but never executes.
 
 ## 8. Observability
 
