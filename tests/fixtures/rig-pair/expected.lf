@@ -7,12 +7,13 @@ preamble {=
 =}
 
 reactor Plant_working {
+  input _entry_order
   output completed
   output current_state
   output Done
   initial mode grind {
     timer t_grind(200 msec)
-    reaction(reset, startup) -> current_state {=
+    reaction(reset, startup) _entry_order -> current_state {=
       current_state.set("grind")
     =}
     reaction(t_grind) -> reset(done), Done {=
@@ -21,7 +22,7 @@ reactor Plant_working {
     =}
   }
   mode done {
-    reaction(reset, startup) -> current_state, completed {=
+    reaction(reset, startup) _entry_order -> current_state, completed {=
       current_state.set("done")
       completed.set(True)
     =}
@@ -42,7 +43,7 @@ reactor Plant {
   }
   mode working {
     c_working = new Plant_working()
-    reaction(reset, startup) -> current_state {=
+    reaction(reset, startup) -> current_state, c_working._entry_order {=
       current_state.set("working")
     =}
     reaction(c_working.current_state) -> current_state {=
