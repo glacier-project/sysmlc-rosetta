@@ -122,10 +122,12 @@ rejected.
 by side in the parallel state's mode. A parallel **root** machine has no
 modes at all: region instances and their wiring sit at reactor scope.
 Region `entry`/`do`/`exit` actions run in the parent. In a nested parallel
-state, region entry/do actions run on parallel-state entry. Its completion
-join runs each region's exit when that region reports readiness, before
-the parallel state's outgoing guards are evaluated (§3); triggered
-departures and deep escapes do not include those regional exits. For a
+state, region entry/do actions run on parallel-state entry. A completion
+handler runs each region's exit when it reports readiness, even without an
+eventless parent transition. Eventless parent guards wait for all required
+regions to finalize; later signal guards observe the finalized region data.
+Triggered departures before readiness and deep escapes do not finalize
+unfinished regions. For a
 parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that

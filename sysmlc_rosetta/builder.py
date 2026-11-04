@@ -1292,14 +1292,13 @@ class RosettaBuilder:
             completing_regions = [
                 region for region in regions if region.name in self._needs_done
             ]
-            if eventless and completing_regions:
+            if completing_regions:
                 flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
                 extra_state += [
                     StateVar(flag, "False", reset=True) for flag in flags
                 ]
                 entry_body += [f"self.{flag} = False" for flag in flags]
-                # Each ready region exits before the parent's guards are
-                # evaluated; same-tag regions exit in declaration order.
+                # Finalize ready regions in declaration order.
                 join_body: list[str] = []
                 for region, flag, region_exit in zip(
                     regions, flags, region_exits, strict=True
@@ -1312,12 +1311,14 @@ class RosettaBuilder:
                         f"{_PY_INDENT}{line}"
                         for line in (*region_exit, f"self.{flag} = True")
                     ]
-                body, targets = self._dispatch(
-                    eventless, exit_stmts, scope, gen
-                )
-                condition = " and ".join(f"self.{flag}" for flag in flags)
-                join_body.append(f"if {condition}:")
-                join_body += [f"{_PY_INDENT}{line}" for line in body]
+                targets: tuple[str, ...] = ()
+                if eventless:
+                    body, targets = self._dispatch(
+                        eventless, exit_stmts, scope, gen
+                    )
+                    condition = " and ".join(f"self.{flag}" for flag in flags)
+                    join_body.append(f"if {condition}:")
+                    join_body += [f"{_PY_INDENT}{line}" for line in body]
                 reactions.append(
                     self._reaction(
                         tuple(
