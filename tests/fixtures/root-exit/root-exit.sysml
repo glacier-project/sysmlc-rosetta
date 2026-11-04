@@ -9,6 +9,7 @@ package RootExit {
 
     item def Go;
     item def Bye;
+    item def Stop;
 
     state def Waiting {
         attribute n : Integer := 0;
@@ -95,6 +96,36 @@ package RootExit {
         }
         state dest { entry assign n := mark("dest.entry"); }
         transition first working
+            if allow
+            do assign n := mark("effect")
+            then dest;
+    }
+
+    // Regions finalize when ready even though the parent only accepts Stop.
+    state def ParallelReadyStop {
+        attribute allow : Boolean := true;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state motor {
+                exit action {
+                    assign allow := false;
+                    assign n := mark("motor.exit");
+                }
+                entry; then on;
+                state on;
+                transition first on accept after 0.1 [s] then done;
+            }
+            state light {
+                exit assign n := mark("light.exit");
+                entry; then lit;
+                state lit;
+                transition first lit accept after 0.2 [s] then done;
+            }
+        }
+        state dest { entry assign n := mark("dest.entry"); }
+        transition first working
+            accept Stop
             if allow
             do assign n := mark("effect")
             then dest;

@@ -54,14 +54,19 @@ def _marks(stderr: str) -> list[str]:
 
 
 def _run(
-    tmp_path: Path, name: str, timeout: str, *, tagged: bool = False
+    tmp_path: Path,
+    name: str,
+    timeout: str,
+    *,
+    tagged: bool = False,
+    drivers: str = "",
 ) -> list[str]:
     binary = compile_harness(
         tmp_path,
         FIXTURES,
         f"RootExit::{name}",
         timeout=timeout,
-        drivers=OBSERVE,
+        drivers=drivers + OBSERVE,
         python_file=MARKS,
     )
     result = subprocess.run(
@@ -179,6 +184,36 @@ def test_nested_region_exits_precede_parent_guard(tmp_path: Path) -> None:
     states = [m.split()[1] for m in marks if m.startswith("state ")]
     assert states[-1].startswith("working.")
     assert marks[-1].startswith("shutdown 300 ")
+
+
+@pytest.mark.lf
+def test_ready_regions_exit_before_triggered_parent_guard(
+    tmp_path: Path,
+) -> None:
+    stop = (
+        "  timer stop_at(300 msec)\n"
+        "  reaction(stop_at) -> m.Stop {=\n"
+        "    m.Stop.set(True)\n"
+        "    import root_marks\n"
+        '    root_marks.mark("driver.Stop")\n'
+        "  =}\n"
+    )
+    marks = _run(
+        tmp_path, "ParallelReadyStop", "500 msec", tagged=True, drivers=stop
+    )
+    labels = [m.split()[0] for m in marks]
+    exits = [m.split() for m in marks if ".exit " in m]
+    assert [f"{label} {ms}" for label, ms, _ in exits] == [
+        "motor.exit 100",
+        "light.exit 200",
+    ]
+    assert labels.count("driver.Stop") == 1
+    assert "driver.Stop 300 0" in marks
+    assert "effect" not in labels
+    assert "dest.entry" not in labels
+    states = [m.split()[1] for m in marks if m.startswith("state ")]
+    assert states[-1].startswith("working.")
+    assert marks[-1].startswith("shutdown 500 ")
 
 
 @pytest.mark.lf
