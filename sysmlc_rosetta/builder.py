@@ -61,12 +61,25 @@ COMPLETED_PORT = "completed"
 DONE_MODE = "done"
 CHANGE_ACT = "_change_act"
 ENTRY_ORDER_PORT = "_entry_order"
+BUSY_PORT = "_busy"
+SETTLED_PORT = "_settled"
+# Eventless continuations sort before arrival tags.
+_ARRIVAL = "(lf.time.logical_elapsed(), lf.tag().microstep)"
+_CONTINUATION = "()"
 _PY_INDENT = "    "
 
 
 def _scope_of(path: str) -> str:
     """The enclosing scope of a state path (``""`` for top-level states)."""
     return path.rpartition("::")[0]
+
+
+def _report_busy(occurrence: str) -> str:
+    """Report busy, keeping the latest arrival tag reported at this tag."""
+    return (
+        f"{BUSY_PORT}.set(max({BUSY_PORT}.value, {occurrence}) "
+        f"if {BUSY_PORT}.is_present else {occurrence})"
+    )
 
 
 def _simple(path: str) -> str:
@@ -105,7 +118,15 @@ class RosettaBuilder:
     fires on that port (completion semantics). Transitions escaping a scope
     raise dedicated ``exit_<k>`` outputs that enclosing scopes resolve or
     re-raise. Non-trigger ``_entry_order`` dependencies order parent
-    entry/do before child entry at the same tag. Capability rejections (deep
+    entry/do before child entry at the same tag. Below a composite/parallel
+    state with a triggered transition, child reactors report ``_busy`` when
+    they select a transition and ``_settled`` once target entry, nested
+    entry, eventless closure and natural region finalization are done; a
+    trigger of that state arriving while its subtree is busy is retained
+    with its payload and dispatched on settlement. At most one occurrence
+    is retained per state: a second arrival, or a later event accepted
+    below the state while one is retained, stops execution with a runtime
+    error instead of reordering or dropping events. Capability rejections (deep
     entry, cross-scope sends, ``at``/``when``, non-inline ``do`` bodies,
     unstable self-loops, name collisions) also live here.
 
@@ -174,6 +195,7 @@ class RosettaBuilder:
         # group-interrupt composite/parallel state -> signal -> boundary child
         #   scope names whose {sig}_consumed flag the group interrupt reads.
         self._guarded_interrupts: dict[str, dict[str, list[str]]] = {}
+        self._tracked: set[str] = set()
         # Peer-mode state (empty unless peer_accepts is non-empty):
         # scope -> signals that scope's reactor must output (its own
         # peer-accepted sends plus those of its descendants).
@@ -244,6 +266,13 @@ class RosettaBuilder:
         for fact in self._facts.values():
             self._children.setdefault(_scope_of(fact.name), []).append(fact)
         self._classify_transitions()
+        self._tracked = {
+            t.source
+            for t in self._transitions
+            if t.trigger is not None
+            and t.source in self._facts
+            and self._facts[t.source].kind is not StateKind.LEAF
+        }
         self._collect_signals()
         self._collect_consumed()
         self._collect_sends()
@@ -656,7 +685,7 @@ class RosettaBuilder:
             for kid in kids
         ]
         if scope in self._needs_done:
-            modes.append(self._done_mode(is_root, sent))
+            modes.append(self._done_mode(scope, sent))
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
         ported = tuple(self._exported.get(scope, {}))
@@ -677,12 +706,16 @@ class RosettaBuilder:
             parameters = []
             state_vars = []
             exit_ports = tuple(self._exit_ports.get(scope, {}).values())
+            lifecycle = (
+                (BUSY_PORT, SETTLED_PORT) if self._reports(scope) else ()
+            )
             outputs = (
                 COMPLETED_PORT,
                 OUTPUT_PORT,
                 *exit_ports,
                 *ported,
                 *consumed,
+                *lifecycle,
             )
             reactions = []
             name = self._reactor_name(scope)
@@ -799,6 +832,18 @@ class RosettaBuilder:
             reactions=tuple(reactions),
         )
 
+    def _reports(self, scope: str) -> bool:
+        """Whether a scope's reactor reports busy/settled to its parent.
+
+        Only subtrees below a tracked state report: their parent must know
+        whether a selected transaction is still settling before it
+        dispatches a trigger of that tracked state.
+        """
+        return scope != "" and any(
+            state == scope or _is_ancestor(state, scope)
+            for state in self._tracked
+        )
+
     def _regions(self, parallel: StateFact) -> list[StateFact]:
         """Validate and return a parallel state's regions."""
         key = "" if parallel.parent is None else parallel.name
@@ -851,7 +896,19 @@ class RosettaBuilder:
         sent: list[str],
     ) -> None:
         channels = set(inputs) | set(self._exported.get(scope, {})) | set(sent)
+        lifecycle = {
+            name
+            for kid in kids
+            if kid.kind is not StateKind.LEAF and self._reports(kid.name)
+            for name in (
+                f"_{_simple(kid.name)}_busy",
+                f"_{_simple(kid.name)}_pending",
+            )
+        }
+        if self._reports(scope):
+            lifecycle |= {BUSY_PORT, SETTLED_PORT}
         generated = {
+            *lifecycle,
             DONE_MODE,
             OUTPUT_PORT,
             COMPLETED_PORT,
@@ -869,6 +926,7 @@ class RosettaBuilder:
                 "Rosetta generated identifiers"
             )
         reserved = {
+            *lifecycle,
             DONE_MODE,
             OUTPUT_PORT,
             COMPLETED_PORT,
@@ -938,6 +996,21 @@ class RosettaBuilder:
                 whens.append(transition)
         if all(t.declaration_order is not None for t in eventless):
             eventless.sort(key=lambda t: t.declaration_order or 0)
+        lifecycle = fact.kind is not StateKind.LEAF and self._reports(fact.name)
+        pending = f"_{simple}_pending" if lifecycle else None
+        insts: tuple[str, ...] = ()
+        if lifecycle:
+            children = (
+                [fact]
+                if fact.kind is StateKind.COMPOSITE
+                else self._regions(fact)
+            )
+            insts = tuple(f"c_{_simple(child.name)}" for child in children)
+        busy_sources = tuple(f"{inst}.{BUSY_PORT}" for inst in insts)
+        occurrence = "_tag" if lifecycle else _ARRIVAL
+        overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
+        retained: list[tuple[int, list[str], tuple[str, ...]]] = []
+        consumed_sources: list[tuple[int, tuple[str, ...]]] = []
 
         # Observation exit log: prepended to BOTH exit-statement threads (the
         # default one below and the payload-aware ``group_exit`` for signal
@@ -976,8 +1049,20 @@ class RosettaBuilder:
             assert isinstance(transition.trigger, AfterTrigger)
             after = transition.trigger.duration
             body, targets = self._dispatch(
-                [transition], exit_stmts, scope, gen, fired=fired_flag
+                [transition],
+                exit_stmts,
+                scope,
+                gen,
+                fired=fired_flag,
+                departing=pending,
+                occurrence=occurrence,
             )
+            if pending is not None:
+                key = pos[id(transition)]
+                retained.append((key, body, targets))
+                body = self._retain(
+                    body, key, "None", fact, insts, "an after trigger"
+                )
             if isinstance(after, float):
                 trigger_name = (
                     f"t_{simple}" if len(afters) == 1 else f"t_{simple}_{index}"
@@ -1010,6 +1095,7 @@ class RosettaBuilder:
                         tuple(body),
                         sent,
                         self._scope_ports(scope),
+                        sources=busy_sources,
                     ),
                 )
             )
@@ -1034,8 +1120,20 @@ class RosettaBuilder:
             entry_body.append(f"{_PY_INDENT}{action_name}.schedule(_at_delta)")
             entry_effects.append(action_name)
             body, targets = self._dispatch(
-                [transition], exit_stmts, scope, gen, fired=fired_flag
+                [transition],
+                exit_stmts,
+                scope,
+                gen,
+                fired=fired_flag,
+                departing=pending,
+                occurrence=occurrence,
             )
+            if pending is not None:
+                key = pos[id(transition)]
+                retained.append((key, body, targets))
+                body = self._retain(
+                    body, key, "None", fact, insts, "an at trigger"
+                )
             if fired_flag is not None:
                 body = [
                     f"if not self.{fired_flag}:",
@@ -1050,6 +1148,7 @@ class RosettaBuilder:
                         tuple(body),
                         sent,
                         self._scope_ports(scope),
+                        sources=busy_sources,
                     ),
                 )
             )
@@ -1068,8 +1167,20 @@ class RosettaBuilder:
             entry_body.append(f"self.{armed} = False")
             cond = gen.render_expression(transition.trigger.condition)
             inner, targets = self._dispatch(
-                [transition], exit_stmts, scope, gen, fired=fired_flag
+                [transition],
+                exit_stmts,
+                scope,
+                gen,
+                fired=fired_flag,
+                departing=pending,
+                occurrence=occurrence,
             )
+            if pending is not None:
+                key = pos[id(transition)]
+                retained.append((key, inner, targets))
+                inner = self._retain(
+                    inner, key, "None", fact, insts, "a change trigger"
+                )
             body = [
                 f"if not self.{armed}:",
                 f"{_PY_INDENT}if ({cond}):",
@@ -1090,6 +1201,7 @@ class RosettaBuilder:
                         tuple(body),
                         sent,
                         self._scope_ports(scope),
+                        sources=busy_sources,
                     ),
                 )
             )
@@ -1131,12 +1243,17 @@ class RosettaBuilder:
                 value = f"{signal}.value"
             else:
                 value = f"{signal}_act.value"
-            bindings = {
-                t.trigger.payload_feature: value
+            payload = "None"
+            features = [
+                t.trigger.payload_feature
                 for t in group
                 if isinstance(t.trigger, SignalTrigger)
                 and t.trigger.payload_feature is not None
-            }
+            ]
+            if pending is not None and features:
+                prelude.append(f"_value = {value}")
+                payload = value = "_value"
+            bindings = dict.fromkeys(features, value)
             if bindings:
                 group_gen = self._make_codegen(
                     self._scope_attribute_names(scope),
@@ -1158,8 +1275,22 @@ class RosettaBuilder:
                 group_gen,
                 consumed=consumed_flag,
                 fired=fired_flag,
+                departing=pending,
+                occurrence=occurrence,
             )
+            key = min(pos[id(t)] for t in group)
+            if pending is not None:
+                retained.append((key, body, targets))
+                body = [
+                    *prelude,
+                    *self._retain(
+                        body, key, payload, fact, insts, f"signal {signal}"
+                    ),
+                ]
+                prelude = []
             guard_srcs = self._interrupt_guard_sources(fact, signal)
+            if guard_srcs and pending is not None:
+                consumed_sources.append((key, guard_srcs))
             if guard_srcs:
                 cond = " or ".join(f"{src}.is_present" for src in guard_srcs)
                 body = [
@@ -1180,13 +1311,14 @@ class RosettaBuilder:
                 ]
             ordered.append(
                 (
-                    min(pos[id(t)] for t in group),
+                    key,
                     self._reaction(
                         triggers,
                         targets,
                         tuple(prelude + body),
                         sent,
                         self._scope_ports(scope),
+                        sources=busy_sources,
                     ),
                 )
             )
@@ -1198,6 +1330,8 @@ class RosettaBuilder:
 
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
+        if retained:
+            overtaking = (tuple(self._overtaking(fact, insts)), busy_sources)
 
         if fact.kind is StateKind.LEAF:
             if eventless:
@@ -1206,10 +1340,22 @@ class RosettaBuilder:
                 # reaction on every reset; it relies on the guard eventually
                 # going false.
                 body, targets = self._dispatch(
-                    eventless, exit_stmts, scope, gen
+                    eventless,
+                    exit_stmts,
+                    scope,
+                    gen,
+                    occurrence=_CONTINUATION,
                 )
                 entry_body += body
                 entry_effects += list(targets)
+            if self._reports(scope):
+                settle = f"{SETTLED_PORT}.set(True)"
+                if not eventless:
+                    entry_body.append(settle)
+                elif all(t.guard is not None for t in eventless):
+                    entry_body += ["else:", f"{_PY_INDENT}{settle}"]
+                # LF's Python target needs a possible writer even for absent ports.
+                entry_effects += [BUSY_PORT, SETTLED_PORT]
         elif fact.kind is StateKind.COMPOSITE:
             inst = f"c_{simple}"
             child = self._composite_reactor(fact.name, fact, is_root=False)
@@ -1232,13 +1378,18 @@ class RosettaBuilder:
                 if sig in self._consumed.get(scope, {})
             ]
             reactions += self._exit_resolutions(
-                inst, fact.name, exit_stmts, scope, sent
+                inst, fact.name, exit_stmts, scope, sent, pending, overtaking
             )
             if eventless:
                 # Completion semantics: an eventless transition out of a
                 # composite fires when the child completes, never on entry.
                 body, targets = self._dispatch(
-                    eventless, exit_stmts, scope, gen
+                    eventless,
+                    exit_stmts,
+                    scope,
+                    gen,
+                    departing=pending,
+                    occurrence=_CONTINUATION,
                 )
                 reactions.append(
                     self._reaction(
@@ -1279,7 +1430,13 @@ class RosettaBuilder:
                     if sig in self._consumed.get(scope, {})
                 ]
                 reactions += self._exit_resolutions(
-                    inst, region.name, exit_stmts, scope, sent
+                    inst,
+                    region.name,
+                    exit_stmts,
+                    scope,
+                    sent,
+                    pending,
+                    overtaking,
                 )
                 # The region's own entry/do run on parallel-state entry; its
                 # exit runs in the completion join when the region is ready.
@@ -1314,7 +1471,12 @@ class RosettaBuilder:
                 targets: tuple[str, ...] = ()
                 if eventless:
                     body, targets = self._dispatch(
-                        eventless, exit_stmts, scope, gen
+                        eventless,
+                        exit_stmts,
+                        scope,
+                        gen,
+                        departing=pending,
+                        occurrence=_CONTINUATION,
                     )
                     condition = " and ".join(f"self.{flag}" for flag in flags)
                     join_body.append(f"if {condition}:")
@@ -1331,6 +1493,24 @@ class RosettaBuilder:
                         self._scope_ports(scope),
                     )
                 )
+
+        if pending is not None:
+            busy = f"_{simple}_busy"
+            extra_state += [
+                StateVar(busy, "None", reset=scope != ""),
+                StateVar(pending, "None", reset=scope != ""),
+            ]
+            entering = ", ".join(json.dumps(inst) for inst in insts)
+            entry_body += [
+                f"self.{busy} = {{{entering}}}",
+                f"self.{pending} = ()",
+            ]
+            # Finalize regions and automatic departures before pending triggers.
+            reactions.append(
+                self._lifecycle(
+                    fact, scope, insts, retained, consumed_sources, sent
+                )
+            )
 
         entry = self._reaction(
             ("reset", "startup"),
@@ -1378,27 +1558,206 @@ class RosettaBuilder:
         exit_stmts: list[str],
         scope: str,
         sent: list[str],
+        departing: str | None = None,
+        overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ()),
     ) -> list[Reaction]:
         """React to a child's deep-exit ports: resolve or re-raise.
 
         The inner transition already ran the source state's exit and its
         effect inside the child; this scope adds the exited composite's own
         exit statements and either switches to the (now local) target mode
-        or raises its own exit port for the next scope up.
+        or raises its own exit port for the next scope up. ``departing``
+        names the exited state's pending-trigger variable, cleared because
+        its activation ends. ``overtaking`` holds the lines that reject a
+        later occurrence escaping while an earlier one is retained, and the
+        busy ports they read; they run before the pending trigger is
+        cleared.
         """
         out: list[Reaction] = []
+        closing = [f"self.{departing} = None"] if departing else []
         for target, port in self._exit_ports.get(exited_scope, {}).items():
             effect, set_line = self._resolve_target(scope, target)
             out.append(
                 self._reaction(
                     (f"{inst}.{port}",),
                     (effect,),
-                    (*exit_stmts, set_line),
+                    (*overtaking[0], *exit_stmts, set_line, *closing),
                     sent,
                     self._scope_ports(scope),
+                    sources=overtaking[1],
                 )
             )
         return out
+
+    def _retain(
+        self,
+        body: list[str],
+        key: int,
+        payload: str,
+        fact: StateFact,
+        insts: tuple[str, ...],
+        what: str,
+    ) -> list[str]:
+        """Retain a trigger while the source state's subtree is settling.
+
+        A child whose busy port is present at this tag selected its
+        transition in the same reaction cycle; ``_<state>_busy`` holds the
+        children announced busy earlier that have not settled yet. The
+        retained entry keeps the trigger key, captured payload and arrival
+        tag. At most one occurrence is retained: a second arrival while one
+        is held raises a runtime error rather than reorder or drop either.
+
+        Args:
+            body: The immediate dispatch lines.
+            key: The trigger's identity within its source state.
+            payload: Python expression for the payload to retain.
+            fact: The source state.
+            insts: The source state's child reactor instances.
+            what: Model-facing description of the trigger.
+        """
+        simple = _simple(fact.name)
+        busy = " or ".join(
+            (
+                f"self._{simple}_busy",
+                *(f"{inst}.{BUSY_PORT}.is_present" for inst in insts),
+            )
+        )
+        message = (
+            f"{self._source_qn}: {what} arrived at state "
+            f"{self._display(fact)} while an earlier event is retained "
+            "until its substates settle; overlapping retained events are "
+            "not supported"
+        )
+        pending = f"self._{simple}_pending"
+        return [
+            f"_tag = {_ARRIVAL}",
+            f"if {busy}:",
+            f"{_PY_INDENT}if {pending}:",
+            f"{_PY_INDENT * 2}raise RuntimeError({json.dumps(message)})",
+            f"{_PY_INDENT}{pending} = ({key}, {payload}, _tag)",
+            "else:",
+            *(f"{_PY_INDENT}{line}" for line in body),
+        ]
+
+    def _overtaking(self, fact: StateFact, insts: tuple[str, ...]) -> list[str]:
+        """Reject a later occurrence accepted below a retaining state.
+
+        The first line binds ``_newest``, the latest arrival tag the
+        children report busy with at this tag; the rest raise a runtime
+        error when it is later than the retained occurrence's arrival.
+
+        Args:
+            fact: The source state.
+            insts: The source state's child reactor instances.
+        """
+        pending = f"self._{_simple(fact.name)}_pending"
+        ports = "".join(f"{inst}.{BUSY_PORT}, " for inst in insts)
+        message = (
+            f"{self._source_qn}: a substate of {self._display(fact)} "
+            "accepted an event that arrived after an event retained for "
+            f"{self._display(fact)}; reordering overlapping events is not "
+            "supported"
+        )
+        return [
+            f"_newest = max((p.value for p in ({ports}) "
+            "if p.is_present), default=())",
+            f"if {pending} and _newest > {pending}[2]:",
+            f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
+        ]
+
+    def _display(self, fact: StateFact) -> str:
+        """A state's dotted path, as model-facing diagnostics name it."""
+        return fact.name.replace("::", ".")
+
+    def _lifecycle(
+        self,
+        fact: StateFact,
+        scope: str,
+        insts: tuple[str, ...],
+        retained: list[tuple[int, list[str], tuple[str, ...]]],
+        consumed: list[tuple[int, tuple[str, ...]]],
+        sent: list[str],
+    ) -> Reaction:
+        """Track a composite/parallel state's children until they settle.
+
+        A child reports busy when it selects a transition and settled once
+        its target entry, nested entries, eventless closure and natural
+        region finalization are complete. Busy carries the arrival tag of
+        the occurrence that selected the transition, or ``()`` for an
+        eventless continuation. When no child is busy, the retained trigger
+        dispatches with its captured payload and arrival tag; an all-false
+        trigger is retired, not retried. A retained signal that a
+        descendant consumed under the same arrival tag is dropped, because
+        that descendant accepted the same occurrence. A descendant
+        accepting a later occurrence while one is retained raises a runtime
+        error rather than reorder the two. A reporting scope forwards busy,
+        with the latest arrival tag, and settled upward.
+
+        Args:
+            fact: The source state.
+            scope: The assembling scope (resolves targets and exit ports).
+            insts: The source state's child reactor instances.
+            retained: Per trigger, its key, payload-aware dispatch lines and
+                their effects.
+            consumed: Per signal trigger, its key and the descendant
+                consumption ports it yields to.
+            sent: Signals sent in this scope.
+        """
+        simple = _simple(fact.name)
+        busy = f"self._{simple}_busy"
+        pending = f"self._{simple}_pending"
+        body: list[str] = []
+        for inst in insts:
+            body += [
+                f"if {inst}.{BUSY_PORT}.is_present:",
+                f'{_PY_INDENT}{busy}.add("{inst}")',
+                f"elif {inst}.{SETTLED_PORT}.is_present:",
+                f'{_PY_INDENT}{busy}.discard("{inst}")',
+            ]
+        overtaking = self._overtaking(fact, insts)
+        body += overtaking if retained else overtaking[:1]
+        for key, sources in consumed:
+            cond = " or ".join(
+                f"({src}.is_present and {src}.value == {pending}[2])"
+                for src in sources
+            )
+            body += [
+                f"if {pending} and {pending}[0] == {key} and ({cond}):",
+                f"{_PY_INDENT}{pending} = ()",
+            ]
+        effects: dict[str, None] = {}
+        if retained:
+            body += [
+                f"if not {busy} and {pending}:",
+                f"{_PY_INDENT}_key, _value, _tag = {pending}",
+                f"{_PY_INDENT}{pending} = ()",
+            ]
+            for index, (key, lines, targets) in enumerate(retained):
+                keyword = "if" if index == 0 else "elif"
+                body.append(f"{_PY_INDENT}{keyword} _key == {key}:")
+                body += [f"{_PY_INDENT * 2}{line}" for line in lines]
+                effects.update(dict.fromkeys(targets))
+        if self._reports(scope):
+            body += [
+                f"if {busy}:",
+                f"{_PY_INDENT}{_report_busy('_newest')}",
+                f"elif {pending} is not None:",
+                f"{_PY_INDENT}{SETTLED_PORT}.set(True)",
+            ]
+            effects.update(dict.fromkeys((BUSY_PORT, SETTLED_PORT)))
+        return self._reaction(
+            (
+                *(f"{inst}.{BUSY_PORT}" for inst in insts),
+                *(f"{inst}.{SETTLED_PORT}" for inst in insts),
+            ),
+            tuple(effects),
+            tuple(body),
+            sent,
+            self._scope_ports(scope),
+            sources=tuple(
+                dict.fromkeys(src for _, srcs in consumed for src in srcs)
+            ),
+        )
 
     def _resolve_target(
         self, scope: str, target: str | CompletionTarget
@@ -1481,6 +1840,8 @@ class RosettaBuilder:
         gen: LfPythonCodeGen,
         consumed: str | None = None,
         fired: str | None = None,
+        departing: str | None = None,
+        occurrence: str = _ARRIVAL,
     ) -> tuple[list[str], tuple[str, ...]]:
         """Render a same-trigger group as a first-match if/elif dispatch.
 
@@ -1488,7 +1849,11 @@ class RosettaBuilder:
         fires, so it closes the chain (as ``else`` when guards precede it).
         When ``consumed`` is set (a ``{sig}_consumed`` output), each firing
         branch raises it so an enclosing group interrupt on the same signal
-        can yield to this inner transition (UML/SCXML inner-first).
+        can yield to this inner transition (UML/SCXML inner-first). In a
+        reporting scope each firing branch also reports busy with
+        ``occurrence``, so the enclosing state waits until the transition
+        settles and can tell which occurrence selected it; consumption
+        carries the same value there.
 
         Args:
             group: The transitions sharing the same trigger.
@@ -1498,9 +1863,15 @@ class RosettaBuilder:
             consumed: The consumption-flag output name, or None.
             fired: A per-mode single-fire flag; each firing branch sets
                 `self.<fired> = True`, or None.
+            departing: The source state's pending-trigger variable; each
+                firing branch clears it to ``None`` because the source
+                activation ends, or None.
+            occurrence: Python expression for the selecting occurrence's
+                arrival tag, or ``()`` for an eventless continuation.
         """
         body: list[str] = []
         effects: dict[str, None] = {}
+        reports = self._reports(scope)
         for index, transition in enumerate(group):
             effect, set_line = self._resolve_target(scope, transition.target)
             effects.setdefault(effect, None)
@@ -1510,9 +1881,14 @@ class RosettaBuilder:
                 + [set_line]
             )
             if consumed is not None:
-                branch = [*branch, f"{consumed}.set(True)"]
+                flag = occurrence if reports else "True"
+                branch = [*branch, f"{consumed}.set({flag})"]
             if fired is not None:
                 branch = [*branch, f"self.{fired} = True"]
+            if departing is not None:
+                branch = [*branch, f"self.{departing} = None"]
+            if reports:
+                branch = [*branch, _report_busy(occurrence)]
             if transition.guard is None:
                 if index == 0:
                     body += branch
@@ -1526,10 +1902,13 @@ class RosettaBuilder:
             body += [f"{_PY_INDENT}{line}" for line in branch]
         if consumed is not None:
             effects[consumed] = None
+        if reports:
+            effects[BUSY_PORT] = None
         return body, tuple(effects)
 
-    def _done_mode(self, is_root: bool, sent: list[str]) -> Mode:
+    def _done_mode(self, scope: str, sent: list[str]) -> Mode:
         """The final mode: the root exits and stops; a child completes."""
+        is_root = scope == ""
         body = [f'{OUTPUT_PORT}.set("{DONE_MODE}")']
         effects = [OUTPUT_PORT]
         if is_root:
@@ -1537,6 +1916,9 @@ class RosettaBuilder:
         else:
             body.append(f"{COMPLETED_PORT}.set(True)")
             effects.append(COMPLETED_PORT)
+        if self._reports(scope):
+            body.append(f"{SETTLED_PORT}.set(True)")
+            effects += [BUSY_PORT, SETTLED_PORT]
         entry = self._reaction(
             ("reset", "startup"),
             tuple(effects),

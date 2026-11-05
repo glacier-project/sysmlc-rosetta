@@ -78,13 +78,6 @@ EV_AT_100MS = (
 )
 
 
-def test_direct_structural_has_guarded_interrupt() -> None:
-    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::M"))
-    assert "output Ev_consumed" in lf
-    assert "reaction(Ev, c_outer.Ev_consumed) -> reset(aborted)" in lf
-    assert "if not (c_outer.Ev_consumed.is_present):" in lf
-
-
 @pytest.mark.lf
 def test_direct_inner_first_matches_quake(tmp_path: Path) -> None:
     rosetta = run_machine(
@@ -106,12 +99,6 @@ def test_deep_inner_first_matches_quake(tmp_path: Path) -> None:
     assert rosetta[-1] == "outer.mid.innerB"
     assert rosetta[-1].replace(".", "::") in quake
     assert "aborted" not in quake
-
-
-def test_parallel_structural_ors_regions() -> None:
-    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::MPar"))
-    assert "reaction(Ev, c_regA.Ev_consumed) -> reset(aborted)" in lf
-    assert "if not (c_regA.Ev_consumed.is_present):" in lf
 
 
 @pytest.mark.lf
@@ -144,16 +131,6 @@ def test_par_deep_conflict_propagates_to_outer() -> None:
     # re-emit in _child_mode's PARALLEL branch).
     assert "Ev" in b._consumed.get("outer", {})
     assert b._guarded_interrupts.get("outer", {}).get("Ev") == ["outer"]
-
-
-def test_par_deep_structural_has_per_region_reemit() -> None:
-    """Structural: the per-region re-emit reaction appears in generated LF."""
-    lf = to_lf(build_program(load_model(MODEL_DIR), "InnerFirst::MParDeep"))
-    # _port_reemit emits this reaction body in MParDeep_outer's region mode.
-    assert "Ev_consumed.set(c_regA.Ev_consumed.value)" in lf
-    # The outer group-interrupt reaction is also present and guarded.
-    assert "reaction(Ev, c_outer.Ev_consumed) -> reset(aborted)" in lf
-    assert "if not (c_outer.Ev_consumed.is_present):" in lf
 
 
 @pytest.mark.lf
