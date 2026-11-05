@@ -339,7 +339,9 @@ unambiguous simple external names stay unchanged. A compile-scoped catalog
 includes loaded subtypes even when no action constructs them. Same-source
 matching accepts use declaration order: the first true guard (or guardless
 accept) wins, without specificity sorting. One send produces one concrete
-event, with no additional ancestor events. `LfProgram.signal_channels` records
+event, with no additional ancestor events. Retention while a composite settles
+preserves the concrete channel and payload: a base-only occurrence cannot
+fall through to a subtype-only accept. `LfProgram.signal_channels` records
 the qualified identity/channel mapping; `resolve_signal` accepts qualified or
 unambiguous simple external names and diagnoses ambiguity.
 Signals accepted inside a composite scope also become inputs of that

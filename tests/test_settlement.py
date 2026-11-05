@@ -355,3 +355,41 @@ def test_leaf_entry_closure_excludes_triggered_departure(
         for line in result.stdout.splitlines()
         if line.startswith("STATE: ")
     ] == states
+
+
+@pytest.mark.lf
+@pytest.mark.parametrize(
+    ("channel", "expected", "states"),
+    [
+        (
+            "Abort",
+            [
+                "warmup.exit",
+                "ready.entry",
+                "ready.exit",
+                "source.exit",
+                "caught.value 7",
+                "caught.entry",
+            ],
+            ["source.warmup", "source.ready", "caught"],
+        ),
+        (
+            "Command",
+            ["warmup.exit", "ready.entry"],
+            ["source.warmup", "source.ready"],
+        ),
+    ],
+)
+def test_retained_signal_keeps_its_concrete_type(
+    tmp_path: Path, channel: str, expected: list[str], states: list[str]
+) -> None:
+    drivers = (
+        "  timer deliver(100 msec)\n"
+        f"  reaction(deliver) -> m.{channel} {{=\n"
+        f"    from RetainedSignalType_types import {channel}\n"
+        f"    m.{channel}.set({channel}(value=7))\n"
+        "  =}\n"
+    )
+    marks = _run(tmp_path, "RetainedSignalType", drivers, "150 msec")
+    assert _labels(marks) == expected
+    assert _states(marks) == states
