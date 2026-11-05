@@ -108,6 +108,20 @@ class _Drain:
     keys: dict[int, int]
 
 
+def _when_due(due: str, body: list[str]) -> list[str]:
+    """Run a time trigger only for the callback its activation armed.
+
+    Reentering an active mode does not cancel LF events scheduled by the
+    previous activation, so the entry records the due time; the first
+    callback at it consumes the record before any guard or retention.
+    """
+    return [
+        f"if lf.time.logical_elapsed() == self.{due}:",
+        f"{_PY_INDENT}self.{due} = None",
+        *(f"{_PY_INDENT}{line}" for line in body),
+    ]
+
+
 def _report_busy(occurrence: str) -> str:
     """Report busy, keeping the latest arrival tag reported at this tag."""
     return (
@@ -231,6 +245,7 @@ class RosettaBuilder:
         self._guarded_interrupts: dict[str, dict[str, list[str]]] = {}
         self._shared: dict[str, dict[str, list[str]]] = {}
         self._origin: set[tuple[str, str]] = set()
+        self._reentered: set[str] = set()
         self._tracked: set[str] = set()
         # Peer-mode state (empty unless peer_accepts is non-empty):
         # scope -> signals that scope's reactor must output (its own
@@ -309,6 +324,12 @@ class RosettaBuilder:
             if t.trigger is not None
             and t.source in self._facts
             and self._facts[t.source].kind is not StateKind.LEAF
+        }
+        self._reentered = {
+            t.target
+            for t in self._transitions
+            if isinstance(t.target, str)
+            and (t.target == t.source or _is_ancestor(t.target, t.source))
         }
         for t in self._transitions:
             if t.source in self._tracked and isinstance(t.target, str):
@@ -917,6 +938,7 @@ class RosettaBuilder:
         handler: list[Reaction] = []
         if scope in self._needs_done:
             modes.append(self._done_mode(scope, sent))
+        self._check_state_names(scope, kids, sent, extra_state)
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
         if self._reports(scope):
@@ -1081,6 +1103,7 @@ class RosettaBuilder:
         parameters, state_vars = self._attribute_split()
         state_vars += [StateVar(flag, "False", reset=True) for flag in flags]
         state_vars += root_gate_state
+        self._check_state_names("", regions, sent, root_gate_state)
         ported = tuple(self._exported.get("", {}))
         sched = self._self_sched_by_scope.get("", set())
         sent_self = [sig for sig in sent if sig in sched]
@@ -1094,6 +1117,13 @@ class RosettaBuilder:
             instantiations=tuple(instantiations),
             connections=tuple(connections),
             reactions=tuple(reactions),
+        )
+
+    def _is_reentered(self, fact: StateFact) -> bool:
+        """Whether a transition can re-enter ``fact`` while it is active."""
+        return any(
+            state == fact.name or _is_ancestor(state, fact.name)
+            for state in self._reentered
         )
 
     def _reports(self, scope: str) -> bool:
@@ -1211,12 +1241,6 @@ class RosettaBuilder:
                 f"signal channels {sorted(conflicts)!r} collide with "
                 "Rosetta generated identifiers"
             )
-        clashes = self._attribute_names & lifecycle if scope == "" else set()
-        if clashes:
-            raise UnsupportedConstructError(
-                f"attribute names {sorted(clashes)!r} collide with Rosetta "
-                "generated state variables; rename them."
-            )
         reserved = {
             *lifecycle,
             DONE_MODE,
@@ -1239,6 +1263,37 @@ class RosettaBuilder:
                     "_entry_order, a signal port/action, or a <state>_fired "
                     "single-fire flag); rename the state."
                 )
+
+    def _check_state_names(
+        self,
+        scope: str,
+        kids: list[StateFact],
+        sent: list[str],
+        generated: list[StateVar],
+    ) -> None:
+        """Reject model names that reuse a generated state variable.
+
+        Checks the state variables this scope's reactor actually emits
+        against its states, its signals and, at the root, the attributes
+        sharing the reactor's state namespace.
+
+        Raises:
+            UnsupportedConstructError: A model name equals a generated
+                state variable.
+        """
+        model = {
+            *(_simple(kid.name) for kid in kids),
+            *self._accepted.get(scope, {}),
+            *self._exported.get(scope, {}),
+            *sent,
+            *(self._attribute_names if scope == "" else ()),
+        }
+        clashes = model & {var.name for var in generated}
+        if clashes:
+            raise UnsupportedConstructError(
+                f"names {sorted(clashes)!r} collide with Rosetta generated "
+                "state variables; rename them."
+            )
 
     # -- mode assembly --
 
@@ -1395,6 +1450,7 @@ class RosettaBuilder:
                     f"t_{simple}" if len(afters) == 1 else f"t_{simple}_{index}"
                 )
                 timers.append(Timer(trigger_name, render_duration(after)))
+                delay_ns = str(round(after * 1e9))
             else:
                 assert after is not None  # AFTER always carries a duration
                 trigger_name = (
@@ -1404,10 +1460,17 @@ class RosettaBuilder:
                 )
                 mode_actions.append(LogicalAction(trigger_name))
                 delay = gen.render_expression(after)
-                entry_body.append(
-                    f"{trigger_name}.schedule(int(({delay}) * 1e9))"
-                )
+                entry_body.append(f"_after_ns = int(({delay}) * 1e9)")
+                entry_body.append(f"{trigger_name}.schedule(_after_ns)")
+                delay_ns = "_after_ns"
                 entry_effects.append(trigger_name)
+            if self._is_reentered(fact):
+                due = f"_{trigger_name}_due"
+                extra_state.append(StateVar(due, "None", reset=scope != ""))
+                entry_body.append(
+                    f"self.{due} = lf.time.logical_elapsed() + {delay_ns}"
+                )
+                body = _when_due(due, body)
             if fired_flag is not None:
                 body = [
                     f"if not self.{fired_flag}:",
@@ -1446,6 +1509,13 @@ class RosettaBuilder:
             entry_body.append("if _at_delta >= 0:")
             entry_body.append(f"{_PY_INDENT}{action_name}.schedule(_at_delta)")
             entry_effects.append(action_name)
+            due = f"_{action_name}_due" if self._is_reentered(fact) else None
+            if due is not None:
+                extra_state.append(StateVar(due, "None", reset=scope != ""))
+                entry_body.append(
+                    f"self.{due} = lf.time.logical_elapsed() + _at_delta "
+                    "if _at_delta >= 0 else None"
+                )
             body, targets = self._dispatch(
                 [transition],
                 exit_stmts,
@@ -1462,6 +1532,8 @@ class RosettaBuilder:
                 body = self._retain(
                     body, key, "None", fact, insts, "an at trigger"
                 )
+            if due is not None:
+                body = _when_due(due, body)
             if fired_flag is not None:
                 body = [
                     f"if not self.{fired_flag}:",
@@ -1646,6 +1718,17 @@ class RosettaBuilder:
                 # {sig}_consumed ports are reaction TRIGGERS, not sources/uses,
                 # so LF schedules this reaction whenever the flag port fires.
                 triggers = (*triggers, *guard_srcs)
+            if (scope, signal) in self._origin:
+                since = f"_{simple}_since"
+                if not any(var.name == since for var in extra_state):
+                    extra_state.append(
+                        StateVar(since, "None", reset=scope != "")
+                    )
+                    entry_body.insert(1, f"self.{since} = {_ARRIVAL}")
+                body = [
+                    f"if {self._arrival(scope, signal)} >= self.{since}:",
+                    *(f"{_PY_INDENT}{line}" for line in body),
+                ]
             if fired_flag is not None:
                 body = [
                     f"if not self.{fired_flag}:",
@@ -1785,6 +1868,8 @@ class RosettaBuilder:
                 connections += feed
                 extra_state += gate_state
                 region_gates += gates
+                # LF does not reset root-scope gate state.
+                entry_body += [f"self.{var.name} = None" for var in gate_state]
                 reactions.append(
                     self._reemit(inst, r_simple, prefix=f"{simple}.{r_simple}.")
                 )
@@ -1877,6 +1962,7 @@ class RosettaBuilder:
             ]
             if sel is not None:
                 extra_state.append(StateVar(sel, "None", reset=scope != ""))
+                entry_body.append(f"self.{sel} = None")
             entering = ", ".join(json.dumps(inst) for inst in insts)
             entry_body += [
                 f"self.{busy} = {{{entering}}}",

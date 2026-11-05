@@ -241,9 +241,8 @@ def test_sm13_attribute_duration_schedules_on_entry() -> None:
     assert idle.timers == ()
     (action,) = idle.actions
     entry = idle.reactions[0]
-    assert (
-        f"{action.name}.schedule(int((self.pickDuration) * 1e9))" in entry.body
-    )
+    assert "_after_ns = int((self.pickDuration) * 1e9)" in entry.body
+    assert f"{action.name}.schedule(_after_ns)" in entry.body
     assert action.name in entry.effects
 
 

@@ -189,6 +189,7 @@ def test_released_inner_holder_keeps_enclosing_hold(tmp_path: Path) -> None:
     [
         ("OriginClash", "Stop_origin"),
         ("WaitClash", "_working_r2_Stop_wait"),
+        ("DueClash", "_t_idle_due"),
     ],
 )
 def test_shared_signal_name_clash_is_rejected(

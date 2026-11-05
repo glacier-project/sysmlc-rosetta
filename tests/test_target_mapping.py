@@ -48,8 +48,9 @@ def test_timer_and_signal_self_loops_reset_the_mode() -> None:
     tick = idle.reactions[1]
     assert tick.triggers == (timer.name,)
     assert tick.body[0] == "if not self.idle_fired:"
-    assert "    self.count = self.count + 1" in tick.body
-    assert "    idle.set()" in tick.body
+    assert "    if lf.time.logical_elapsed() == self._t_idle_due:" in tick.body
+    assert "        self.count = self.count + 1" in tick.body
+    assert "        idle.set()" in tick.body
     assert tick.effects == ("reset(idle)",)
     (reset,) = [
         reaction
@@ -66,18 +67,19 @@ def test_parameters_and_state_vars_use_their_defaults() -> None:
         parameter.name: parameter.default
         for parameter in program.reactor.parameters
     } == {"limit": "2.0", "step": "1.0"}
-    (value,) = program.reactor.state_vars
-    assert (value.name, value.init) == ("value", "0.0")
+    (value,) = [
+        var for var in program.reactor.state_vars if var.name == "value"
+    ]
+    assert value.init == "0.0"
 
 
 def test_periodic_assignment_and_entry_guard_share_context() -> None:
     run = _mode(_build("Counter"), "run")
     assert "if self.value >= self.limit:" in run.reactions[0].body
     assert "    complete.set()" in run.reactions[0].body
-    assert (
-        "self.value = min(self.value + self.step, self.limit)"
-        in run.reactions[1].body
-    )
+    assert "self.value = min(self.value + self.step, self.limit)" in [
+        line.strip() for line in run.reactions[1].body
+    ]
 
 
 def test_payload_branches_share_one_reaction_and_bind_the_occurrence() -> None:
@@ -102,9 +104,9 @@ def test_small_external_calc_imports_its_support_module() -> None:
         external=[ForeignArtifact(directory / "ramp.py", "python")],
     )
     assert "from ramp import step" in program.preamble
-    assert (
-        "self.x = step(self.x, 0.1)" in _mode(program, "run").reactions[1].body
-    )
+    assert "self.x = step(self.x, 0.1)" in [
+        line.strip() for line in _mode(program, "run").reactions[1].body
+    ]
 
 
 def test_nested_mode_forwards_only_child_inputs() -> None:
