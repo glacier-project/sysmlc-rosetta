@@ -158,21 +158,34 @@ def test_negated_constraint_renders_wrapped_assert() -> None:
 def test_deep_exit_propagates_through_region_and_composite() -> None:
     program = _build("DeepExit")
     monitor, work, _root = program.reactors
-    assert "exit_0" in monitor.outputs
-    assert "exit_0" in work.outputs
+    assert {"exit_0", "exit_0_done"} <= set(monitor.outputs)
+    assert {"exit_0", "exit_0_done"} <= set(work.outputs)
     (workers,) = [mode for mode in work.modes if mode.name == "workers"]
     (reraise,) = [
         reaction
         for reaction in workers.reactions
         if reaction.triggers == ("c_monitor.exit_0",)
     ]
-    assert reraise.effects == ("exit_0",)
+    assert reraise.effects == ("exit_0", "c_monitor._exit")
+    assert "exit_0.set(True)" in reraise.body
+    assert "c_monitor._exit.set(True)" in reraise.body
+    (cleanup,) = [
+        reaction
+        for reaction in work.trailing_reactions
+        if reaction.triggers == ("c_monitor._exited",)
+    ]
+    assert cleanup.effects == ("exit_0_done",)
+    assert "exit_0_done.set(True)" in [line.strip() for line in cleanup.body]
     (resolve,) = [
         reaction
         for reaction in _mode(program, "work").reactions
         if reaction.triggers == ("c_work.exit_0",)
     ]
     assert resolve.effects == ("reset(stopped)",)
+    assert any(
+        reaction.triggers == ("c_work.exit_0_done",)
+        for reaction in program.reactor.trailing_reactions
+    )
 
 
 def test_mixed_join_has_reset_flags_and_waits_for_both_regions() -> None:

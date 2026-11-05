@@ -10,6 +10,7 @@ SETTLED_PORT = "_settled"
 EXIT_REQUEST_PORT = "_exit"
 EXIT_ACK_PORT = "_exited"
 ACTIVE_VAR = "_active"
+EXIT_PENDING_VAR = "_exit_requested"
 # Eventless continuations sort before arrival tags.
 _ARRIVAL = "(lf.time.logical_elapsed(), lf.tag().microstep)"
 _CONTINUATION = "()"
@@ -155,25 +156,29 @@ def exit_handler(
     An active leaf runs its exit and acknowledges at once; an active
     composite/parallel state forwards the request to its first child
     and finishes in its drain chain. A scope that is already finalized
-    (or not yet active) acknowledges without running an exit.
+    (or not yet active) acknowledges without running an exit. The active
+    slot holds a mode name while active, an empty string during selected
+    cleanup, and None once exited. A request arriving during cleanup waits
+    for its continuation to acknowledge rather than restarting its exits.
 
     Args:
         exits: Per mode, its forced-exit lines and their effects.
         sent: Signals sent in this scope.
         ports: Peer-accepted signals sent in this scope.
     """
-    body: list[str] = []
+    body = [f"self.{EXIT_PENDING_VAR} = True"]
     effects: dict[str, None] = {}
     for index, (mode, lines, mode_effects) in enumerate(exits):
         keyword = "if" if index == 0 else "elif"
         body.append(f'{keyword} self.{ACTIVE_VAR} == "{mode}":')
         body += [f"{_PY_INDENT}{line}" for line in lines]
         effects.update(dict.fromkeys(mode_effects))
-    ack = [f"self.{ACTIVE_VAR} = None", f"{EXIT_ACK_PORT}.set(True)"]
-    if body:
-        body.append("else:")
-        ack = [f"{_PY_INDENT}{line}" for line in ack]
-    body += ack
+    keyword = "elif" if exits else "if"
+    body += [
+        f"{keyword} self.{ACTIVE_VAR} is None:",
+        f"{_PY_INDENT}{EXIT_ACK_PORT}.set(True)",
+        f"{_PY_INDENT}self.{EXIT_PENDING_VAR} = False",
+    ]
     effects[EXIT_ACK_PORT] = None
     return make_reaction(
         (EXIT_REQUEST_PORT,),

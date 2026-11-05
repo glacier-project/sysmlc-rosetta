@@ -130,9 +130,8 @@ eventless parent transition. Eventless parent guards wait for all required
 regions to finalize; later signal guards observe the finalized region data.
 A selected triggered departure of the parallel state, or of an enclosing
 state, drains unfinished regions and skips finalized ones (§3). A
-descendant-owned deep escape from one region leaves the other regions
-without cleanup. For a
-parallel root,
+descendant-owned escape crossing the parallel boundary uses the same
+cleanup protocol, including the origin region's exit. For a parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that
 region reports local readiness (§7). Sibling regions' substates enter in no specified
@@ -194,9 +193,11 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   exited composite's exit action. (Note: the effect therefore runs before
   the *outer* exits — a deliberate deviation from UML's
   exit-all-then-effect ordering.) A composite/parallel source still drains
-  its own active descendants before its exit and effect. Crossing enclosing
-  scopes preserves the order above and adds no sibling-region cleanup: an
-  escape from one parallel region does not exit the sibling regions.
+  its own active descendants before its exit and effect. At each crossed
+  parallel boundary, unfinished regions drain in declaration order and
+  finalized regions are skipped. The source path is marked as departing,
+  so its exits are not repeated. A transition staying within its region
+  leaves sibling regions active.
 - **Deep entry** (`idle` → `running.hot` from outside) — **rejected**:
   entering an LF mode always activates contained reactors' initial modes
   (see §11 for the planned mechanism).
@@ -257,6 +258,22 @@ cannot start ordinary work after selection. Exit bodies use the existing
 finite inline action subset. Exit sends to a peer machine are delivered.
 When the selected transition leaves the parent's scope, the enclosing exits
 follow the effect, as for deep exits.
+
+A descendant-owned escape also starts this cleanup at each parallel boundary
+it crosses, even when that parallel state has no triggered transition of its
+own. Its source exit and effect keep their existing order before enclosing
+exits; sibling cleanup may interleave with the already selected source's
+cleanup, while each region's exit follows its own active subtree and the
+parallel state's exit follows every region. The origin acknowledges only
+when requested and after its selected cleanup has finished. Early target
+selection and late cleanup completion remain separate to avoid LF causality
+cycles. These forced exits extend the adopted interruption policy; they do
+not establish full conformance to the published SysML/KerML execution rules.
+Two competing departures of the same parallel activation at one tag produce
+a runtime diagnostic, including competing descendant escapes or a descendant
+escape competing with a selected parent departure. Independent transitions
+inside regions remain supported; the existing single-consumer rule still
+resolves shared occurrences before parent fallback.
 
 **Shared signals across regions.** When several regions of one parallel
 state accept a signal, one occurrence is accepted at most once, by the
