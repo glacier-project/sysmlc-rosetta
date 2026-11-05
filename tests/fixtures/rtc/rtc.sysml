@@ -4,6 +4,11 @@ package Rtc {
 
     item def A;
     item def B;
+    item def Z { attribute value : Integer; }
+    item def ASub :> Z;
+    item def Marked { attribute n : Integer; }
+    calc def mark { in label : String; return : Integer; }
+    calc def note { in label : String; in value : Integer; return : Integer; }
 
     // Both transitions route to `chooseResult` and write `chosen`; the chooseResult
     // branch makes WHICH effect ran observable in current_state.  So the
@@ -190,5 +195,68 @@ package Rtc {
         state timedOut;
         transition first outer accept Ev then aborted;
         transition first outer accept after 5 [s] then timedOut;
+    }
+
+    state def SignalInterleaving {
+        entry; then source;
+        state source;
+        state firstA;
+        state selectedB;
+        state lastA;
+        transition first source accept A if false then firstA;
+        transition first source accept B if true then selectedB;
+        transition first source accept A if true then lastA;
+    }
+
+    state def TimerInterleaving {
+        entry; then source;
+        state source;
+        state firstA;
+        state selectedTimer;
+        state lastA;
+        transition first source accept A if false then firstA;
+        transition first source accept after 0.1 [s] if true then selectedTimer;
+        transition first source accept A if true then lastA;
+    }
+
+    state def LexicalInterleaving {
+        entry; then outer;
+        state outer {
+            entry; then source;
+            state source;
+            state firstA;
+            state selectedB;
+            state lastA;
+            transition first source accept A if false then firstA;
+            transition first source accept B if true then selectedB;
+        }
+        transition first outer.source accept A if true then outer.lastA;
+    }
+
+    state def BusyInterleaving {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then source;
+        state source {
+            exit assign n := mark("source.exit");
+            entry; then warmup;
+            state warmup {
+                exit send new Marked(n = mark("warmup.exit")) to selfPort;
+            }
+            state ready {
+                entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
+            }
+            state wrong;
+            transition first warmup accept after 0.1 [s] then ready;
+            transition first warmup accept ASub if false then wrong;
+        }
+        state firstA;
+        state selectedB;
+        state lastA { entry assign n := mark("lastA.entry"); }
+        transition first source accept z : Z if false then firstA;
+        transition first source accept B if true then selectedB;
+        transition first source accept a : ASub if true
+            do assign n := note("selected.value", a.value) then lastA;
     }
 }

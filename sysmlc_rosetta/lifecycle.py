@@ -73,6 +73,16 @@ def declining(
     return lines, tuple(flag for _, flag in held)
 
 
+def busy_condition(state: str, insts: tuple[str, ...]) -> str:
+    """The Python condition that a source state's subtree is settling."""
+    return " or ".join(
+        (
+            f"self._{state}_busy",
+            *(f"{inst}.{BUSY_PORT}.is_present" for inst in insts),
+        )
+    )
+
+
 def retain(
     body: list[str],
     key: int,
@@ -105,12 +115,7 @@ def retain(
         consumed: The signal's consumption-flag output, or None.
         arrival: Python expression for the occurrence's arrival tag.
     """
-    busy = " or ".join(
-        (
-            f"self._{state}_busy",
-            *(f"{inst}.{BUSY_PORT}.is_present" for inst in insts),
-        )
-    )
+    busy = busy_condition(state, insts)
     pending = f"self._{state}_pending"
     return [
         f"_tag = {arrival}",

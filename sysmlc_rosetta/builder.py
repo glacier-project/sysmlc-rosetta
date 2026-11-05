@@ -47,6 +47,7 @@ from sysmlc_rosetta.lifecycle import (
     EXIT_PENDING_VAR,
     EXIT_REQUEST_PORT,
     SETTLED_PORT,
+    busy_condition,
     declining,
     exit_handler,
     lifecycle_reaction,
@@ -1331,6 +1332,9 @@ class RosettaBuilder:
             for t in self._scope_transitions.get(scope, [])
             if t.source == fact.name
         ]
+        has_order = all(t.declaration_order is not None for t in outgoing)
+        if has_order:
+            outgoing.sort(key=lambda t: t.declaration_order or 0)
         for transition in outgoing:
             if transitions.self_loop_is_unstable(transition):
                 raise UnsupportedConstructError(
@@ -1339,22 +1343,34 @@ class RosettaBuilder:
                 )
         eventless: list[TransitionFact] = []
         signal_groups: dict[str, list[TransitionFact]] = {}
+        signal_runs: list[tuple[str, list[TransitionFact]]] = []
+        previous: str | None = None
         afters: list[TransitionFact] = []
         ats: list[TransitionFact] = []
         whens: list[TransitionFact] = []
         for transition in outgoing:
             trigger = transition.trigger
+            if not isinstance(trigger, SignalTrigger):
+                previous = None
             if trigger is None:
                 eventless.append(transition)
             elif isinstance(trigger, SignalTrigger):
                 for channel in self._channels(trigger):
                     signal_groups.setdefault(channel, []).append(transition)
+                    if channel == previous:
+                        signal_runs[-1][1].append(transition)
+                    else:
+                        signal_runs.append((channel, [transition]))
+                    previous = channel
             elif isinstance(trigger, AfterTrigger):
                 afters.append(transition)
             elif isinstance(trigger, AtTrigger):
                 ats.append(transition)
             else:
                 whens.append(transition)
+        if not has_order:
+            # Preserve legacy grouping without complete declaration ordinals.
+            signal_runs = list(signal_groups.items())
         if all(t.declaration_order is not None for t in eventless):
             eventless.sort(key=lambda t: t.declaration_order or 0)
         lifecycle = fact.kind is not StateKind.LEAF and self._reports(fact.name)
@@ -1428,7 +1444,7 @@ class RosettaBuilder:
             entry_body += self._statements(fact.do_action, gen)
 
         multi = (
-            len(signal_groups)
+            len(signal_runs)
             + len(afters)
             + len(ats)
             + len(whens)
@@ -1628,9 +1644,13 @@ class RosettaBuilder:
                 )
             )
 
-        for signal, group in signal_groups.items():
+        emitted_channels: set[str] = set()
+        for signal, run in signal_runs:
+            group = signal_groups[signal]
             if all(t.declaration_order is not None for t in group):
                 group.sort(key=lambda t: t.declaration_order or 0)
+            first_run = signal not in emitted_channels
+            emitted_channels.add(signal)
             triggers: tuple[str, ...]
             is_input = signal not in self._omitted_inputs
             is_self_sched = signal in self._self_sched_by_scope.get(
@@ -1691,27 +1711,36 @@ class RosettaBuilder:
                 else None
             )
             body, targets = self._dispatch(
-                group,
+                run,
                 group_exit,
                 scope,
                 group_gen,
                 consumed=consumed_flag,
                 fired=fired_flag,
                 departing=pending,
-                occurrence=(
-                    "_tag" if lifecycle else self._arrival(scope, signal)
-                ),
+                occurrence=self._arrival(scope, signal),
                 drain=drain,
                 payload=payload,
             )
             key = min(pos[id(t)] for t in group)
             if pending is not None:
-                retained.append((key, body, targets))
-                if consumed_flag is not None:
-                    held.append((key, consumed_flag))
-                body = [
-                    *prelude,
-                    *self._retain(
+                if first_run:
+                    retained_body, retained_targets = self._dispatch(
+                        group,
+                        group_exit,
+                        scope,
+                        group_gen,
+                        consumed=consumed_flag,
+                        fired=fired_flag,
+                        departing=pending,
+                        occurrence="_tag",
+                        drain=drain,
+                        payload=payload,
+                    )
+                    retained.append((key, retained_body, retained_targets))
+                    if consumed_flag is not None:
+                        held.append((key, consumed_flag))
+                    body = self._retain(
                         body,
                         key,
                         payload,
@@ -1720,11 +1749,16 @@ class RosettaBuilder:
                         f"signal {signal}",
                         consumed_flag,
                         self._arrival(scope, signal),
-                    ),
-                ]
+                    )
+                else:
+                    body = [
+                        f"if not ({busy_condition(simple, insts)}):",
+                        *(f"{_PY_INDENT}{line}" for line in body),
+                    ]
+                body = [*prelude, *body]
                 prelude = []
             guard_srcs = self._interrupt_guard_sources(fact, signal)
-            if guard_srcs and pending is not None:
+            if guard_srcs and pending is not None and first_run:
                 consumed_sources.append((key, guard_srcs))
             if guard_srcs:
                 cond = " or ".join(
@@ -1757,7 +1791,7 @@ class RosettaBuilder:
                 ]
             ordered.append(
                 (
-                    key,
+                    pos[id(run[0])] if has_order else key,
                     make_reaction(
                         triggers,
                         targets,
