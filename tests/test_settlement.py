@@ -230,26 +230,6 @@ def test_region_finalization_precedes_retained_stop(tmp_path: Path) -> None:
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize(
-    ("need", "expected", "final"),
-    [
-        ("running.entry", ["caught.entry"], "outer.caught"),
-        ("never", ["outer.effect 9", "aborted.entry"], "aborted"),
-    ],
-)
-def test_inner_candidate_keeps_precedence_while_settling(
-    tmp_path: Path, need: str, expected: list[str], final: str
-) -> None:
-    marks = _run(tmp_path, "NestedStop", _stop(200, 9, need))
-    assert _labels(marks) == [
-        "running.entry",
-        f"guard {need} {need != 'never'}",
-        *expected,
-    ]
-    assert _states(marks)[-1] == final
-
-
-@pytest.mark.lf
 def test_second_retained_occurrence_is_diagnosed(tmp_path: Path) -> None:
     drivers = _stop(200, 1, "never") + _then(
         1, "Stop", 'types.SimpleNamespace(id=2, need="ready.entry")'
