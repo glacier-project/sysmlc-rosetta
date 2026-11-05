@@ -111,9 +111,9 @@ class _Drain:
 def _when_due(due: str, body: list[str]) -> list[str]:
     """Run a time trigger only for the callback its activation armed.
 
-    Reentering an active mode does not cancel LF events scheduled by the
-    previous activation, so the entry records the due time; the first
-    callback at it consumes the record before any guard or retention.
+    The LF 0.13 runtime retains old events on active-mode reset, contrary
+    to its documented reset semantics. Entry records the current due time;
+    the first callback at it consumes the record before guard or retention.
     """
     return [
         f"if lf.time.logical_elapsed() == self.{due}:",
@@ -175,7 +175,7 @@ class RosettaBuilder:
     is retained per state: a second arrival, or a later event accepted
     below the state while one is retained, stops execution with a runtime
     error instead of reordering or dropping events. Capability rejections (deep
-    entry, cross-scope sends, ``at``/``when``, non-inline ``do`` bodies,
+    entry, cross-scope sends, non-inline ``do`` bodies,
     unstable self-loops, name collisions) also live here.
 
     In ``peer_accepts`` mode (the named signals are accepted by a peer
