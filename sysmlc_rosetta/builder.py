@@ -1646,6 +1646,10 @@ class RosettaBuilder:
                 )
             )
 
+        capture_keys = {
+            signal: len(outgoing) + index
+            for index, signal in enumerate(signal_groups)
+        }
         emitted_channels: set[str] = set()
         for signal, run in signal_runs:
             group = signal_groups[signal]
@@ -1727,6 +1731,7 @@ class RosettaBuilder:
                 payload=payload,
             )
             key = min(pos[id(t)] for t in group)
+            capture_key = capture_keys[signal]
             if pending is not None:
                 if first_run:
                     retained_body, retained_targets = self._dispatch(
@@ -1741,12 +1746,14 @@ class RosettaBuilder:
                         drain=drain,
                         payload=payload,
                     )
-                    retained.append((key, retained_body, retained_targets))
+                    retained.append(
+                        (capture_key, retained_body, retained_targets)
+                    )
                     if consumed_flag is not None:
-                        held.append((key, consumed_flag))
+                        held.append((capture_key, consumed_flag))
                     body = self._retain(
                         body,
-                        key,
+                        capture_key,
                         payload,
                         fact,
                         insts,
@@ -1763,7 +1770,7 @@ class RosettaBuilder:
                 prelude = []
             guard_srcs = self._interrupt_guard_sources(fact, signal)
             if guard_srcs and pending is not None and first_run:
-                consumed_sources.append((key, guard_srcs))
+                consumed_sources.append((capture_key, guard_srcs))
             if guard_srcs:
                 cond = " or ".join(
                     f"({src}.is_present and {src}.value not in (None, False))"

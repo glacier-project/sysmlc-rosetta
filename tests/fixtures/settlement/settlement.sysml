@@ -14,6 +14,8 @@ package Settlement {
     item def Go;
     item def Ping;
     item def Bye { attribute n : Integer; }
+    item def Command { attribute value : Integer; }
+    item def Abort :> Command;
 
     state def TimerStop {
         port selfPort;
@@ -826,6 +828,29 @@ package Settlement {
         state outside { entry assign n := mark("outside.entry"); }
         transition first outer accept after 0 [s]
             do assign n := mark("parent.effect") then outside;
+    }
+
+    state def RetainedSignalType {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then source;
+        state source {
+            exit assign n := mark("source.exit");
+            entry; then warmup;
+            state warmup {
+                exit send new Marked(n = mark("warmup.exit")) to selfPort;
+            }
+            state ready {
+                entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
+            }
+            transition first warmup accept after 0.1 [s] then ready;
+        }
+        state wrong;
+        state caught { entry assign n := mark("caught.entry"); }
+        transition first source accept c : Command if false then wrong;
+        transition first source accept a : Abort
+            do assign n := note("caught.value", a.value) then caught;
     }
 
     state def ExitSender {
