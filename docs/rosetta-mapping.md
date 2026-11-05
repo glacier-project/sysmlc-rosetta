@@ -140,10 +140,12 @@ relative order.
 ## 3. Transitions
 
 Within one scope, ordinary eventless alternatives or alternatives for the
-same delivered signal render as a single reaction
-whose body is a first-match `if`/`elif` chain — declaration order is firing
-priority, including for same-source alternatives declared in different
-lexical scopes (for example `transition first outer.a …` in the parent beside
+same delivered signal render as a first-match `if`/`elif` chain.
+Signal alternatives share a reaction only while adjacent in the expanded
+concrete-channel declaration order; interleaved candidates use separate
+reactions so a later alternative cannot pass an earlier eligible one.
+Declaration order is firing priority within a chain, including for same-source
+alternatives declared in different lexical scopes (for example `transition first outer.a …` in the parent beside
 `transition first a …` inside `outer`); a guardless branch closes the chain.
 Each branch runs the source
 state's `exit` actions, then the transition `effect`, then sets the target
@@ -218,7 +220,9 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   declaration order** — the first-listed outgoing transition whose trigger is
   present and whose guard holds. The mechanism is a per-mode `<state>_fired`
   flag (cleared on mode entry) that the firing reaction sets and later
-  reactions at the same tag read. The losing transitions are **dropped, not
+  reactions at the same tag read. A busy composite retains at most one
+  occurrence, keeping its full same-signal fallback chain for settlement.
+  Splitting immediate reactions does not duplicate retention. The losing transitions are **dropped, not
   deferred** to a next macrostep: this differs from strict run-to-completion,
   but is equivalent for every case where the winner's target does not
   re-handle the loser event. A state name colliding with a generated

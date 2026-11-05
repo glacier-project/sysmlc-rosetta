@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -14,7 +16,8 @@ from sysmlc_quake.serialize import to_yaml as quake_to_yaml
 from sysmlc_rosetta.builder import build_program
 from sysmlc_rosetta.serialize import to_lf
 from tests.conftest import FIXTURES_DIR
-from tests.test_lf_harness import run_machine
+from tests.test_lf_harness import compile_harness, run_machine
+from tests.test_settlement import _marks
 
 MODEL_DIR = FIXTURES_DIR / "rtc"  # created in Task 5
 
@@ -174,3 +177,77 @@ def test_compose_1a_1b_inner_first_preserved(tmp_path: Path) -> None:
     assert "aborted" not in states
     assert "outer::innerB" in quake
     assert not any("aborted" in c for c in quake)
+
+
+@pytest.mark.lf
+@pytest.mark.parametrize(
+    ("name", "channels", "states", "marks"),
+    [
+        ("SignalInterleaving", ("A", "B"), ["source", "selectedB"], []),
+        ("SignalInterleaving", ("A",), ["source", "lastA"], []),
+        ("SignalInterleaving", ("B",), ["source", "selectedB"], []),
+        ("TimerInterleaving", ("A",), ["source", "selectedTimer"], []),
+        (
+            "LexicalInterleaving",
+            ("A", "B"),
+            ["outer.source", "outer.selectedB"],
+            [],
+        ),
+        (
+            "BusyInterleaving",
+            ("ASub",),
+            ["source.warmup", "source.ready", "lastA"],
+            [
+                "warmup.exit",
+                "ready.entry",
+                "ready.exit",
+                "source.exit",
+                "selected.value 7",
+                "lastA.entry",
+            ],
+        ),
+    ],
+)
+def test_interleaved_trigger_priority(
+    tmp_path: Path,
+    name: str,
+    channels: tuple[str, ...],
+    states: list[str],
+    marks: list[str],
+) -> None:
+    body: list[str] = []
+    for channel in channels:
+        if channel == "ASub":
+            body += [
+                f"    from {name}_types import ASub",
+                "    m.ASub.set(ASub(value=7))",
+            ]
+        else:
+            body.append(f"    m.{channel}.set(None)")
+    effects = ", ".join(f"m.{channel}" for channel in channels)
+    drivers = (
+        "  timer deliver(100 msec)\n"
+        f"  reaction(deliver) -> {effects} {{=\n" + "\n".join(body) + "\n  =}\n"
+    )
+    binary = compile_harness(
+        tmp_path,
+        MODEL_DIR,
+        f"Rtc::{name}",
+        timeout="150 msec",
+        drivers=drivers,
+        python_file=FIXTURES_DIR / "settlement" / "settle_marks.py",
+    )
+    result = subprocess.run(
+        [str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": str(tmp_path / "src")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert [
+        line.removeprefix("STATE: ")
+        for line in result.stdout.splitlines()
+        if line.startswith("STATE: ")
+    ] == states
+    assert _marks(result.stderr) == marks
