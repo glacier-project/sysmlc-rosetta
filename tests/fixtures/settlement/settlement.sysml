@@ -11,6 +11,7 @@ package Settlement {
     item def Marked { attribute n : Integer; }
     item def Stop { attribute id : Integer; attribute need : String; }
     item def Go;
+    item def Ping;
     item def Bye { attribute n : Integer; }
 
     state def TimerStop {
@@ -227,10 +228,18 @@ package Settlement {
             }
             state r2 {
                 exit assign n := mark("r2.exit");
-                entry; then b;
+                entry; then b0;
+                state b0;
                 state b {
+                    entry send new Ping() to selfPort;
                     exit send new Marked(n = mark("b.exit")) to selfPort;
                 }
+                state b3;
+                transition first b0 accept after 0.2 [s] then b;
+                transition first b
+                    accept Ping
+                    do send new Marked(n = mark("ping.accepted")) to selfPort
+                    then b3;
             }
             state r3 {
                 exit assign n := mark("r3.exit");
@@ -297,6 +306,198 @@ package Settlement {
             state exit_0_done;
         }
         state outside;
+    }
+
+    state def SharedStop {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then a;
+                state a;
+                state a2;
+                transition first a
+                    accept s : Stop
+                    if seen(s.need)
+                    do send new Marked(n = note("r1.effect", s.id)) to selfPort
+                    then a2;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                state b2;
+                transition first b
+                    accept s : Stop
+                    if ok("r2.guard")
+                    do send new Marked(n = note("r2.effect", s.id)) to selfPort
+                    then b2;
+            }
+            state r3 {
+                entry; then c;
+                state c;
+                state c2;
+                transition first c
+                    accept s : Stop
+                    if ok("r3.guard")
+                    do send new Marked(n = note("r3.effect", s.id)) to selfPort
+                    then c2;
+            }
+        }
+    }
+
+    state def SharedHeld {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then keep;
+                state keep {
+                    entry; then q;
+                    state q {
+                        entry; then warmup;
+                        state warmup;
+                        state running {
+                            entry send new Marked(n = mark("running.entry"))
+                                to selfPort;
+                        }
+                        transition first warmup accept after 0.2 [s] then running;
+                    }
+                    state q2;
+                    transition first q
+                        accept st : Stop
+                        if seen(st.need)
+                        do send new Marked(n = note("r1.effect", st.id))
+                            to selfPort
+                        then q2;
+                }
+                state keep2;
+                transition first keep
+                    accept st : Stop
+                    if st.id == 5
+                    do send new Marked(n = note("keep.effect", st.id)) to selfPort
+                    then keep2;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                state b2;
+                transition first b
+                    accept s : Stop
+                    if ok("r2.guard") and s.id < 6
+                    do send new Marked(n = note("r2.effect", s.id)) to selfPort
+                    then b2;
+            }
+        }
+        state stopped { entry assign n := mark("stopped.entry"); }
+        transition first working
+            accept s : Stop
+            do assign n := note("fallback.effect", s.id)
+            then stopped;
+    }
+
+    state def SharedHeldEscape {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then keep;
+                state keep {
+                    entry; then q;
+                    state q {
+                        entry; then warmup;
+                        state warmup;
+                        state running;
+                        transition first warmup accept after 0.2 [s] then running;
+                        transition first running then caught;
+                    }
+                    state caught {
+                        entry send new Marked(n = mark("caught.entry"))
+                            to selfPort;
+                    }
+                    transition first q
+                        accept st : Stop
+                        do send new Marked(n = note("q.effect", st.id))
+                            to selfPort
+                        then caught;
+                }
+                state keep2;
+                transition first keep
+                    accept st : Stop
+                    do send new Marked(n = note("keep.effect", st.id)) to selfPort
+                    then keep2;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                state b2;
+                transition first b
+                    accept s : Stop
+                    if ok("r2.guard")
+                    do send new Marked(n = note("r2.effect", s.id)) to selfPort
+                    then b2;
+            }
+        }
+    }
+
+    state def SharedRoot parallel {
+        port selfPort;
+        attribute n : Integer := 0;
+        state r1 {
+            entry; then a;
+            state a;
+            state a2;
+            transition first a
+                accept s : Stop
+                if seen(s.need)
+                do send new Marked(n = note("r1.effect", s.id)) to selfPort
+                then a2;
+        }
+        state r2 {
+            entry; then b;
+            state b;
+            state b2;
+            transition first b
+                accept s : Stop
+                if ok("r2.guard")
+                do send new Marked(n = note("r2.effect", s.id)) to selfPort
+                then b2;
+        }
+    }
+
+    state def OriginClash {
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then a;
+                state a;
+                transition first a accept Stop then a;
+            }
+            state r2 {
+                entry; then Stop_origin;
+                state Stop_origin;
+                transition first Stop_origin accept Stop then Stop_origin;
+            }
+        }
+    }
+
+    state def WaitClash {
+        attribute _working_r2_Stop_wait : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then a;
+                state a;
+                transition first a accept Stop then a;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                transition first b accept Stop then b;
+            }
+        }
     }
 
     state def ExitSender {
