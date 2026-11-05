@@ -260,3 +260,98 @@ def test_later_event_overtaking_a_retained_stop_is_diagnosed(
     marks = _marks(result.stderr)
     assert not any(label.startswith("stop.effect") for label in _labels(marks))
     assert accepted not in _states(marks)
+
+
+@pytest.mark.lf
+@pytest.mark.parametrize(
+    ("name", "reverse_order"),
+    [
+        ("EntryEnabled", False),
+        ("EntryDisabled", False),
+        ("FiniteSelfLoop", False),
+        ("NestedLeaf", False),
+        pytest.param("EntryEnabled", True, id="enabled-reversed"),
+    ],
+)
+def test_leaf_entry_closure_excludes_triggered_departure(
+    tmp_path: Path, name: str, reverse_order: bool
+) -> None:
+    expectations = {
+        "EntryEnabled": (
+            [
+                "source.entry",
+                "source.exit",
+                "eventless.effect",
+                "automatic.entry",
+            ],
+            ["source", "automatic"],
+        ),
+        "EntryDisabled": (
+            ["source.entry", "source.exit", "timer.effect", "timed.entry"],
+            ["source", "timed"],
+        ),
+        "FiniteSelfLoop": (
+            [
+                "source.entry 0",
+                "source.exit",
+                "source.entry 1",
+                "source.exit",
+                "source.entry 2",
+                "source.exit",
+                "timer.effect",
+                "timed.entry 2",
+            ],
+            ["source", "source", "source", "timed"],
+        ),
+        "NestedLeaf": (
+            [
+                "source.entry",
+                "source.exit",
+                "eventless.effect",
+                "automatic.entry",
+                "automatic.exit",
+                "outer.exit",
+                "parent.effect",
+                "outside.entry",
+            ],
+            ["outer.source", "outer.automatic", "outside"],
+        ),
+    }
+    expected, states = expectations[name]
+    model_dir = FIXTURES
+    if reverse_order:
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        source = (FIXTURES / "settlement.sysml").read_text()
+        eventless = (
+            "        transition first source if true\n"
+            '            do assign n := mark("eventless.effect") then automatic;\n'
+        )
+        timer = (
+            "        transition first source accept after 0 [s]\n"
+            '            do assign n := mark("timer.effect") then timed;\n'
+        )
+        assert source.count(eventless + timer) == 1
+        source = source.replace(eventless + timer, timer + eventless, 1)
+        (model_dir / "settlement.sysml").write_text(source)
+    binary = compile_harness(
+        tmp_path,
+        model_dir,
+        f"Settlement::{name}",
+        timeout="1 msec",
+        python_file=MARKS,
+    )
+    result = subprocess.run(
+        [str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": str(tmp_path / "src")},
+    )
+    assert result.returncode == 0, result.stderr
+    assert _marks(result.stderr) == expected
+    assert [
+        line.removeprefix("STATE: ")
+        for line in result.stdout.splitlines()
+        if line.startswith("STATE: ")
+    ] == states

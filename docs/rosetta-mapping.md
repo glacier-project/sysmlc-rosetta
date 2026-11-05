@@ -150,7 +150,16 @@ state's `exit` actions, then the transition `effect`, then sets the target
 mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
 
 - **Eventless from a leaf** — folds into the entry reaction: evaluated on
-  every (re-)entry of the source mode.
+  every (re-)entry of the source mode. **SysMLC leaf-entry policy:** automatic eventless
+  transitions take priority over eligible time/change events, even with zero
+  delay, regardless of textual declaration order. A selected branch excludes
+  coincident triggered departures from that activation. False eventless
+  guards leave triggered alternatives eligible.
+  Quake/Sismic also prefers ordinary eventless transitions over `after 0`,
+  but represents `when` transitions as eventless candidates. An enabled
+  ordinary eventless transition competing with a true `when` can therefore
+  raise `NonDeterminismError` in Quake; Rosetta selects the ordinary eventless
+  transition during entry. This policy is not yet aligned across both backends.
 - **Eventless from a composite/parallel child** — *completion semantics*:
   the reaction triggers on the child's `completed` output (never on
   entry). For a parallel child it is a **join**: reactor-scope flags
