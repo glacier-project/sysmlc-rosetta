@@ -2,10 +2,10 @@
 
 How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime. This document
-covers every supported construct, its LF counterpart, and every deliberate
-rejection. The example models in the bundled showcase corpus exercise all of it,
-and the `lfc`-marked run tests in `tests/lf/test_run.py` prove
-the behavior.
+describes supported constructs, their LF counterparts and known limitations.
+Bundled model scenarios and focused tests marked `lf` compile and execute
+generated programs to check selected behaviors, including hierarchy lifecycle
+cases outside the showcase corpus.
 
 Build one machine with:
 
@@ -92,7 +92,9 @@ mode cooking {
 LF resets contained reactors to their initial mode when a mode is
 re-entered through `reset(...)` — exactly SysML composite re-entry
 semantics. Pausing and resuming the microwave restarts its heater timer
-for this reason.
+for this reason. Rosetta also clears its own lifecycle records (retained
+triggers, selections, region-finalization flags and shared-signal gates) on
+entry; §3 covers reentry of a mode that stays active.
 
 The composite state's own `entry`/`exit`/`do` actions run in the **parent**
 reactor (mode entry reaction and transition dispatches), so they may use
@@ -126,8 +128,10 @@ state, region entry/do actions run on parallel-state entry. A completion
 handler runs each region's exit when it reports readiness, even without an
 eventless parent transition. Eventless parent guards wait for all required
 regions to finalize; later signal guards observe the finalized region data.
-Triggered departures before readiness and deep escapes do not finalize
-unfinished regions. For a
+A selected triggered departure of the parallel state, or of an enclosing
+state, drains unfinished regions and skips finalized ones (§3). A
+descendant-owned deep escape from one region leaves the other regions
+without cleanup. For a
 parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that
@@ -162,11 +166,11 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   A region without a scoped `done` keeps its flag false and blocks the join.
   Its unwritten `completed` port is omitted from the reaction triggers and
   body because LF's Python runtime cannot read that port.
-- **Group interrupts** — signal/after transitions sourced AT a composite
-  state are reactions of its mode in the parent: they run the composite's
-  exit action and switch modes. The active substates' own exit actions do
-  NOT run (they could not touch attributes anyway); contained machines are
-  simply deactivated.
+- **Parent-sourced interrupts** — signal, `after`, `at` and `when`
+  transitions sourced AT a composite or parallel state are reactions of its
+  mode in the parent. The parent selects first; only a selected departure
+  interrupts the active descendants, which then exit before the parent's
+  own exit (see *Parent-sourced interruption* below).
 - **Cross-level priority (inner-first).** When one signal enables both a
   transition inside a composite/parallel state `C` and a group interrupt on
   `C` itself, rosetta fires only the innermost — matching the SCXML/UML
@@ -176,8 +180,12 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   `exit_<k>`); `C`'s group-interrupt reaction reads its boundary children's
   flags (a composite reads its own reactor's `<sig>_consumed`; a parallel
   state ORs the flags from its consuming regions) and skips its `reset()`
-  when any is present. This plumbing is emitted only for detected conflicts,
-  so conflict-free models are unaffected.
+  when a boundary reports acceptance. Below a state with its own triggered transition, the
+  flag carries the occurrence's arrival tag, so a retained ancestor
+  alternative is suppressed only for that same occurrence; a false
+  descendant guard leaves the occurrence to the ancestor. This plumbing is
+  emitted only for detected conflicts and shared signals, so other models
+  are unaffected.
 - **Deep exit** — a transition from inside a composite to a state in an
   enclosing scope raises a dedicated child output (`exit_0`, one per
   distinct target); each enclosing scope either resolves the target (mode
@@ -185,7 +193,10 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   state's exit + the transition effect; each enclosing scope adds the
   exited composite's exit action. (Note: the effect therefore runs before
   the *outer* exits — a deliberate deviation from UML's
-  exit-all-then-effect ordering.)
+  exit-all-then-effect ordering.) A composite/parallel source still drains
+  its own active descendants before its exit and effect. Crossing enclosing
+  scopes preserves the order above and adds no sibling-region cleanup: an
+  escape from one parallel region does not exit the sibling regions.
 - **Deep entry** (`idle` → `running.hot` from outside) — **rejected**:
   entering an LF mode always activates contained reactors' initial modes
   (see §11 for the planned mechanism).
@@ -202,6 +213,93 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   but is equivalent for every case where the winner's target does not
   re-handle the loser event. A state name colliding with a generated
   `<state>_fired` flag is rejected.
+
+### Parent-sourced interruption
+
+For a triggered transition sourced at a composite or parallel state, rosetta
+follows an explicit SysMLC policy inspired by UML and by the correction
+discussion in [KERML11-52](https://issues.omg.org/issues/KERML11-52): the
+parent's guard is evaluated and a transition selected before any descendant
+is interrupted. This differs from the SysML 2.0 / KerML 1.0 semantic library
+(March 2026), where the state's `nonDoMiddle` precedes the outgoing
+transition and its guard (`StatePerformances::TransitionPerformance`). The
+issue discussion is not an adopted normative amendment. The policy is
+scoped behavior of this backend, not a claim of full SysML conformance.
+
+**Settlement, not completion.** Child reactors below such a state report
+`_busy` when they select a transition and `_settled` once target entry,
+recursive initial entry, eligible eventless transitions and natural region
+finalization have finished. A parent trigger arriving while its subtree is
+busy is retained with its payload and arrival tag and dispatched when the
+subtree settles. Settlement does not wait for future events or for a child
+`done`. The parent evaluates its guards once per occurrence. A false or
+losing candidate is inert: it requests no exits and leaves the active
+configuration unchanged. A retained occurrence whose guards are all false
+is retired, not retried.
+
+**Selected departure.** A selected parent departure runs, in order:
+
+1. the active descendants' exits, each subtree innermost first; parallel
+   regions drain in declaration order, and a naturally finalized region does
+   not run its exit again;
+1. the parent's own exit;
+1. the transition effect, with the payload recorded at selection (the guard
+   is not reevaluated);
+1. target entry.
+
+The first three steps run synchronously at the selection tag. Each child
+reactor has an `_exit` request input and an `_exited` acknowledgment output,
+handled by reactions declared after all modes. The LF mode switch is
+declared at selection, so target entry happens at the next microstep, as
+for other transitions. From then the whole subtree being left, including
+sibling regions, is inactive: its timers, actions and self-sent events
+cannot start ordinary work after selection. Exit bodies use the existing
+finite inline action subset. Exit sends to a peer machine are delivered.
+When the selected transition leaves the parent's scope, the enclosing exits
+follow the effect, as for deep exits.
+
+**Shared signals across regions.** When several regions of one parallel
+state accept a signal, one occurrence is accepted at most once, by the
+first region in declaration order with an accepting candidate. Each later
+region receives the occurrence through a gate only after every earlier
+region has passed on it. An earlier region holding the occurrence for
+settlement delays that decision. A later region or ancestor fallback sees
+the original payload and arrival tag (carried on a `<sig>_origin` input). A
+state entered after the occurrence arrived does not accept it. This
+arbitration applies per occurrence within one parallel state, not across
+independent events or machine instances.
+
+**Bounded retention.** A state or gate retains at most one occurrence. A
+second distinct trigger arriving while one is retained, or a later event
+accepted below a state that retains an older one, stops execution with a
+runtime error instead of reordering or dropping events. This conservatively
+includes a new trigger at exactly the tag where the subtree settles. There
+is no general event queue. Repeated sends on one LF port at one tag can
+coalesce, and the arrival tags cannot distinguish or recover them, so
+lossless same-tag transport of repeated events is not provided.
+
+**Reentry.** Leaving and later reentering a state relies on LF's mode reset
+of child reactors, `reset state` variables, timers and suspended actions,
+plus the entry resets of the lifecycle records above. The LF 0.13 Python
+target retains scheduled events when a reset mode stays active, contrary to
+the [documented reset semantics](https://www.lf-lang.org/docs/writing-reactors/modal-models/).
+This behavior also reproduces with the 2026-11-05 LF 0.14.0 nightly.
+For a state that a self transition or a transition to an enclosing state
+can reenter while active, each `after` and `at` entry records its due time
+as a workaround; a callback runs only at that
+time and consumes the record before evaluating the guard, so stale or
+duplicate callbacks are ignored. `when` latches are reset on entry. Events
+self-sent or routed by a previous activation are still delivered after
+reentry.
+
+**Limits.** A shared occurrence held in a region left by a descendant-owned
+escape stays unresolved until the parallel state is reentered; a new
+occurrence before then meets the overlap error. This is outside the
+parent-interruption guarantees. Cross-scope sends within one machine stay
+unsupported, and zero-delay peer feedback into the same machine remains an
+LF causality cycle; arbitrary routed feedback topologies are not proven
+acyclic. Generated lifecycle ports and state variables that collide with
+state, signal or root attribute names are rejected.
 
 ## 4. Triggers and signals
 
@@ -232,8 +330,17 @@ child reactor, and the parent's mode forwards them down
   action scheduled on entry with the attribute's value (seconds → ns).
 - **`after` + `if`** is supported (the guard is evaluated when the timer
   fires) — a capability the quake backend must reject.
-- **`accept at` / `accept when`** → not currently supported; both are
-  planned (§11).
+- **`accept at t`** → a mode-local logical action scheduled on entry for
+  the instant `t`, measured as logical time since startup; an instant that
+  has already passed at entry schedules nothing.
+- **`accept when cond`** → a change check: entry schedules `_change_act`,
+  and every reaction assigning a root attribute reschedules it one
+  microstep later. The first true observation in an activation sets a
+  per-state latch (reset on entry) and evaluates the transition once.
+  This lowering supports source states in the root reactor and conditions
+  over root attributes; change triggers in nested reactors are not supported.
+  Checks observe values when they run, so a transient true value overwritten
+  before the scheduled check can be missed.
 
 **`send new Sig(...) via port`** schedules a reactor-level logical action
 `Sig_act` at the current tag (a self-event). If the machine also accepts
@@ -339,7 +446,8 @@ Context-sensitive:
   `request_stop()`. A partial join runs no root exit.
 - Host shutdown (a run timeout, an empty event queue or a peer machine's
   `request_stop()`) only ends observation: it never runs a root or region
-  exit, so a machine still waiting for input is not exited. A root or
+  exit or interrupts active descendants, so a machine still waiting for
+  input is not exited. A root or
   parallel-root region exit without a completion path is still checked against the
   supported subset at compile time, but never executes.
 
@@ -530,17 +638,15 @@ design.
 
 ### Not yet supported (planned)
 
-| Construct                                  | Intended mapping                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| intra-machine cross-scope sends            | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (the cross-machine ported-send machinery of §10, pointed inward)                                                                                                                                                                                                                                                                      |
-| `out attribute`                            | output port, set on every assignment; doubles as observation for testing                                                                                                                                                                                                                                                                                                                                                                 |
-| `accept at`                                | absolute logical time from startup (timer / scheduled action)                                                                                                                                                                                                                                                                                                                                                                            |
-| leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                                                                                                                                     |
-| transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, ALL regions' exit actions run in declaration order, then the parallel state's exit, then the effect, then the switch. The parallel-state-sourced group interrupt adopts the same exit-all convention, so the two spellings are equivalent. Substate exits inside regions still do not run (they live in child reactors) |
-| payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                                                                                                                                          |
-| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility remains future work                                                                                                                                                                |
-| `accept when`                              | change events via the constraint-weave pattern: a self-event scheduled after every attribute-assigning reaction plus an entry-time check, evaluated in the source mode; root-scope attributes first                                                                                                                                                                                                                                      |
-| deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order preserved                                                                                                                                                                                                                                                                           |
+| Construct                                  | Intended mapping                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| intra-machine cross-scope sends            | the sending scope's child reactor gains an output port; the parent wires it to the accepting scope (the cross-machine ported-send machinery of §10, pointed inward)                                                                                                                                                  |
+| `out attribute`                            | output port, set on every assignment; doubles as observation for testing                                                                                                                                                                                                                                             |
+| leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                 |
+| transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, the parallel-state-sourced interruption sequence of §3 applies (regions drain in declaration order, then the parallel state's exit, the effect and the switch), so the two spellings are equivalent |
+| payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                      |
+| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility remains future work                                            |
+| deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order preserved                                                                                                                                                       |
 
 ### Stays rejected
 
