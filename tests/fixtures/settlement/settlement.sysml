@@ -11,6 +11,7 @@ package Settlement {
     item def Marked { attribute n : Integer; }
     item def Stop { attribute id : Integer; attribute need : String; }
     item def Go;
+    item def Bye { attribute n : Integer; }
 
     state def TimerStop {
         port selfPort;
@@ -27,6 +28,7 @@ package Settlement {
             }
             state ready {
                 entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
             }
             transition first warmup
                 accept after 0.2 [s]
@@ -54,6 +56,7 @@ package Settlement {
             }
             state ready {
                 entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
             }
             transition first warmup accept after 0.2 [s] then running;
             transition first running if ok("running.auto") then ready;
@@ -79,6 +82,7 @@ package Settlement {
             }
             state ready {
                 entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
             }
             transition first warmup accept after 0.2 [s] then running;
             transition first running if ok("running.auto") then ready;
@@ -103,6 +107,7 @@ package Settlement {
             }
             state ready {
                 entry send new Marked(n = mark("ready.entry")) to selfPort;
+                exit send new Marked(n = mark("ready.exit")) to selfPort;
             }
             transition first warm if ok("warm.auto") then running;
             transition first running if ok("running.auto") then ready;
@@ -183,5 +188,156 @@ package Settlement {
             accept s : Stop
             do assign n := note("outer.effect", s.id)
             then aborted;
+    }
+
+    state def NestedExit {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then outer;
+        state outer {
+            exit assign n := mark("outer.exit");
+            entry; then mid;
+            state mid {
+                exit send new Marked(n = mark("mid.exit")) to selfPort;
+                entry; then leaf;
+                state leaf {
+                    exit send new Marked(n = mark("leaf.exit")) to selfPort;
+                }
+            }
+        }
+        state stopped { entry assign n := mark("stopped.entry"); }
+        transition first outer
+            accept s : Stop
+            if seen(s.need)
+            do assign n := note("stop.effect", s.id)
+            then stopped;
+    }
+
+    state def ParallelExit {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            exit assign n := mark("working.exit");
+            state r1 {
+                exit assign n := mark("r1.exit");
+                entry; then a;
+                state a;
+                transition first a accept after 0.1 [s] then done;
+            }
+            state r2 {
+                exit assign n := mark("r2.exit");
+                entry; then b;
+                state b {
+                    exit send new Marked(n = mark("b.exit")) to selfPort;
+                }
+            }
+            state r3 {
+                exit assign n := mark("r3.exit");
+                entry; then c;
+                state c {
+                    exit send new Marked(n = mark("c.exit")) to selfPort;
+                    entry; then d;
+                    state d {
+                        exit send new Marked(n = mark("d.exit")) to selfPort;
+                    }
+                }
+            }
+        }
+        state stopped { entry assign n := mark("stopped.entry"); }
+        transition first working
+            accept s : Stop
+            if seen(s.need)
+            do assign n := note("stop.effect", s.id)
+            then stopped;
+    }
+
+    state def DeepEscape {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then g;
+        state g parallel {
+            exit assign n := mark("g.exit");
+            state r0 {
+                entry; then idle;
+                state idle;
+            }
+            state r1 {
+                entry; then s;
+                state s {
+                    exit send new Marked(n = mark("s.exit")) to selfPort;
+                    entry; then p;
+                    state p {
+                        exit send new Marked(n = mark("p.exit")) to selfPort;
+                        entry; then leaf;
+                        state leaf {
+                            exit send new Marked(n = mark("leaf.exit")) to selfPort;
+                        }
+                        transition first p
+                            accept Stop
+                            do send new Marked(n = mark("p.effect")) to selfPort
+                            then outside;
+                    }
+                }
+            }
+        }
+        state outside { entry assign n := mark("outside.entry"); }
+        transition first g accept Go then outside;
+    }
+
+    state def LatePortClash {
+        entry; then g;
+        state g {
+            entry; then p;
+            state p {
+                entry; then leaf;
+                state leaf;
+                transition first p accept Stop then outside;
+            }
+            state exit_0_done;
+        }
+        state outside;
+    }
+
+    state def ExitSender {
+        port tx;
+        attribute n : Integer := 0;
+        entry; then outer;
+        state outer {
+            exit assign n := mark("sender.outer.exit");
+            entry; then mid;
+            state mid {
+                entry; then leaf;
+                state leaf {
+                    exit send new Bye(n = 7 + mark("sender.leaf.exit")) via tx;
+                }
+            }
+        }
+        state stopped { entry assign n := mark("sender.stopped.entry"); }
+        transition first outer
+            accept after 0.1 [s]
+            do assign n := mark("sender.effect")
+            then stopped;
+    }
+
+    state def ExitWaiter {
+        port rx;
+        attribute n : Integer := 0;
+        entry; then waiting;
+        state waiting;
+        state got { entry assign n := mark("waiter.got"); }
+        transition first waiting
+            accept b : Bye via rx
+            do assign n := note("waiter.payload", b.n)
+            then got;
+    }
+
+    part def Sender { port tx; exhibit state : ExitSender; }
+    part def Waiter { port rx; exhibit state : ExitWaiter; }
+
+    part peers {
+        part sender : Sender;
+        part waiter : Waiter;
+        connect sender.tx to waiter.rx;
     }
 }

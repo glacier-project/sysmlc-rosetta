@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import syside
@@ -63,6 +63,9 @@ CHANGE_ACT = "_change_act"
 ENTRY_ORDER_PORT = "_entry_order"
 BUSY_PORT = "_busy"
 SETTLED_PORT = "_settled"
+EXIT_REQUEST_PORT = "_exit"
+EXIT_ACK_PORT = "_exited"
+ACTIVE_VAR = "_active"
 # Eventless continuations sort before arrival tags.
 _ARRIVAL = "(lf.time.logical_elapsed(), lf.tag().microstep)"
 _CONTINUATION = "()"
@@ -72,6 +75,37 @@ _PY_INDENT = "    "
 def _scope_of(path: str) -> str:
     """The enclosing scope of a state path (``""`` for top-level states)."""
     return path.rpartition("::")[0]
+
+
+@dataclass
+class _Trailing:
+    """A reactor's reactor-level reactions emitted after all its modes.
+
+    They are concatenated once per reactor as the exit-request handler,
+    then every drain chain, every late exit resolution and every
+    cleanup-dependent output forwarder, so each consumer follows the
+    reactions whose requests can cause its input.
+    """
+
+    chains: list[Reaction] = field(default_factory=list)
+    late: list[Reaction] = field(default_factory=list)
+    forwarding: list[Reaction] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Drain:
+    """How a selected departure of a draining state is deferred.
+
+    Attributes:
+        sel: State variable recording the selected transition key and
+            payload for the continuation.
+        request: The first child's exit-request port.
+        keys: Transition identity (``id``) to its key within the source.
+    """
+
+    sel: str
+    request: str
+    keys: dict[int, int]
 
 
 def _report_busy(occurrence: str) -> str:
@@ -210,6 +244,7 @@ class RosettaBuilder:
         self._root_exit: list[str] = []
         # Populated during assembly:
         self._exit_ports: dict[str, dict[str, str]] = {}
+        self._deferred: set[tuple[str, str]] = set()
         self._needs_done: set[str] = set()
         self._reactors: list[Reactor] = []
 
@@ -273,6 +308,12 @@ class RosettaBuilder:
             and t.source in self._facts
             and self._facts[t.source].kind is not StateKind.LEAF
         }
+        for t in self._transitions:
+            if t.source in self._tracked and isinstance(t.target, str):
+                level = _scope_of(t.source)
+                while _is_ancestor(_scope_of(t.target), level):
+                    self._deferred.add((level, t.target))
+                    level = self._resolving_scope(level)
         self._collect_signals()
         self._collect_consumed()
         self._collect_sends()
@@ -348,7 +389,13 @@ class RosettaBuilder:
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
         )
-        return replace(machine, reactions=reactions, modes=modes)
+        trailing = tuple(patched(r) for r in machine.trailing_reactions)
+        return replace(
+            machine,
+            reactions=reactions,
+            modes=modes,
+            trailing_reactions=trailing,
+        )
 
     def _with_change_notifications(self, machine: Reactor) -> Reactor:
         """Schedule the change-notify action after each attribute assignment.
@@ -390,7 +437,13 @@ class RosettaBuilder:
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
         )
-        return replace(machine, reactions=reactions, modes=modes)
+        trailing = tuple(patched(r) for r in machine.trailing_reactions)
+        return replace(
+            machine,
+            reactions=reactions,
+            modes=modes,
+            trailing_reactions=trailing,
+        )
 
     # -- fact classification (runs before assembly) --
 
@@ -680,14 +733,30 @@ class RosettaBuilder:
         gen = self._scope_codegen(scope)
         self._check_names(scope, kids, inputs, sent)
         extra_state: list[StateVar] = []
+        exits: list[tuple[str, list[str], tuple[str, ...]]] = []
+        tail = _Trailing()
         modes = [
-            self._child_mode(kid, scope, container, sent, gen, extra_state)
+            self._child_mode(
+                kid,
+                scope,
+                container,
+                sent,
+                gen,
+                extra_state,
+                exits,
+                tail,
+            )
             for kid in kids
         ]
+        handler: list[Reaction] = []
         if scope in self._needs_done:
             modes.append(self._done_mode(scope, sent))
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
+        if self._reports(scope):
+            inputs.append(EXIT_REQUEST_PORT)
+            extra_state.append(StateVar(ACTIVE_VAR, "None", reset=True))
+            handler.append(self._exit_handler(scope, exits, sent))
         ported = tuple(self._exported.get(scope, {}))
         consumed = tuple(
             f"{sig}_consumed" for sig in self._consumed.get(scope, {})
@@ -705,9 +774,28 @@ class RosettaBuilder:
         else:
             parameters = []
             state_vars = []
-            exit_ports = tuple(self._exit_ports.get(scope, {}).values())
+            exit_ports = tuple(
+                name
+                for target, port in self._exit_ports.get(scope, {}).items()
+                for name in (port, self._late_port(scope, target))
+                if name is not None
+            )
+            clashes = set(exit_ports) & {
+                *inputs,
+                *ported,
+                *consumed,
+                *sent,
+                *(_simple(kid.name) for kid in kids),
+            }
+            if clashes:
+                raise UnsupportedConstructError(
+                    f"signal or state names {sorted(clashes)!r} collide "
+                    "with Rosetta generated exit ports; rename them."
+                )
             lifecycle = (
-                (BUSY_PORT, SETTLED_PORT) if self._reports(scope) else ()
+                (BUSY_PORT, SETTLED_PORT, EXIT_ACK_PORT)
+                if self._reports(scope)
+                else ()
             )
             outputs = (
                 COMPLETED_PORT,
@@ -733,6 +821,12 @@ class RosettaBuilder:
             actions=tuple(action_list),
             reactions=tuple(reactions),
             modes=tuple(modes),
+            trailing_reactions=(
+                *handler,
+                *tail.chains,
+                *tail.late,
+                *tail.forwarding,
+            ),
         )
 
     def _parallel_root_reactor(self, root: StateFact) -> Reactor:
@@ -903,10 +997,17 @@ class RosettaBuilder:
             for name in (
                 f"_{_simple(kid.name)}_busy",
                 f"_{_simple(kid.name)}_pending",
+                f"_{_simple(kid.name)}_sel",
             )
         }
         if self._reports(scope):
-            lifecycle |= {BUSY_PORT, SETTLED_PORT}
+            lifecycle |= {
+                BUSY_PORT,
+                SETTLED_PORT,
+                EXIT_REQUEST_PORT,
+                EXIT_ACK_PORT,
+                ACTIVE_VAR,
+            }
         generated = {
             *lifecycle,
             DONE_MODE,
@@ -963,7 +1064,18 @@ class RosettaBuilder:
         sent: list[str],
         gen: LfPythonCodeGen,
         extra_state: list[StateVar],
+        exits: list[tuple[str, list[str], tuple[str, ...]]],
+        tail: _Trailing,
     ) -> Mode:
+        """Translate one state of ``scope`` into a mode of its reactor.
+
+        In a reporting scope the mode also contributes its forced-exit
+        lines to ``exits`` (the scope's exit-request handler); a
+        composite/parallel state below a tracked state adds to ``tail``
+        the reactions that drain its children on departure, the late
+        resolutions of deferred exit ports and its cleanup-dependent
+        output forwarding.
+        """
         simple = _simple(fact.name)
         outgoing = [
             t
@@ -1007,6 +1119,16 @@ class RosettaBuilder:
             )
             insts = tuple(f"c_{_simple(child.name)}" for child in children)
         busy_sources = tuple(f"{inst}.{BUSY_PORT}" for inst in insts)
+        sel = f"_{simple}_sel" if fact.name in self._tracked else None
+        drain = (
+            None
+            if sel is None
+            else _Drain(
+                sel,
+                f"{insts[0]}.{EXIT_REQUEST_PORT}",
+                {id(t): i for i, t in enumerate(outgoing)},
+            )
+        )
         occurrence = "_tag" if lifecycle else _ARRIVAL
         overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
         retained: list[tuple[int, list[str], tuple[str, ...]]] = []
@@ -1027,6 +1149,18 @@ class RosettaBuilder:
         entry_effects = [OUTPUT_PORT]
         if self._observe:
             entry_body.insert(0, self._observe_log("entered", simple))
+        if self._reports(scope):
+            entry_body.append(f'self.{ACTIVE_VAR} = "{simple}"')
+            if fact.kind is StateKind.LEAF:
+                forced = [
+                    *exit_stmts,
+                    f"self.{ACTIVE_VAR} = None",
+                    f"{EXIT_ACK_PORT}.set(True)",
+                ]
+                exits.append((simple, forced, (EXIT_ACK_PORT,)))
+            else:
+                request = f"{insts[0]}.{EXIT_REQUEST_PORT}"
+                exits.append((simple, [f"{request}.set(True)"], (request,)))
         entry_body += self._statements(fact.entry_action, gen)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
@@ -1056,6 +1190,7 @@ class RosettaBuilder:
                 fired=fired_flag,
                 departing=pending,
                 occurrence=occurrence,
+                drain=drain,
             )
             if pending is not None:
                 key = pos[id(transition)]
@@ -1127,6 +1262,7 @@ class RosettaBuilder:
                 fired=fired_flag,
                 departing=pending,
                 occurrence=occurrence,
+                drain=drain,
             )
             if pending is not None:
                 key = pos[id(transition)]
@@ -1174,6 +1310,7 @@ class RosettaBuilder:
                 fired=fired_flag,
                 departing=pending,
                 occurrence=occurrence,
+                drain=drain,
             )
             if pending is not None:
                 key = pos[id(transition)]
@@ -1277,6 +1414,8 @@ class RosettaBuilder:
                 fired=fired_flag,
                 departing=pending,
                 occurrence=occurrence,
+                drain=drain,
+                payload=payload,
             )
             key = min(pos[id(t)] for t in group)
             if pending is not None:
@@ -1330,6 +1469,10 @@ class RosettaBuilder:
 
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
+        forwarding: list[Reaction] = [] if lifecycle else reactions
+        resolutions: list[Reaction] = [] if lifecycle else reactions
+        region_exits: list[list[str]] = []
+        region_flags: list[str] = []
         if retained:
             overtaking = (tuple(self._overtaking(fact, insts)), busy_sources)
 
@@ -1368,7 +1511,7 @@ class RosettaBuilder:
                 if sig not in self._omitted_inputs
             ]
             reactions.append(self._reemit(inst, simple, prefix=f"{simple}."))
-            reactions += [
+            forwarding += [
                 self._port_reemit(inst, sig)
                 for sig in self._exported.get(fact.name, {})
             ]
@@ -1377,8 +1520,15 @@ class RosettaBuilder:
                 for sig in self._consumed.get(fact.name, {})
                 if sig in self._consumed.get(scope, {})
             ]
-            reactions += self._exit_resolutions(
-                inst, fact.name, exit_stmts, scope, sent, pending, overtaking
+            resolutions += self._exit_resolutions(
+                inst,
+                fact.name,
+                exit_stmts,
+                scope,
+                sent,
+                pending,
+                overtaking,
+                tail.late,
             )
             if eventless:
                 # Completion semantics: an eventless transition out of a
@@ -1402,7 +1552,6 @@ class RosettaBuilder:
                 )
         else:  # StateKind.PARALLEL
             regions = self._regions(fact)
-            region_exits: list[list[str]] = []
             for region in regions:
                 r_simple = _simple(region.name)
                 inst = f"c_{r_simple}"
@@ -1420,7 +1569,7 @@ class RosettaBuilder:
                 reactions.append(
                     self._reemit(inst, r_simple, prefix=f"{simple}.{r_simple}.")
                 )
-                reactions += [
+                forwarding += [
                     self._port_reemit(inst, sig)
                     for sig in self._exported.get(region.name, {})
                 ]
@@ -1429,7 +1578,7 @@ class RosettaBuilder:
                     for sig in self._consumed.get(region.name, {})
                     if sig in self._consumed.get(scope, {})
                 ]
-                reactions += self._exit_resolutions(
+                resolutions += self._exit_resolutions(
                     inst,
                     region.name,
                     exit_stmts,
@@ -1437,6 +1586,7 @@ class RosettaBuilder:
                     sent,
                     pending,
                     overtaking,
+                    tail.late,
                 )
                 # The region's own entry/do run on parallel-state entry; its
                 # exit runs in the completion join when the region is ready.
@@ -1451,6 +1601,7 @@ class RosettaBuilder:
             ]
             if completing_regions:
                 flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
+                region_flags = flags
                 extra_state += [
                     StateVar(flag, "False", reset=True) for flag in flags
                 ]
@@ -1500,6 +1651,8 @@ class RosettaBuilder:
                 StateVar(busy, "None", reset=scope != ""),
                 StateVar(pending, "None", reset=scope != ""),
             ]
+            if sel is not None:
+                extra_state.append(StateVar(sel, "None", reset=scope != ""))
             entering = ", ".join(json.dumps(inst) for inst in insts)
             entry_body += [
                 f"self.{busy} = {{{entering}}}",
@@ -1511,6 +1664,18 @@ class RosettaBuilder:
                     fact, scope, insts, retained, consumed_sources, sent
                 )
             )
+            tail.chains += self._drain_chain(
+                fact,
+                scope,
+                insts,
+                exit_stmts,
+                region_exits,
+                region_flags,
+                outgoing,
+                sent,
+            )
+            tail.forwarding += forwarding
+            reactions += resolutions
 
         entry = self._reaction(
             ("reset", "startup"),
@@ -1560,6 +1725,7 @@ class RosettaBuilder:
         sent: list[str],
         departing: str | None = None,
         overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ()),
+        trailing: list[Reaction] | None = None,
     ) -> list[Reaction]:
         """React to a child's deep-exit ports: resolve or re-raise.
 
@@ -1572,22 +1738,207 @@ class RosettaBuilder:
         later occurrence escaping while an earlier one is retained, and the
         busy ports they read; they run before the pending trigger is
         cleared.
+
+        A deferred port is raised at selection, before the draining source
+        has exited: its resolution here only switches mode or re-raises,
+        and the exited composite's exit statements run in a reaction
+        appended to ``trailing``, on the child's late ``<port>_done``
+        output, which in turn raises this scope's late port when the
+        target lies further out. The order of exits and effect is
+        unchanged; only a reaction after the drain reactions can wait for
+        the drained exits without an LF causality cycle.
         """
         out: list[Reaction] = []
         closing = [f"self.{departing} = None"] if departing else []
         for target, port in self._exit_ports.get(exited_scope, {}).items():
             effect, set_line = self._resolve_target(scope, target)
+            late = self._late_port(exited_scope, target)
+            if late is None:
+                body = (*overtaking[0], *exit_stmts, set_line, *closing)
+            else:
+                body = (*overtaking[0], set_line, *closing)
+                assert trailing is not None
+                outer = self._late_port(scope, target)
+                trailing.append(
+                    self._reaction(
+                        (f"{inst}.{late}",),
+                        () if outer is None else (outer,),
+                        (
+                            *exit_stmts,
+                            *(() if outer is None else (f"{outer}.set(True)",)),
+                        )
+                        or ("pass",),
+                        sent,
+                        self._scope_ports(scope),
+                    )
+                )
             out.append(
                 self._reaction(
                     (f"{inst}.{port}",),
                     (effect,),
-                    (*overtaking[0], *exit_stmts, set_line, *closing),
+                    body,
                     sent,
                     self._scope_ports(scope),
                     sources=overtaking[1],
                 )
             )
         return out
+
+    def _drain_chain(
+        self,
+        fact: StateFact,
+        scope: str,
+        insts: tuple[str, ...],
+        exit_stmts: list[str],
+        region_exits: list[list[str]],
+        region_flags: list[str],
+        outgoing: list[TransitionFact],
+        sent: list[str],
+    ) -> list[Reaction]:
+        """Drain a composite/parallel state's children, then finish it.
+
+        Each child acknowledges its exit request once its active subtree
+        has exited. Parallel regions drain one at a time in declaration
+        order; after each acknowledgment the region's own exit runs unless
+        the region already finalized naturally. Once the last child
+        acknowledges, a departure the state selected itself runs the
+        state's exit and the recorded transition's effect, with the
+        recorded payload, then raises its exit port if it leaves the
+        scope; otherwise the request came from an enclosing state, so the
+        state's exit runs and the scope acknowledges upward.
+
+        Args:
+            fact: The source state.
+            scope: The assembling scope (resolves targets and exit ports).
+            insts: The source state's child reactor instances.
+            exit_stmts: Rendered exit statements of the source state.
+            region_exits: Per region, its rendered exit statements; empty
+                for a composite state.
+            region_flags: Per region, its natural-finalization flag, or
+                empty when no region can finalize.
+            outgoing: The source state's outgoing transitions.
+            sent: Signals sent in this scope.
+        """
+        simple = _simple(fact.name)
+        final: list[str] = []
+        effects: list[str] = []
+        if fact.name in self._tracked:
+            sel = f"self._{simple}_sel"
+            final += [
+                f"if {sel} is not None:",
+                f"{_PY_INDENT}_key, _value = {sel}",
+                f"{_PY_INDENT}{sel} = None",
+            ]
+            keyword = "if"
+            for key, transition in enumerate(outgoing):
+                if transition.trigger is None:
+                    continue
+                features = (
+                    [transition.trigger.payload_feature]
+                    if isinstance(transition.trigger, SignalTrigger)
+                    and transition.trigger.payload_feature is not None
+                    else []
+                )
+                gen = self._make_codegen(
+                    self._scope_attribute_names(scope),
+                    payload_bindings=dict.fromkeys(features, "_value"),
+                )
+                exit_log = (
+                    [self._observe_log("exited", simple)]
+                    if self._observe
+                    else []
+                )
+                lines = [
+                    *exit_log,
+                    *self._statements(fact.exit_action, gen),
+                    *self._statements(transition.effect, gen),
+                ]
+                late = self._late_port(scope, transition.target)
+                if late is not None:
+                    lines.append(f"{late}.set(True)")
+                    effects.append(late)
+                final.append(f"{_PY_INDENT}{keyword} _key == {key}:")
+                final += [
+                    f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]
+                ]
+                keyword = "elif"
+        if self._reports(scope):
+            ancestor = [
+                *exit_stmts,
+                f"self.{ACTIVE_VAR} = None",
+                f"{EXIT_ACK_PORT}.set(True)",
+            ]
+            if final:
+                final.append("else:")
+                ancestor = [f"{_PY_INDENT}{line}" for line in ancestor]
+            final += ancestor
+            effects.append(EXIT_ACK_PORT)
+        chain: list[Reaction] = []
+        for index, inst in enumerate(insts):
+            body: list[str] = []
+            if region_exits:
+                region_exit = region_exits[index] or ["pass"]
+                if region_flags:
+                    body.append(f"if not self.{region_flags[index]}:")
+                    body += [f"{_PY_INDENT}{line}" for line in region_exit]
+                else:
+                    body += region_exit
+            if index + 1 < len(insts):
+                request = f"{insts[index + 1]}.{EXIT_REQUEST_PORT}"
+                body.append(f"{request}.set(True)")
+                step_effects: tuple[str, ...] = (request,)
+            else:
+                body += final
+                step_effects = tuple(effects)
+            chain.append(
+                self._reaction(
+                    (f"{inst}.{EXIT_ACK_PORT}",),
+                    step_effects,
+                    tuple(body),
+                    sent,
+                    self._scope_ports(scope),
+                )
+            )
+        return chain
+
+    def _exit_handler(
+        self,
+        scope: str,
+        exits: list[tuple[str, list[str], tuple[str, ...]]],
+        sent: list[str],
+    ) -> Reaction:
+        """Exit the active state of a scope on its parent's request.
+
+        An active leaf runs its exit and acknowledges at once; an active
+        composite/parallel state forwards the request to its first child
+        and finishes in its drain chain. A scope that is already finalized
+        (or not yet active) acknowledges without running an exit.
+
+        Args:
+            scope: The assembling scope (resolves targets and exit ports).
+            exits: Per mode, its forced-exit lines and their effects.
+            sent: Signals sent in this scope.
+        """
+        body: list[str] = []
+        effects: dict[str, None] = {}
+        for index, (mode, lines, mode_effects) in enumerate(exits):
+            keyword = "if" if index == 0 else "elif"
+            body.append(f'{keyword} self.{ACTIVE_VAR} == "{mode}":')
+            body += [f"{_PY_INDENT}{line}" for line in lines]
+            effects.update(dict.fromkeys(mode_effects))
+        ack = [f"self.{ACTIVE_VAR} = None", f"{EXIT_ACK_PORT}.set(True)"]
+        if body:
+            body.append("else:")
+            ack = [f"{_PY_INDENT}{line}" for line in ack]
+        body += ack
+        effects[EXIT_ACK_PORT] = None
+        return self._reaction(
+            (EXIT_REQUEST_PORT,),
+            tuple(effects),
+            tuple(body),
+            sent,
+            self._scope_ports(scope),
+        )
 
     def _retain(
         self,
@@ -1759,6 +2110,28 @@ class RosettaBuilder:
             ),
         )
 
+    def _resolving_scope(self, scope: str) -> str:
+        """The scope whose reactor resolves exit ports raised by ``scope``.
+
+        A composite's reactor sits in its parent scope's reactor; a
+        parallel region's reactor sits in the reactor enclosing the
+        parallel state.
+        """
+        parent = _scope_of(scope)
+        if parent and self._facts[parent].kind is StateKind.PARALLEL:
+            return _scope_of(parent)
+        return parent
+
+    def _late_port(
+        self, scope: str, target: str | CompletionTarget
+    ) -> str | None:
+        """The late exit port for ``(scope, target)``, if it is deferred."""
+        if isinstance(target, CompletionTarget):
+            return None
+        if (scope, target) not in self._deferred:
+            return None
+        return f"{self._exit_ports[scope][target]}_done"
+
     def _resolve_target(
         self, scope: str, target: str | CompletionTarget
     ) -> tuple[str, str]:
@@ -1842,6 +2215,8 @@ class RosettaBuilder:
         fired: str | None = None,
         departing: str | None = None,
         occurrence: str = _ARRIVAL,
+        drain: _Drain | None = None,
+        payload: str = "None",
     ) -> tuple[list[str], tuple[str, ...]]:
         """Render a same-trigger group as a first-match if/elif dispatch.
 
@@ -1868,18 +2243,40 @@ class RosettaBuilder:
                 activation ends, or None.
             occurrence: Python expression for the selecting occurrence's
                 arrival tag, or ``()`` for an eventless continuation.
+            drain: For a draining source state, each firing branch records
+                its key and ``payload`` and requests the children's exits
+                instead of running the exit, effect and any exit port; the
+                drain continuation runs those. A mode switch is still
+                declared here and applies after the tag's cleanup. None
+                runs them inline.
+            payload: Python expression for the payload a drained branch
+                records.
         """
         body: list[str] = []
         effects: dict[str, None] = {}
         reports = self._reports(scope)
         for index, transition in enumerate(group):
             effect, set_line = self._resolve_target(scope, transition.target)
-            effects.setdefault(effect, None)
-            branch = (
-                exit_stmts
-                + self._statements(transition.effect, gen)
-                + [set_line]
-            )
+            late = self._late_port(scope, transition.target)
+            if drain is None:
+                effects.setdefault(effect, None)
+                branch = (
+                    exit_stmts
+                    + self._statements(transition.effect, gen)
+                    + [set_line]
+                )
+                if late is not None:
+                    effects.setdefault(late, None)
+                    branch.append(f"{late}.set(True)")
+            else:
+                key = drain.keys[id(transition)]
+                effects.setdefault(drain.request, None)
+                branch = [
+                    f"self.{drain.sel} = ({key}, {payload})",
+                    f"{drain.request}.set(True)",
+                ]
+                effects.setdefault(effect, None)
+                branch.append(set_line)
             if consumed is not None:
                 flag = occurrence if reports else "True"
                 branch = [*branch, f"{consumed}.set({flag})"]
@@ -1917,7 +2314,7 @@ class RosettaBuilder:
             body.append(f"{COMPLETED_PORT}.set(True)")
             effects.append(COMPLETED_PORT)
         if self._reports(scope):
-            body.append(f"{SETTLED_PORT}.set(True)")
+            body += [f"self.{ACTIVE_VAR} = None", f"{SETTLED_PORT}.set(True)"]
             effects += [BUSY_PORT, SETTLED_PORT]
         entry = self._reaction(
             ("reset", "startup"),
