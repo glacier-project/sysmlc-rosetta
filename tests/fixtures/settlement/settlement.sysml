@@ -2,6 +2,7 @@ package Settlement {
     private import SI::*;
     private import ScalarValues::*;
     private import Time::TimeInstantValue;
+    private import ISQ::DurationValue;
 
     calc def mark { in label : String; return : Integer; }
     calc def ok { in label : String; return : Boolean; }
@@ -498,6 +499,164 @@ package Settlement {
                 transition first b accept Stop then b;
             }
         }
+    }
+
+    state def RestartTimer {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working {
+            entry; then waiting;
+            state waiting;
+            state fired;
+            transition first waiting
+                accept after 0.3 [s]
+                do send new Marked(n = mark("timer.effect")) to selfPort
+                then fired;
+        }
+        transition first working
+            accept Go
+            do assign n := mark("restart.effect")
+            then working;
+    }
+
+    state def ParallelReentry {
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state ra {
+                exit assign n := mark("ra.exit");
+                entry; then a;
+                state a;
+                transition first a accept after 0.05 [s] then done;
+            }
+            state rb {
+                exit assign n := mark("rb.exit");
+                entry; then b;
+                state b;
+                transition first b accept after 0.3 [s] then done;
+            }
+        }
+        state away;
+        transition first working accept Stop then away;
+        transition first away accept Go then working;
+    }
+
+    state def SharedLifetime {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then q;
+                state q {
+                    entry; then warmup;
+                    state warmup;
+                    state running {
+                        entry send new Marked(n = mark("running.entry"))
+                            to selfPort;
+                    }
+                    transition first warmup accept after 0.2 [s] then running;
+                }
+                state q2;
+                transition first q
+                    accept st : Stop
+                    if seen(st.need)
+                    do send new Marked(n = note("r1.effect", st.id)) to selfPort
+                    then q2;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                state c {
+                    entry send new Marked(n = mark("c.entry")) to selfPort;
+                }
+                state c2;
+                transition first b accept after 0.2 [s] then c;
+                transition first c
+                    accept st : Stop
+                    do send new Marked(n = note("c.effect", st.id)) to selfPort
+                    then c2;
+            }
+        }
+    }
+
+    state def SharedReentry {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then working;
+        state working parallel {
+            state r1 {
+                entry; then q;
+                state q {
+                    entry; then warmup;
+                    state warmup;
+                    state running;
+                    transition first warmup accept after 0.2 [s] then running;
+                }
+                state q2;
+                transition first q
+                    accept st : Stop
+                    if seen(st.need)
+                    do send new Marked(n = note("r1.effect", st.id)) to selfPort
+                    then q2;
+            }
+            state r2 {
+                entry; then b;
+                state b;
+                state b2;
+                transition first b accept after 0.2 [s] then away;
+                transition first b
+                    accept st : Stop
+                    do send new Marked(n = note("r2.effect", st.id)) to selfPort
+                    then b2;
+            }
+        }
+        state away;
+        transition first away accept Go then working;
+    }
+
+    state def DueClash {
+        attribute _t_idle_due : Integer := 0;
+        entry; then idle;
+        state idle;
+        transition first idle accept after 0.1 [s] then idle;
+    }
+
+    state def RetimeAt {
+        attribute n : Integer := 0;
+        attribute late : TimeInstantValue default 0.5 [s];
+        attribute early : TimeInstantValue default 0.05 [s];
+        attribute instant : TimeInstantValue := 0.3 [s];
+        entry; then waiting;
+        state waiting;
+        state fired { entry assign n := mark("fired.entry"); }
+        transition first waiting
+            accept at instant
+            do assign n := mark("at.effect")
+            then fired;
+        transition first waiting
+            accept Go
+            do assign instant := late
+            then waiting;
+        transition first waiting
+            accept Ping
+            do assign instant := early
+            then waiting;
+    }
+
+    state def SameDue {
+        attribute n : Integer := 0;
+        attribute shorter : DurationValue default 0.2 [s];
+        attribute d : DurationValue := 0.3 [s];
+        entry; then waiting;
+        state waiting;
+        state fired;
+        transition first waiting accept after d if seen("never") then fired;
+        transition first waiting
+            accept Go
+            do assign d := shorter
+            then waiting;
     }
 
     state def ExitSender {
