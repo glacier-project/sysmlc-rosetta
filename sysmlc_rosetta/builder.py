@@ -44,6 +44,7 @@ from sysmlc_rosetta.lifecycle import (
     BUSY_PORT,
     ENTRY_ORDER_PORT,
     EXIT_ACK_PORT,
+    EXIT_PENDING_VAR,
     EXIT_REQUEST_PORT,
     SETTLED_PORT,
     declining,
@@ -234,6 +235,7 @@ class RosettaBuilder:
         self._origin: set[tuple[str, str]] = set()
         self._reentered: set[str] = set()
         self._tracked: set[str] = set()
+        self._escaping: dict[str, dict[str, int]] = {}
         # Peer-mode state (empty unless peer_accepts is non-empty):
         # scope -> signals that scope's reactor must output (its own
         # peer-accepted sends plus those of its descendants).
@@ -319,11 +321,21 @@ class RosettaBuilder:
             and (t.target == t.source or _is_ancestor(t.target, t.source))
         }
         for t in self._transitions:
-            if t.source in self._tracked and isinstance(t.target, str):
-                level = _scope_of(t.source)
-                while _is_ancestor(_scope_of(t.target), level):
-                    self._deferred.add((level, t.target))
-                    level = self._resolving_scope(level)
+            if not isinstance(t.target, str):
+                continue
+            levels: list[str] = []
+            level = _scope_of(t.source)
+            crosses_parallel = False
+            while _is_ancestor(_scope_of(t.target), level):
+                levels.append(level)
+                parent = self._facts.get(_scope_of(level))
+                if parent is not None and parent.kind is StateKind.PARALLEL:
+                    targets = self._escaping.setdefault(parent.name, {})
+                    targets.setdefault(t.target, len(targets))
+                    crosses_parallel = True
+                level = self._resolving_scope(level)
+            if t.source in self._tracked or crosses_parallel:
+                self._deferred.update((level, t.target) for level in levels)
         self._collect_signals()
         self._collect_consumed()
         self._collect_shared()
@@ -930,7 +942,10 @@ class RosettaBuilder:
             inputs.append(ENTRY_ORDER_PORT)
         if self._reports(scope):
             inputs.append(EXIT_REQUEST_PORT)
-            extra_state.append(StateVar(ACTIVE_VAR, "None", reset=True))
+            extra_state += [
+                StateVar(ACTIVE_VAR, "None", reset=True),
+                StateVar(EXIT_PENDING_VAR, "False", reset=True),
+            ]
             handler.append(exit_handler(exits, sent, self._scope_ports(scope)))
         ported = tuple(self._exported.get(scope, {}))
         consumed = tuple(
@@ -1116,13 +1131,13 @@ class RosettaBuilder:
     def _reports(self, scope: str) -> bool:
         """Whether a scope's reactor reports busy/settled to its parent.
 
-        Only subtrees below a tracked state report: their parent must know
-        whether a selected transaction is still settling before it
-        dispatches a trigger of that tracked state.
+        Subtrees below a tracked state report settlement for retained
+        triggers. Subtrees of an escaped parallel state also expose the
+        same exit request/acknowledgment protocol for sibling cleanup.
         """
         return scope != "" and any(
             state == scope or _is_ancestor(state, scope)
-            for state in self._tracked
+            for state in self._tracked | self._escaping.keys()
         )
 
     def _regions(self, parallel: StateFact) -> list[StateFact]:
@@ -1194,6 +1209,7 @@ class RosettaBuilder:
                 EXIT_REQUEST_PORT,
                 EXIT_ACK_PORT,
                 ACTIVE_VAR,
+                EXIT_PENDING_VAR,
             }
         parallels = [kid.name for kid in kids if kid.kind is StateKind.PARALLEL]
         root = self._root
@@ -1352,12 +1368,12 @@ class RosettaBuilder:
             )
             insts = tuple(f"c_{_simple(child.name)}" for child in children)
         busy_sources = tuple(f"{inst}.{BUSY_PORT}" for inst in insts)
-        sel = f"_{simple}_sel" if fact.name in self._tracked else None
+        sel = f"_{simple}_sel" if lifecycle else None
         drain = (
             None
-            if sel is None
+            if fact.name not in self._tracked
             else _Drain(
-                sel,
+                f"_{simple}_sel",
                 f"{insts[0]}.{EXIT_REQUEST_PORT}",
                 {id(t): i for i, t in enumerate(outgoing)},
             )
@@ -1388,13 +1404,24 @@ class RosettaBuilder:
             if fact.kind is StateKind.LEAF:
                 forced = [
                     *exit_stmts,
-                    f"self.{ACTIVE_VAR} = None",
-                    f"{EXIT_ACK_PORT}.set(True)",
+                    *self._exit_ack(scope),
                 ]
                 exits.append((simple, forced, (EXIT_ACK_PORT,)))
             else:
                 request = f"{insts[0]}.{EXIT_REQUEST_PORT}"
-                exits.append((simple, [f"{request}.set(True)"], (request,)))
+                exits.append(
+                    (
+                        simple,
+                        [
+                            f"self.{sel} = ()",
+                            f'self.{ACTIVE_VAR} = ""',
+                            f"{request}.set(True)",
+                        ],
+                        (request,),
+                    )
+                )
+        if self._reports(scope):
+            entry_body.append(f"self.{EXIT_PENDING_VAR} = False")
         entry_body += self._statements(fact.entry_action, gen)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
@@ -2069,57 +2096,87 @@ class RosettaBuilder:
         trailing: list[Reaction] | None = None,
         held: list[tuple[int, str]] | None = None,
     ) -> list[Reaction]:
-        """React to a child's deep-exit ports: resolve or re-raise.
+        """Resolve a child's escape and finish exited enclosing states.
 
-        The inner transition already ran the source state's exit and its
-        effect inside the child; this scope adds the exited composite's own
-        exit statements and either switches to the (now local) target mode
-        or raises its own exit port for the next scope up. ``departing``
-        names the exited state's pending-trigger variable, cleared because
-        its activation ends. ``overtaking`` holds the lines that reject a
-        later occurrence escaping while an earlier one is retained, and the
-        busy ports they read; they run before the pending trigger is
-        cleared.
+        Early ports select the target mode or re-raise the selection.
+        At a crossed parallel boundary, selection starts the existing
+        child drain chain. Other enclosing states run their exits when
+        the child's late cleanup output arrives, preserving the source
+        exit and effect before enclosing exits.
 
-        A deferred port is raised at selection, before the draining source
-        has exited: its resolution here only switches mode or re-raises,
-        and the exited composite's exit statements run in a reaction
-        appended to ``trailing``, on the child's late ``<port>_done``
-        output, which in turn raises this scope's late port when the
-        target lies further out. The order of exits and effect is
-        unchanged; only a reaction after the drain reactions can wait for
-        the drained exits without an LF causality cycle.
+        ``departing`` names the pending-trigger variable cleared when the
+        source activation ends. ``overtaking`` contains checks against a
+        later escape passing a retained occurrence, and their busy-port
+        dependencies. ``held`` contains consumption flags to decline when
+        their retained occurrence loses its source activation.
+
+        Deferred cleanup reactions go in ``trailing`` after the drain
+        chains. Keeping early selection separate from late completion
+        avoids a static LF dependency cycle through the exit requests.
         """
         out: list[Reaction] = []
         closing = [f"self.{departing} = None"] if departing else []
+        parent = self._facts.get(_scope_of(exited_scope))
+        parallel = (
+            parent
+            if parent is not None and parent.kind is StateKind.PARALLEL
+            else None
+        )
         for target, port in self._exit_ports.get(exited_scope, {}).items():
             effect, set_line = self._resolve_target(scope, target)
             late = self._late_port(exited_scope, target)
             ending = [set_line, *closing]
-            if late is None:
-                ending = [*exit_stmts, *ending]
+            if parallel is not None:
+                selected = f"_{_simple(parallel.name)}_sel"
+                key = self._escaping[parallel.name][target]
+                request = f"c_{_simple(self._regions(parallel)[0].name)}.{EXIT_REQUEST_PORT}"
+                message = (
+                    f"{self._source_qn}: competing departures of parallel "
+                    f"state {self._display(parallel)} at one tag are not supported"
+                )
+                ending = [
+                    f"if self.{selected} is not None:",
+                    f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
+                    f"self.{selected} = ({-key - 1}, None)",
+                    *ending,
+                    f"{request}.set(True)",
+                ]
+                early_effects = (effect, request)
+            else:
+                early_effects = (effect,)
+                if late is None:
+                    ending = [*exit_stmts, *ending]
+            if self._reports(scope):
+                ending.append(f'self.{ACTIVE_VAR} = ""')
             ending, declined = declining(departing, held or [], ending)
             body = (*overtaking[0], *ending)
-            if late is not None:
+            if parallel is None and late is not None:
                 assert trailing is not None
                 outer = self._late_port(scope, target)
+                final = [
+                    *exit_stmts,
+                    *(() if outer is None else (f"{outer}.set(True)",)),
+                    *self._exit_ack(scope),
+                ]
                 trailing.append(
                     make_reaction(
                         (f"{inst}.{late}",),
-                        () if outer is None else (outer,),
                         (
-                            *exit_stmts,
-                            *(() if outer is None else (f"{outer}.set(True)",)),
-                        )
-                        or ("pass",),
+                            *(() if outer is None else (outer,)),
+                            *((EXIT_ACK_PORT,) if self._reports(scope) else ()),
+                        ),
+                        tuple(final) or ("pass",),
                         sent,
                         self._scope_ports(scope),
                     )
                 )
+            elif parallel is None and self._reports(scope):
+                body = (*body, *self._exit_ack(scope))
+                early_effects += (EXIT_ACK_PORT,)
             out.append(
                 make_reaction(
                     (f"{inst}.{port}",),
-                    (effect, *declined),
+                    (*early_effects, *declined),
                     body,
                     sent,
                     self._scope_ports(scope),
@@ -2127,6 +2184,17 @@ class RosettaBuilder:
                 )
             )
         return out
+
+    def _exit_ack(self, scope: str) -> list[str]:
+        """Finish a scope's cleanup and acknowledge an outstanding request."""
+        if not self._reports(scope):
+            return []
+        return [
+            f"self.{ACTIVE_VAR} = None",
+            f"if self.{EXIT_PENDING_VAR}:",
+            f"{_PY_INDENT}{EXIT_ACK_PORT}.set(True)",
+            f"{_PY_INDENT}self.{EXIT_PENDING_VAR} = False",
+        ]
 
     def _drain_chain(
         self,
@@ -2149,7 +2217,10 @@ class RosettaBuilder:
         state's exit and the recorded transition's effect, with the
         recorded payload, then raises its exit port if it leaves the
         scope; otherwise the request came from an enclosing state, so the
-        state's exit runs and the scope acknowledges upward.
+        state's exit runs and the scope acknowledges upward. Its selection
+        slot is None while idle, () for an ancestor request, or (key,
+        payload) for a selected departure. Negative keys identify
+        descendant-escape continuations.
 
         Args:
             fact: The source state.
@@ -2164,58 +2235,57 @@ class RosettaBuilder:
             sent: Signals sent in this scope.
         """
         simple = _simple(fact.name)
-        final: list[str] = []
+        sel = f"self._{simple}_sel"
+        final = [
+            f"if {sel}:",
+            f"{_PY_INDENT}_key, _value = {sel}",
+        ]
         effects: list[str] = []
-        if fact.name in self._tracked:
-            sel = f"self._{simple}_sel"
-            final += [
-                f"if {sel} is not None:",
-                f"{_PY_INDENT}_key, _value = {sel}",
-                f"{_PY_INDENT}{sel} = None",
+        keyword = "if"
+        for target, key in self._escaping.get(fact.name, {}).items():
+            late = self._late_port(scope, target)
+            lines = [*exit_stmts]
+            if late is not None:
+                lines.append(f"{late}.set(True)")
+                effects.append(late)
+            final.append(f"{_PY_INDENT}{keyword} _key == {-key - 1}:")
+            final += [f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]]
+            keyword = "elif"
+        for key, transition in enumerate(outgoing):
+            if transition.trigger is None:
+                continue
+            features = (
+                [transition.trigger.payload_feature]
+                if isinstance(transition.trigger, SignalTrigger)
+                and transition.trigger.payload_feature is not None
+                else []
+            )
+            gen = self._make_codegen(
+                self._scope_attribute_names(scope),
+                payload_bindings=dict.fromkeys(features, "_value"),
+            )
+            exit_log = (
+                [self._observe_log("exited", simple)] if self._observe else []
+            )
+            lines = [
+                *exit_log,
+                *self._statements(fact.exit_action, gen),
+                *self._statements(transition.effect, gen),
             ]
-            keyword = "if"
-            for key, transition in enumerate(outgoing):
-                if transition.trigger is None:
-                    continue
-                features = (
-                    [transition.trigger.payload_feature]
-                    if isinstance(transition.trigger, SignalTrigger)
-                    and transition.trigger.payload_feature is not None
-                    else []
-                )
-                gen = self._make_codegen(
-                    self._scope_attribute_names(scope),
-                    payload_bindings=dict.fromkeys(features, "_value"),
-                )
-                exit_log = (
-                    [self._observe_log("exited", simple)]
-                    if self._observe
-                    else []
-                )
-                lines = [
-                    *exit_log,
-                    *self._statements(fact.exit_action, gen),
-                    *self._statements(transition.effect, gen),
-                ]
-                late = self._late_port(scope, transition.target)
-                if late is not None:
-                    lines.append(f"{late}.set(True)")
-                    effects.append(late)
-                final.append(f"{_PY_INDENT}{keyword} _key == {key}:")
-                final += [
-                    f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]
-                ]
-                keyword = "elif"
+            late = self._late_port(scope, transition.target)
+            if late is not None:
+                lines.append(f"{late}.set(True)")
+                effects.append(late)
+            final.append(f"{_PY_INDENT}{keyword} _key == {key}:")
+            final += [f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]]
+            keyword = "elif"
+        final += [
+            "else:",
+            *(f"{_PY_INDENT}{line}" for line in exit_stmts or ["pass"]),
+            f"{sel} = None",
+            *self._exit_ack(scope),
+        ]
         if self._reports(scope):
-            ancestor = [
-                *exit_stmts,
-                f"self.{ACTIVE_VAR} = None",
-                f"{EXIT_ACK_PORT}.set(True)",
-            ]
-            if final:
-                final.append("else:")
-                ancestor = [f"{_PY_INDENT}{line}" for line in ancestor]
-            final += ancestor
             effects.append(EXIT_ACK_PORT)
         chain: list[Reaction] = []
         for index, inst in enumerate(insts):
@@ -2238,7 +2308,10 @@ class RosettaBuilder:
                 make_reaction(
                     (f"{inst}.{EXIT_ACK_PORT}",),
                     step_effects,
-                    tuple(body),
+                    (
+                        f"if {sel} is not None:",
+                        *(f"{_PY_INDENT}{line}" for line in body),
+                    ),
                     sent,
                     self._scope_ports(scope),
                 )
@@ -2423,6 +2496,23 @@ class RosettaBuilder:
                 ]
                 effects.setdefault(effect, None)
                 branch.append(set_line)
+                if transition.source in self._escaping:
+                    fact = self._facts[transition.source]
+                    message = (
+                        f"{self._source_qn}: competing departures of parallel "
+                        f"state {self._display(fact)} at one tag are not supported"
+                    )
+                    branch = [
+                        f"if self.{drain.sel} is not None:",
+                        f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
+                        *branch,
+                    ]
+            if reports:
+                if drain is None:
+                    branch += self._exit_ack(scope)
+                    effects[EXIT_ACK_PORT] = None
+                else:
+                    branch.append(f'self.{ACTIVE_VAR} = ""')
             if consumed is not None:
                 flag = occurrence if reports else "True"
                 branch = [*branch, f"{consumed}.set({flag})"]
