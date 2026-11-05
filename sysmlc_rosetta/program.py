@@ -96,6 +96,8 @@ class Reactor:
 
     Reactor-level ``instantiations``/``connections`` are used by a parallel
     root machine, whose region instances live outside any mode.
+    ``trailing_reactions`` are reactor-level reactions emitted after all
+    modes, so they follow every mode reaction in LF's reaction order.
     """
 
     name: str
@@ -108,6 +110,7 @@ class Reactor:
     connections: tuple[Connection, ...] = ()
     reactions: tuple[Reaction, ...] = ()
     modes: tuple[Mode, ...] = ()
+    trailing_reactions: tuple[Reaction, ...] = ()
 
 
 @dataclass(frozen=True)

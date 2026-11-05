@@ -197,8 +197,10 @@ class RosettaBackend(Backend):
             return self.name
         reactor = artifact.reactor
         modes = len(reactor.modes)
-        reactions = len(reactor.reactions) + sum(
-            len(mode.reactions) for mode in reactor.modes
+        reactions = (
+            len(reactor.reactions)
+            + sum(len(mode.reactions) for mode in reactor.modes)
+            + len(reactor.trailing_reactions)
         )
         return (
             f"LF program {reactor.name!r}: {modes} modes, {reactions} reactions"

@@ -124,6 +124,8 @@ def _reactor_lines(reactor: Reactor) -> list[str]:
         lines.extend(_reaction_lines(reaction, depth=1))
     for mode in reactor.modes:
         lines.extend(_mode_lines(mode))
+    for reaction in reactor.trailing_reactions:
+        lines.extend(_reaction_lines(reaction, depth=1))
     lines.append("}")
     return lines
 

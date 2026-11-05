@@ -123,6 +123,7 @@ def test_tied_stop_waits_for_eventless_closure(tmp_path: Path) -> None:
         "running.auto",
         "ready.entry",
         "guard ready.entry True",
+        "ready.exit",
         "working.exit",
         "stop.effect 7",
         "stopped.entry",
@@ -141,6 +142,7 @@ def test_earlier_stop_prevents_the_child_timer(tmp_path: Path) -> None:
     marks = _run(tmp_path, "TimerStop", _stop(150, 3, ""))
     assert _labels(marks) == [
         "guard - True",
+        "warmup.exit",
         "working.exit",
         "stop.effect 3",
         "stopped.entry",
@@ -164,6 +166,7 @@ def test_false_parent_retires_the_retained_stop(tmp_path: Path) -> None:
         "ready.entry",
         "guard never False",
         "guard - True",
+        "ready.exit",
         "working.exit",
         "stop.effect 2",
         "stopped.entry",
@@ -187,6 +190,7 @@ def test_parent_time_trigger_waits_for_settlement(
         "running.auto",
         "ready.entry",
         "guard ready.entry True",
+        "ready.exit",
         effect,
         "stopped.entry",
     ]
@@ -203,6 +207,7 @@ def test_initial_change_waits_for_initial_closure(tmp_path: Path) -> None:
         "running.auto",
         "ready.entry",
         "guard ready.entry True",
+        "ready.exit",
         "when.effect",
         "stopped.entry",
     ]
