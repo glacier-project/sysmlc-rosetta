@@ -752,6 +752,82 @@ package Settlement {
             then waiting;
     }
 
+    state def EntryEnabled {
+        attribute n : Integer := 0;
+        entry; then source;
+        state source {
+            entry assign n := mark("source.entry");
+            exit assign n := mark("source.exit");
+        }
+        state automatic { entry assign n := mark("automatic.entry"); }
+        state timed { entry assign n := mark("timed.entry"); }
+        transition first source if true
+            do assign n := mark("eventless.effect") then automatic;
+        transition first source accept after 0 [s]
+            do assign n := mark("timer.effect") then timed;
+    }
+
+    state def EntryDisabled {
+        attribute n : Integer := 0;
+        entry; then source;
+        state source {
+            entry assign n := mark("source.entry");
+            exit assign n := mark("source.exit");
+        }
+        state automatic { entry assign n := mark("automatic.entry"); }
+        state timed { entry assign n := mark("timed.entry"); }
+        transition first source if false
+            do assign n := mark("eventless.effect") then automatic;
+        transition first source accept after 0 [s]
+            do assign n := mark("timer.effect") then timed;
+    }
+
+    state def FiniteSelfLoop {
+        attribute n : Integer := 0;
+        attribute cycles : Integer := 0;
+        entry; then source;
+        state source {
+            entry assign n := note("source.entry", cycles);
+            exit assign n := mark("source.exit");
+        }
+        state timed { entry assign n := note("timed.entry", cycles); }
+        transition first source if cycles < 2
+            do assign cycles := cycles + 1 then source;
+        transition first source accept after 0 [s]
+            do assign n := mark("timer.effect") then timed;
+    }
+
+    state def NestedLeaf {
+        port selfPort;
+        attribute n : Integer := 0;
+        entry; then outer;
+        state outer {
+            exit assign n := mark("outer.exit");
+            entry; then source;
+            state source {
+                entry send new Marked(n = mark("source.entry")) to selfPort;
+                exit send new Marked(n = mark("source.exit")) to selfPort;
+            }
+            state automatic {
+                entry send new Marked(n = mark("automatic.entry")) to selfPort;
+                exit send new Marked(n = mark("automatic.exit")) to selfPort;
+            }
+            state timed {
+                entry send new Marked(n = mark("timed.entry")) to selfPort;
+                exit send new Marked(n = mark("timed.exit")) to selfPort;
+            }
+            transition first source if true
+                do send new Marked(n = mark("eventless.effect")) to selfPort
+                then automatic;
+            transition first source accept after 0 [s]
+                do send new Marked(n = mark("timer.effect")) to selfPort
+                then timed;
+        }
+        state outside { entry assign n := mark("outside.entry"); }
+        transition first outer accept after 0 [s]
+            do assign n := mark("parent.effect") then outside;
+    }
+
     state def ExitSender {
         port tx;
         attribute n : Integer := 0;
