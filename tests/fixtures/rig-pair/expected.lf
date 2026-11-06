@@ -17,6 +17,8 @@ reactor Plant_working {
       current_state.set("grind")
     =}
     reaction(t_grind) -> reset(done), Done {=
+      if Done.is_present:
+          raise RuntimeError("multiple modeled events on LF port Done at the same tag; event coalescing is not supported")
       Done.set(True)
       done.set()
     =}
@@ -50,6 +52,8 @@ reactor Plant {
       current_state.set("working." + c_working.current_state.value)
     =}
     reaction(c_working.Done) -> Done {=
+      if Done.is_present:
+          raise RuntimeError("multiple modeled events on LF port Done at the same tag; event coalescing is not supported")
       Done.set(c_working.Done.value)
     =}
     reaction(c_working.completed) -> reset(idle) {=
@@ -73,6 +77,8 @@ reactor PlantTest {
       current_state.set("kicking")
     =}
     reaction(t_kicking) -> reset(waiting), Go {=
+      if Go.is_present:
+          raise RuntimeError("multiple modeled events on LF port Go at the same tag; event coalescing is not supported")
       Go.set(True)
       waiting.set()
     =}

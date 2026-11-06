@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, override
 
 import syside
@@ -54,6 +55,19 @@ if TYPE_CHECKING:
 #       -> [FeatureReferenceExpression, LiteralRational, …]
 #   FeatureReferenceExpression.referent -> AttributeUsage (qn resolved)
 # ---------------------------------------------------------------------------
+
+
+def event_write(port: str, value: str) -> tuple[str, ...]:
+    """Write one modeled event without overwriting an event at this tag."""
+    message = (
+        f"multiple modeled events on LF port {port} at the same tag; "
+        "event coalescing is not supported"
+    )
+    return (
+        f"if {port}.is_present:",
+        f"    raise RuntimeError({json.dumps(message)})",
+        f"{port}.set({value})",
+    )
 
 
 class PreambleNeeds:
@@ -407,7 +421,7 @@ class LfPythonCodeGen(PythonCodeGen):
         args = self.render_fields((field.name, field.value) for field in fields)
         payload = f"{constructor}({args})" if fields else None
         if via_port is not None:
-            return f"{event_name}.set({payload or 'True'})"
+            return "\n".join(event_write(event_name, payload or "True"))
         return (
             f"{event_name}_act.schedule(0, {payload})"
             if payload
