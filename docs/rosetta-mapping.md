@@ -214,7 +214,7 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   (see §11 for the planned mechanism).
 - An eventless self-loop with no event, timer, or effect is rejected as
   unstable.
-- **Run-to-completion / declaration-order single-fire.** When several enabled
+- **SysMLC declaration-order single-fire policy.** When several enabled
   transitions leave one state at the same logical tag (distinct signals, or a
   signal and an `after`), rosetta fires **exactly one**, chosen by **textual
   declaration order** — the first-listed outgoing transition whose trigger is
@@ -222,11 +222,38 @@ mode (the target's `entry` runs at the next tag, LF's mode-switch boundary).
   flag (cleared on mode entry) that the firing reaction sets and later
   reactions at the same tag read. A busy composite retains at most one
   occurrence, keeping its full same-signal fallback chain for settlement.
-  Splitting immediate reactions does not duplicate retention. The losing transitions are **dropped, not
-  deferred** to a next macrostep: this differs from strict run-to-completion,
-  but is equivalent for every case where the winner's target does not
-  re-handle the loser event. A state name colliding with a generated
-  `<state>_fired` flag is rejected.
+  Splitting immediate reactions does not duplicate retention. Other occurrences
+  present at that tag are not replayed into the newly entered target. Their
+  arrival preceded that target's activation under this mapping. Later
+  microsteps remain eligible even at the same numeric clock time; eligibility
+  still requires an applicable trigger and guard. This differs from Quake/Sismic,
+  whose pending events can be dispatched in the newly entered state. A state
+  name colliding with a generated `<state>_fired` flag is rejected.
+
+This ordering is a SysMLC policy, not a SysML requirement to use declaration
+order. KerML's default `earlierFirstIncomingTransferSort` orders earlier arrivals;
+it supplies no strict precedence for coincident arrivals. SysMLC applies its
+tie policy where the model's arrival constraints permit it. A shared LF tag
+does not by itself establish coincident SysML arrival snapshots or prove that
+every tie resolution satisfies the semantic-library constraints.
+
+**Non-deferring dispatch policy.** At an occurrence's first permitted evaluation,
+Rosetta considers applicable alternatives in the order above. A false guard
+does not win or prevent examination of later applicable alternatives. If none
+accepts the occurrence, Rosetta discards it. This is the supported SysMLC policy
+consistent with non-deferrable dispatch, not a SysML obligation to discard every
+unhandled input. Deferrable events and general reconsideration are unsupported.
+Models requiring memory or waiting must represent it explicitly, for example
+with a flag attribute and a guarded eventless decision at a supported execution
+point. Changing a flag alone does not introduce eventless polling: leaf
+eventless decisions are evaluated on entry.
+
+**Trigger-during assumption.** Rosetta assumes the semantic library's default
+`isTriggerDuring=true`: an accepted triggering transfer must arrive during its
+source activation. Overrides are unsupported and are not diagnosed. Models must
+respect this assumption; it is a limitation of the supported subset, not a
+validated compiler admission check. Retrying an old occurrence must not be used
+to grant eligibility in a state whose activation began after that arrival.
 
 ### Parent-sourced interruption
 
@@ -304,9 +331,24 @@ second distinct trigger arriving while one is retained, or a later event
 accepted below a state that retains an older one, stops execution with a
 runtime error instead of reordering or dropping events. This conservatively
 includes a new trigger at exactly the tag where the subtree settles. There
-is no general event queue. Repeated sends on one LF port at one tag can
-coalesce, and the arrival tags cannot distinguish or recover them, so
-lossless same-tag transport of repeated events is not provided.
+is no general event queue or multi-event deferral. A parent occurrence waiting
+for its subtree to settle is evaluated once when stability permits it.
+
+**Coalescing diagnostic.** Before each compiler-generated modeled-event port
+write, Rosetta checks the port's `is_present` flag and raises an explicit runtime
+error if it is already set at that LF tag. This includes direct routed sends,
+parent forwarding where child outputs merge, and gated child-event delivery.
+The diagnostic uses LF presence rather than additional tracking state. Status
+and lifecycle outputs such as `_busy`, `_consumed` and `current_state` are not
+modeled events and remain unguarded. Writes at later microsteps are not rejected
+merely for sharing the same clock time. Repeated schedules on a default LF
+logical action remain supported; LF assigns them successive microsteps.
+
+This diagnoses unsupported coalescing; it does not add lossless multi-occurrence
+port transport. External LF producers must protect their own writes: an
+overwrite outside the generated code cannot be detected after only its last
+value reaches Rosetta. No inbox, event-ID registry or general deferral mechanism
+is introduced.
 
 **Reentry.** Leaving and later reentering a state relies on LF's mode reset
 of child reactors, `reset state` variables, timers and suspended actions,
@@ -374,14 +416,19 @@ child reactor, and the parent's mode forwards them down
   Checks observe values when they run, so a transient true value overwritten
   before the scheduled check can be missed.
 
-**`send new Sig(...) via port`** schedules a reactor-level logical action
-`Sig_act` at the current tag (a self-event). If the machine also accepts
-`Sig`, accepting reactions trigger on `(Sig, Sig_act)` and read whichever
-is present, so external and internal events are indistinguishable. A
-signal sent in one composite scope but accepted in another is **not
+**`send new Sig(...) via port`**, when deliverable, writes the event to the
+connected LF output port, with the coalescing check above. Undeliverable routed
+sends retain the existing build warning and are dropped. A bare send or a send
+to the machine's own port schedules the reactor-level logical action `Sig_act`
+as a self-event.
+If the machine also receives `Sig`, accepting reactions trigger on
+`(Sig, Sig_act)`. When both are present, the current selector reads the input
+payload; the port-write diagnostic does not change this separate ingress
+selection limitation. A signal sent in one composite scope but accepted in
+another is **not
 currently supported** within a single machine (§11). Signals that cross
 *between* machines, in contrast, already route through ports in a composed
-build (§10). The `via` port is captured but not yet part of event identity.
+build (§10).
 
 ## 5. Attributes
 
