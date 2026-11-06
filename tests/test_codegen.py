@@ -183,7 +183,12 @@ def test_via_send_to_connected_peer_sets_output_port() -> None:
     # `send Tick via commPort` when a peer accepts Tick -> set the port only.
     send = _only_send(FIXTURES_DIR / "rig-overlap", "RigOverlap::Pulser")
     gen = LfPythonCodeGen(frozenset(), port_signals=frozenset({"Tick"}))
-    assert gen.render_action(send) == "Tick.set(True)"
+    assert gen.render_action(send) == (
+        "if Tick.is_present:\n"
+        '    raise RuntimeError("multiple modeled events on LF port Tick '
+        'at the same tag; event coalescing is not supported")\n'
+        "Tick.set(True)"
+    )
 
 
 def test_via_send_without_peer_is_dropped_and_recorded() -> None:

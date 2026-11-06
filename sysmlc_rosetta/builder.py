@@ -34,6 +34,7 @@ from sysmlc.semantics.statemachine.signals import SignalCatalog
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
+    event_write,
     files_option,
 )
 from sysmlc_rosetta.lifecycle import (
@@ -704,7 +705,10 @@ class RosettaBuilder:
                 f"{_PY_INDENT * 3}{wait} = None",
                 f"{_PY_INDENT}if {wait} is not None and not _holders:",
                 f"{_PY_INDENT * 2}{wait} = None",
-                f"{_PY_INDENT * 2}{inst}.{sig}.set(_value)",
+                *(
+                    f"{_PY_INDENT * 2}{line}"
+                    for line in event_write(f"{inst}.{sig}", "_value")
+                ),
                 f"{_PY_INDENT * 2}{inst}.{sig}_origin.set(_tag)",
             )
             triggers = (
@@ -2098,7 +2102,9 @@ class RosettaBuilder:
     def _port_reemit(self, inst: str, sig: str) -> Reaction:
         """Forward a child's ported signal out of this scope's reactor."""
         return Reaction(
-            (f"{inst}.{sig}",), (sig,), (f"{sig}.set({inst}.{sig}.value)",)
+            (f"{inst}.{sig}",),
+            (sig,),
+            event_write(sig, f"{inst}.{sig}.value"),
         )
 
     def _consumed_reemit(
@@ -2124,7 +2130,11 @@ class RosettaBuilder:
         flag = f"{sig}_consumed"
         keys = [key for key, held_flag in held if held_flag == flag]
         if pending is None or not keys:
-            return self._port_reemit(inst, flag)
+            return Reaction(
+                (f"{inst}.{flag}",),
+                (flag,),
+                (f"{flag}.set({inst}.{flag}.value)",),
+            )
         return Reaction(
             (f"{inst}.{flag}",),
             (flag,),
