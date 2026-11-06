@@ -1371,7 +1371,9 @@ class RosettaBuilder:
         if not has_order:
             # Preserve legacy grouping without complete declaration ordinals.
             signal_runs = list(signal_groups.items())
-        if all(t.declaration_order is not None for t in eventless):
+        if not has_order and all(
+            t.declaration_order is not None for t in eventless
+        ):
             eventless.sort(key=lambda t: t.declaration_order or 0)
         lifecycle = fact.kind is not StateKind.LEAF and self._reports(fact.name)
         pending = f"_{simple}_pending" if lifecycle else None
@@ -1647,7 +1649,9 @@ class RosettaBuilder:
         emitted_channels: set[str] = set()
         for signal, run in signal_runs:
             group = signal_groups[signal]
-            if all(t.declaration_order is not None for t in group):
+            if not has_order and all(
+                t.declaration_order is not None for t in group
+            ):
                 group.sort(key=lambda t: t.declaration_order or 0)
             first_run = signal not in emitted_channels
             emitted_channels.add(signal)
