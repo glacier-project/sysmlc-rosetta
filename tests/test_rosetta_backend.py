@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 import pytest
@@ -111,3 +112,62 @@ def test_summary_counts_modes_and_reactions(
     assert backend.summary(artifact) == (
         "LF program 'Machine': 2 modes, 2 reactions"
     )
+
+
+SM05_DIR = SM_EXAMPLES_DIR / "sm05-chained-references"
+CHAIN_GUARD_QN = "SM05::MachineChainGuard"  # has a composite `Point` type
+
+
+@pytest.fixture(scope="module")
+def typed_artifact(backend: RosettaBackend) -> LfProgram:
+    result = backend.build(load_model(SM05_DIR), CHAIN_GUARD_QN)
+    assert isinstance(result, LfProgram)
+    return result
+
+
+def test_generate_output_is_one_lf_file_without_types(
+    backend: RosettaBackend, artifact: LfProgram, tmp_path: Path
+) -> None:
+    output = backend.generate_output(
+        artifact, OutputOptions(output_dir=tmp_path)
+    )
+    assert [str(p) for p in output.paths] == ["Machine.lf"]
+    assert output.content(PurePosixPath("Machine.lf")).startswith(
+        "target Python\n"
+    )
+    assert list(tmp_path.iterdir()) == []  # nothing written
+
+
+def test_generate_output_adds_the_types_module(
+    backend: RosettaBackend, typed_artifact: LfProgram, tmp_path: Path
+) -> None:
+    output = backend.generate_output(
+        typed_artifact, OutputOptions(output_dir=tmp_path, basename="custom")
+    )
+    assert [str(p) for p in output.paths] == [
+        "custom.lf",
+        "MachineChainGuard_types.py",
+    ]
+    types_module = output.content(PurePosixPath("MachineChainGuard_types.py"))
+    assert "class Point:" in types_module
+    assert types_module.endswith("\n")
+
+
+def test_generate_output_rejects_unknown_format(
+    backend: RosettaBackend, artifact: LfProgram, tmp_path: Path
+) -> None:
+    with pytest.raises(SerializationError):
+        backend.generate_output(
+            artifact, OutputOptions(output_dir=tmp_path, formats=("yaml",))
+        )
+
+
+def test_write_emits_the_types_module_beside_the_program(
+    backend: RosettaBackend, typed_artifact: LfProgram, tmp_path: Path
+) -> None:
+    written = backend.write(typed_artifact, OutputOptions(output_dir=tmp_path))
+    assert written == [
+        tmp_path / "MachineChainGuard.lf",
+        tmp_path / "MachineChainGuard_types.py",
+    ]
+    assert "class Point:" in written[1].read_text()
