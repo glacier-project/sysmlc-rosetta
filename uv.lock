@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <4"
 
 [[package]]
@@ -1264,7 +1264,7 @@ wheels = [
 [[package]]
 name = "sysmlc"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#d84d722af65bc1089a5dce3906474850fafe02d7" }
+source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#2654728774281fe2d397b21c9108a0ccdc006fe5" }
 dependencies = [
     { name = "pyyaml" },
     { name = "syside" },
