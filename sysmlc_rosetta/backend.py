@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, override
 
 import syside as _syside
+from sysmlc.backends import GeneratedFile, GeneratedOutput
 from sysmlc.backends.base import Backend, OutputOptions
 from sysmlc.errors import SerializationError, UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import machine_interface
@@ -160,13 +162,26 @@ class RosettaBackend(Backend):
             return to_lf(artifact)
         raise SerializationError(f"unsupported format: {fmt!r}")
 
-    @override
-    def write(self, artifact: object, options: OutputOptions) -> list[Path]:
-        """Write the program as ``<basename>.lf`` in the output directory.
+    def generate_output(
+        self, artifact: object, options: OutputOptions
+    ) -> GeneratedOutput:
+        """Return the files :meth:`write` would write, without writing them.
 
-        The only supported format is ``"lf"``; passing any other value in
-        ``options.formats`` raises :exc:`~sysmlc.errors.SerializationError`.
-        The basename defaults to the reactor name when not supplied.
+        The program is ``<basename>.lf``, followed by its companion types
+        module ``<types_module_name>.py`` when the program has one.
+
+        Args:
+            artifact: The program returned by :meth:`build`.
+            options: The formats and the base filename; the basename
+                defaults to the reactor name. ``output_dir`` is not used.
+
+        Returns:
+            The generated files, with paths relative to the output directory.
+
+        Raises:
+            SerializationError: If ``artifact`` is not an
+                :class:`~sysmlc_rosetta.program.LfProgram`, or a format other
+                than ``"lf"`` is requested.
         """
         if not isinstance(artifact, LfProgram):
             raise SerializationError("expected an LfProgram artifact")
@@ -175,20 +190,30 @@ class RosettaBackend(Backend):
             if fmt != "lf":
                 raise SerializationError(f"unsupported format: {fmt!r}")
         basename = options.basename or artifact.reactor.name
-        options.output_dir.mkdir(parents=True, exist_ok=True)
-        path = options.output_dir / f"{basename}.lf"
-        path.write_text(self.serialize(artifact, "lf"))
-        written = [path]
-        if artifact.types_module_lines:
-            assert artifact.types_module_name is not None
-            module_path = (
-                options.output_dir / f"{artifact.types_module_name}.py"
-            )
-            module_path.write_text(
-                "\n".join(artifact.types_module_lines) + "\n"
-            )
-            written.append(module_path)
-        return written
+        program = GeneratedFile(
+            PurePosixPath(f"{basename}.lf"), self.serialize(artifact, "lf")
+        )
+        if not artifact.types_module_lines:
+            return GeneratedOutput((program,))
+        assert artifact.types_module_name is not None
+        types_module = GeneratedFile(
+            PurePosixPath(f"{artifact.types_module_name}.py"),
+            "\n".join(artifact.types_module_lines) + "\n",
+        )
+        return GeneratedOutput((program, types_module))
+
+    @override
+    def write(self, artifact: object, options: OutputOptions) -> list[Path]:
+        """Write the files from :meth:`generate_output`.
+
+        Args:
+            artifact: The program returned by :meth:`build`.
+            options: Where to write, the formats, and the base filename.
+
+        Returns:
+            The written paths: the program, then its types module if any.
+        """
+        return self.generate_output(artifact, options).write(options.output_dir)
 
     @override
     def summary(self, artifact: object) -> str:
