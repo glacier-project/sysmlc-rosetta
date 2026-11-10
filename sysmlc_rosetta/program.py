@@ -5,24 +5,30 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Parameter:
-    """A reactor parameter with its rendered Python default."""
+    """A reactor parameter with its rendered default.
+
+    ``type`` is its C type; None on the Python target.
+    """
 
     name: str
     default: str
+    type: str | None = None
 
 
 @dataclass(frozen=True)
 class StateVar:
-    """A reactor state variable with its rendered Python initializer.
+    """A reactor state variable with its rendered initializer.
 
     ``reset`` marks the variable for automatic reset on mode entry (LF
     ``reset state``).  Join-completion flags must be reset so lfc accepts
     their parent reactor when it is instantiated inside a ``reset`` mode.
+    ``type`` is its C type; None on the Python target.
     """
 
     name: str
     init: str
     reset: bool = False
+    type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,9 +41,13 @@ class Timer:
 
 @dataclass(frozen=True)
 class LogicalAction:
-    """A named logical action (reactor- or mode-level)."""
+    """A named logical action (reactor- or mode-level).
+
+    ``type`` is the C type of the value it carries, if any.
+    """
 
     name: str
+    type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,12 +68,14 @@ class Connection:
 
 @dataclass(frozen=True)
 class Reaction:
-    """One LF reaction: triggers, effects, Python body lines and sources.
+    """One LF reaction: triggers, effects, body and sources.
 
     ``triggers``, ``effects`` and ``sources`` are rendered LF identifiers
     (``"startup"``, ``"Tick"``, ``"reset(running)"``); ``body`` holds
-    unindented Python lines, including nested indentation. ``sources`` are
-    non-triggering port dependencies.
+    unindented lines of the target language, including nested indentation.
+    ``sources`` are non-triggering port dependencies. While rosetta builds
+    a program, ``body`` holds a statement tree instead (see
+    :func:`sysmlc_rosetta.statements.stored`).
     """
 
     triggers: tuple[str, ...]
@@ -98,6 +110,9 @@ class Reactor:
     root machine, whose region instances live outside any mode.
     ``trailing_reactions`` are reactor-level reactions emitted after all
     modes, so they follow every mode reaction in LF's reaction order.
+    ``port_types`` gives each input and output its C type; empty on the
+    Python target, whose ports are untyped. Ports are names elsewhere in the
+    program, so their types sit beside them rather than on a port object.
     """
 
     name: str
@@ -111,6 +126,7 @@ class Reactor:
     reactions: tuple[Reaction, ...] = ()
     modes: tuple[Mode, ...] = ()
     trailing_reactions: tuple[Reaction, ...] = ()
+    port_types: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,13 +170,15 @@ class LfProgram:
     ``reactors`` holds child reactor classes first and the machine reactor
     last (lfc wants definitions before use). When ``main`` is None the trivial
     main instantiates the last reactor; otherwise the explicit ``MainReactor``
-    is rendered. ``preamble`` holds Python preamble lines (imports/helpers);
+    is rendered. ``preamble`` holds the target language's preamble lines;
     empty means no preamble block is emitted. ``target_options`` populate the
-    ``target Python { ... }`` header (run config); empty -> bare ``target
-    Python``. ``types_module_name`` and ``types_module_lines`` describe the
-    companion ``<basename>_types.py`` module written beside the ``.lf``.
+    ``target <Name> { ... }`` header (run config); empty -> a bare ``target``
+    line. ``types_module_name`` and ``types_module_lines`` describe the
+    Python target's companion ``<basename>_types.py`` module.
     ``constraints`` preserves source identities carried by generated
-    assertion diagnostics.
+    assertion diagnostics. ``target`` is the LF target language, and
+    ``support_files`` the C target's companion files as ``(file name,
+    content)``.
     """
 
     reactors: tuple[Reactor, ...]
@@ -172,6 +190,8 @@ class LfProgram:
     constraints: tuple[LfConstraint, ...] = ()
     signal_channels: tuple[tuple[str, str], ...] = ()
     signal_aliases: tuple[tuple[str, str], ...] = ()
+    target: str = "python"
+    support_files: tuple[tuple[str, str], ...] = ()
 
     def resolve_signal(self, name: str) -> str:
         """Resolve a qualified input name or an unambiguous simple name.

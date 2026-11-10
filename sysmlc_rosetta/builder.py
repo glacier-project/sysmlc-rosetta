@@ -7,10 +7,7 @@ from typing import TYPE_CHECKING
 
 import syside
 from sysmlc.codegen.python import payload_signature
-from sysmlc.codegen.structured import (
-    constructed_payload_definition,
-    register_dataclass,
-)
+from sysmlc.codegen.structured import constructed_payload_definition
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine import actions, transitions
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
@@ -31,22 +28,20 @@ from sysmlc.semantics.statemachine.facts import (
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
 
+from sysmlc_rosetta.c_codegen import LfCCodeGen
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
-    event_write,
-    files_option,
 )
 from sysmlc_rosetta.lifecycle import (
-    _ARRIVAL,
-    _CONTINUATION,
-    _PY_INDENT,
     ACTIVE_VAR,
     BUSY_PORT,
+    COMPLETED_PORT,
     ENTRY_ORDER_PORT,
     EXIT_ACK_PORT,
     EXIT_PENDING_VAR,
     EXIT_REQUEST_PORT,
+    OUTPUT_PORT,
     SETTLED_PORT,
     busy_condition,
     declining,
@@ -54,7 +49,6 @@ from sysmlc_rosetta.lifecycle import (
     lifecycle_reaction,
     make_reaction,
     overtaking,
-    report_busy,
     retain,
     when_due,
 )
@@ -72,16 +66,31 @@ from sysmlc_rosetta.program import (
     Timer,
 )
 from sysmlc_rosetta.serialize import render_duration
+from sysmlc_rosetta.statements import (
+    If,
+    Pass,
+    assigns,
+    insert_after_assignments,
+    nest,
+    stored,
+)
+from sysmlc_rosetta.targets.base import CLEANUP
 
 if TYPE_CHECKING:
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
+    from sysmlc_rosetta.statements import Body, Node
+    from sysmlc_rosetta.targets.base import LfTarget
+
 logger = logging.getLogger(__name__)
 
-OUTPUT_PORT = "current_state"
-COMPLETED_PORT = "completed"
 DONE_MODE = "done"
 CHANGE_ACT = "_change_act"
+type LfCodeGen = LfPythonCodeGen | LfCCodeGen
+_CODEGENS: dict[str, type[LfCodeGen]] = {
+    "python": LfPythonCodeGen,
+    "c": LfCCodeGen,
+}
 
 
 def _scope_of(path: str) -> str:
@@ -190,8 +199,8 @@ class RosettaBuilder:
             peer_accepts: Signals a peer machine accepts; a send of one of
                 these becomes an LF output port instead of a self-event.
             needs: A shared preamble registry, or ``None`` for a fresh one.
-            observe: When True, inject ``logging.debug`` on each state's
-                entry and exit (opt-in; the part assembler sets it). Off by
+            observe: When True, log each state's entry and exit at debug
+                level (opt-in; the part assembler sets it). Off by
                 default, so existing build paths emit byte-identical output.
             source_qn: Qualified name of the original SysML state definition.
                 Defaults to the reactor name for manually supplied facts.
@@ -202,14 +211,16 @@ class RosettaBuilder:
         self._observe = observe
         self._constraints: list[ConstraintFact] = []
         self._needs = needs if needs is not None else PreambleNeeds()
+        self._target: LfTarget = self._needs.target
         self._finalize_types = self._needs.types_module is None
         if self._finalize_types:
             self._needs.types_module = f"{name}_types"
-        self._init_codegen = LfPythonCodeGen(
+        self._codegen_type = _CODEGENS[self._target.name]
+        self._init_codegen = self._codegen_type(
             frozenset(), needs=self._needs, self_prefix=False
         )
         # Re-created in result() once the bound attribute names are known.
-        self._codegen = LfPythonCodeGen(frozenset(), needs=self._needs)
+        self._codegen = self._codegen_type(frozenset(), needs=self._needs)
         self._attributes: list[AttributeBinding] = []
         self._attribute_names: frozenset[str] = frozenset()
         self._has_when: bool = False
@@ -223,7 +234,7 @@ class RosettaBuilder:
         self._handled: dict[str, set[str]] = {}
         self._sent_by_scope: dict[str, dict[str, None]] = {}
         # scope -> signals with a self-directed (no-`via`) send in that
-        #   scope; exactly the signals whose `<sig>_act` render_send
+        #   scope; exactly the signals whose `<sig>_act` a send
         #   schedules.
         self._self_sched_by_scope: dict[str, set[str]] = {}
         # scope -> signals whose {sig}_consumed flag this scope's reactor
@@ -249,7 +260,7 @@ class RosettaBuilder:
         #   identity-equal to _port_sigs today (named separately because
         #   use sites read "interface rule" vs "codegen rule").
         self._omitted_inputs: frozenset[str] = frozenset()
-        self._root_exit: list[str] = []
+        self._root_exit: Body = ()
         # Populated during assembly:
         self._exit_ports: dict[str, dict[str, str]] = {}
         self._deferred: set[tuple[str, str]] = set()
@@ -362,8 +373,10 @@ class RosettaBuilder:
             )
         )
         program = LfProgram(
-            reactors=tuple(self._reactors),
-            preamble=tuple(self._needs.preamble_lines()),
+            reactors=tuple(
+                render_reactor(self._target.declare(reactor), self._target)
+                for reactor in self._reactors
+            ),
             constraints=tuple(
                 constraint
                 for constraint in self._needs.constraints.values()
@@ -377,13 +390,13 @@ class RosettaBuilder:
     def _with_constraint_checks(self, machine: Reactor) -> Reactor:
         """Weave asserted-constraint checks into the machine reactor.
 
-        Each root-scope ``assert constraint`` renders as a Python ``assert``
+        Each root-scope ``assert constraint`` renders as the target's check
         placed (1) in a dedicated startup reaction — so a bad initial (or
         overridden) value aborts immediately — and (2) at the end of every
         reaction body that assigns to a bound attribute. The negated form
-        ``assert not constraint`` asserts ``not (<expr>)``.
+        ``assert not constraint`` checks the negated expression.
         """
-        checks: list[str] = []
+        checks: list[Node] = []
         for index, fact in enumerate(self._constraints):
             constraint = LfConstraint(
                 self._name, index, fact.scope, fact.name, self._source_qn
@@ -394,22 +407,18 @@ class RosettaBuilder:
             )
             rendered = self._codegen.render_expression(fact.expression)
             if fact.is_negated:
-                rendered = f"not ({rendered})"
-            checks.append(f"assert {rendered}, {json.dumps(message)}")
+                rendered = self._target.negate(rendered)
+            checks.append(self._target.check(rendered, message))
         if not checks:
             return machine
-        markers = tuple(f"self.{name} = " for name in self._attribute_names)
 
         def patched(reaction: Reaction) -> Reaction:
-            mutates = any(
-                marker in line for line in reaction.body for marker in markers
-            )
-            if not mutates:
+            if not assigns(reaction.body) & self._attribute_names:
                 return reaction
-            return replace(reaction, body=(*reaction.body, *checks))
+            return replace(reaction, body=stored((*reaction.body, *checks)))
 
         reactions = tuple(patched(r) for r in machine.reactions)
-        reactions += (Reaction(("startup",), (), tuple(checks)),)
+        reactions += (Reaction(("startup",), (), stored(tuple(checks))),)
         modes = tuple(
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
@@ -437,24 +446,18 @@ class RosettaBuilder:
         """
         if not self._has_when:
             return machine
-        markers = tuple(f"self.{name} = " for name in self._attribute_names)
-        notify = f"{CHANGE_ACT}.schedule(0)"
+        notify = self._target.schedule(CHANGE_ACT)
 
         def patched(reaction: Reaction) -> Reaction:
-            new_body: list[str] = []
-            changed = False
-            for line in reaction.body:
-                new_body.append(line)
-                if any(marker in line for marker in markers):
-                    indent = line[: len(line) - len(line.lstrip())]
-                    new_body.append(f"{indent}{notify}")
-                    changed = True
+            new_body, changed = insert_after_assignments(
+                reaction.body, self._attribute_names, notify
+            )
             if not changed:
                 return reaction
             return replace(
                 reaction,
                 effects=tuple(dict.fromkeys((*reaction.effects, CHANGE_ACT))),
-                body=tuple(new_body),
+                body=stored(new_body),
             )
 
         reactions = tuple(patched(r) for r in machine.reactions)
@@ -525,7 +528,8 @@ class RosettaBuilder:
             if self._needs.catalog is not None:
                 definition = self._needs.catalog.definition_for(signal)
                 assert isinstance(definition, syside.Definition)
-                self._register_dataclass(definition)
+                self._register_definition(definition)
+                self._target.register_signal(signal, definition)
             src_scope = _scope_of(t.source)
             self._handled.setdefault(src_scope, set()).add(signal)
             for scope in _enclosing(src_scope):
@@ -670,46 +674,28 @@ class RosettaBuilder:
                     connections.append(Connection(origin, f"{inst}.{origin}"))
                 continue
             earlier = names[: names.index(region.name)]
-            ports = ", ".join(
-                f'("c_{_simple(name)}", c_{_simple(name)}.{sig}_consumed)'
-                for name in earlier
-            )
             wait = (
-                f"self._{_simple(key) or 'root'}_{_simple(region.name)}"
-                f"_{sig}_wait"
+                f"_{_simple(key) or 'root'}_{_simple(region.name)}_{sig}_wait"
             )
-            state.append(StateVar(wait[5:], "None", reset=scope != ""))
-            arrival = self._arrival(scope, sig)
+            state += self._target.state_vars(
+                wait,
+                "wait",
+                reset=scope != "",
+                insts=[f"c_{_simple(name)}" for name in earlier],
+            )
             message = (
                 f"{self._source_qn}: signal {sig} arrived while an earlier "
                 f"occurrence waits for region "
                 f"{region.name.replace('::', '.')}; overlapping retained "
                 "events are not supported"
             )
-            body = (
-                f"if {sig}.is_present:",
-                f"{_PY_INDENT}if {wait} is not None:",
-                f"{_PY_INDENT * 2}raise RuntimeError({json.dumps(message)})",
-                f"{_PY_INDENT}{wait} = [{sig}.value, {arrival}, set()]",
-                f"if {wait} is not None:",
-                f"{_PY_INDENT}_value, _tag, _holders = {wait}",
-                f"{_PY_INDENT}for _name, _port in ({ports},):",
-                f"{_PY_INDENT * 2}if not _port.is_present:",
-                f"{_PY_INDENT * 3}continue",
-                f"{_PY_INDENT * 2}if _port.value is None:",
-                f"{_PY_INDENT * 3}_holders.add(_name)",
-                f"{_PY_INDENT * 2}elif _port.value is False:",
-                f"{_PY_INDENT * 3}_holders.discard(_name)",
-                f"{_PY_INDENT * 2}elif _port.value is True or "
-                "_port.value == _tag:",
-                f"{_PY_INDENT * 3}{wait} = None",
-                f"{_PY_INDENT}if {wait} is not None and not _holders:",
-                f"{_PY_INDENT * 2}{wait} = None",
-                *(
-                    f"{_PY_INDENT * 2}{line}"
-                    for line in event_write(f"{inst}.{sig}", "_value")
-                ),
-                f"{_PY_INDENT * 2}{inst}.{sig}_origin.set(_tag)",
+            body = self._target.region_gate(
+                sig=sig,
+                wait=wait,
+                inst=inst,
+                earlier=[f"c_{_simple(name)}" for name in earlier],
+                arrival=self._arrival(scope, sig),
+                message=message,
             )
             triggers = (
                 sig,
@@ -720,7 +706,7 @@ class RosettaBuilder:
                 Reaction(
                     triggers,
                     (f"{inst}.{sig}", f"{inst}.{sig}_origin"),
-                    body,
+                    stored(body),
                     sources,
                 )
             )
@@ -733,10 +719,8 @@ class RosettaBuilder:
         the scope's ``{sig}_origin`` input; otherwise it arrives now.
         """
         if (scope, sig) not in self._origin:
-            return _ARRIVAL
-        return (
-            f"({sig}_origin.value if {sig}_origin.is_present else {_ARRIVAL})"
-        )
+            return self._target.arrival()
+        return self._target.value_or(f"{sig}_origin", self._target.arrival())
 
     def _slot_scope(self, fact: StateFact) -> str:
         """The scope whose reactor executes a state's own action slots.
@@ -793,7 +777,8 @@ class RosettaBuilder:
                 # class, including attribute-less signal markers.
                 definition = constructed_payload_definition(action)
                 if definition is not None:
-                    self._register_dataclass(definition)
+                    self._register_definition(definition)
+                self._target.register_signal(event_name, definition)
         for scope, sent in self._sent_by_scope.items():
             for sig in sent:
                 for other, handled in self._handled.items():
@@ -831,13 +816,15 @@ class RosettaBuilder:
         state_vars: list[StateVar] = []
         for binding in self._attributes:
             rendered = self._render_value(binding.value)
+            declared = self._target.attribute_type(binding)
+            ctype = None if declared is None else declared[0]
             if binding.direction is AttributeDirection.IN:
                 if rendered is None:
                     raise UnsupportedConstructError(
                         f"`in` attribute {binding.name!r} has no default "
                         "value; LF reactor parameters require one."
                     )
-                parameters.append(Parameter(binding.name, rendered))
+                parameters.append(Parameter(binding.name, rendered, ctype))
             elif binding.direction is AttributeDirection.OUT:
                 raise UnsupportedConstructError(
                     f"`out` attribute {binding.name!r} cannot be mapped; "
@@ -845,26 +832,30 @@ class RosettaBuilder:
                     "directed attributes. Drop the direction keyword."
                 )
             elif rendered is not None:
-                state_vars.append(StateVar(binding.name, rendered))
+                state_vars.append(StateVar(binding.name, rendered, type=ctype))
+            elif declared is not None:
+                # A typed language declares an attribute even without a
+                # value.
+                state_vars.append(
+                    StateVar(binding.name, declared[1], type=ctype)
+                )
         return parameters, state_vars
 
-    def _register_dataclass(self, definition: syside.Definition) -> None:
-        """Register ``definition`` on the shared dataclass registry.
+    def _register_definition(self, definition: syside.Definition) -> None:
+        """Make a payload or structured attribute type available.
 
         Initial values render with the init codegen (``self_prefix=False``):
         a field default executes at import time, outside any reaction.
         """
-        register_dataclass(
-            definition,
-            self._needs.dataclasses,
-            self._init_codegen.render_expression,
+        self._target.register_definition(
+            definition, self._needs, self._init_codegen.render_expression
         )
 
     def _render_value(self, value: AttributeValue) -> str | None:
         # Initial values render with the init codegen (self_prefix=False):
         # they execute outside a reaction, where `self.<attr>` does not
         # exist.
-        return self._init_codegen.render_value(value, self._register_dataclass)
+        return self._init_codegen.render_value(value, self._register_definition)
 
     # -- scope assembly --
 
@@ -876,9 +867,9 @@ class RosettaBuilder:
         attribute_names: frozenset[str],
         local_names: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
-    ) -> LfPythonCodeGen:
+    ) -> LfCodeGen:
         """Build a peer-aware code generator sharing the preamble registry."""
-        return LfPythonCodeGen(
+        return self._codegen_type(
             attribute_names,
             needs=self._needs,
             port_signals=self._port_sigs,
@@ -886,7 +877,7 @@ class RosettaBuilder:
             payload_bindings=payload_bindings,
         )
 
-    def _scope_codegen(self, scope: str) -> LfPythonCodeGen:
+    def _scope_codegen(self, scope: str) -> LfCodeGen:
         """The expression codegen for a scope's reaction bodies.
 
         Child scopes see NO attribute names: substate guards/actions
@@ -924,7 +915,7 @@ class RosettaBuilder:
             if (scope, sig) in self._origin
         ]
         extra_state: list[StateVar] = []
-        exits: list[tuple[str, list[str], tuple[str, ...]]] = []
+        exits: list[tuple[str, Body, tuple[str, ...]]] = []
         tail = _Trailing()
         modes = [
             self._child_mode(
@@ -948,10 +939,14 @@ class RosettaBuilder:
         if self._reports(scope):
             inputs.append(EXIT_REQUEST_PORT)
             extra_state += [
-                StateVar(ACTIVE_VAR, "None", reset=True),
-                StateVar(EXIT_PENDING_VAR, "False", reset=True),
+                *self._target.state_vars(ACTIVE_VAR, "active", reset=True),
+                *self._target.state_vars(EXIT_PENDING_VAR, "flag", reset=True),
             ]
-            handler.append(exit_handler(exits, sent, self._scope_ports(scope)))
+            handler.append(
+                exit_handler(
+                    self._target, exits, sent, self._scope_ports(scope)
+                )
+            )
         ported = tuple(self._exported.get(scope, {}))
         consumed = tuple(
             f"{sig}_consumed" for sig in self._consumed.get(scope, {})
@@ -1071,7 +1066,8 @@ class RosettaBuilder:
             flags.append(f"{r_simple}_done")
         # Gates precede consumption readers to avoid LF causality cycles.
         reactions[:0] = root_gates
-        join_body: list[str] = []
+        lang = self._target
+        join_body: list[Node] = []
         completing_regions = [
             region for region in regions if region.name in self._needs_done
         ]
@@ -1081,17 +1077,18 @@ class RosettaBuilder:
             if region.name not in self._needs_done:
                 continue
             inst = f"c_{_simple(region.name)}"
-            join_body.append(f"if {inst}.{COMPLETED_PORT}.is_present:")
-            join_body += [
-                f"{_PY_INDENT}{line}"
-                for line in (*region_exit, f"self.{flag} = True")
-            ]
-        condition = " and ".join(f"self.{flag}" for flag in flags)
-        join_body.append(f"if {condition}:")
-        join_body += [
-            f"{_PY_INDENT}{line}"
-            for line in (*self._root_exit, "request_stop()")
-        ]
+            join_body.append(
+                nest(
+                    lang.is_present(f"{inst}.{COMPLETED_PORT}"),
+                    (*region_exit, lang.set_flag(flag, True)),
+                )
+            )
+        join_body.append(
+            nest(
+                lang.all_of([lang.var(flag) for flag in flags]),
+                (*self._root_exit, lang.request_stop()),
+            )
+        )
         # Unwritten LF ports cannot be read by Python reactions. Keep the
         # missing region's flag false so a partial completion cannot join.
         if completing_regions:
@@ -1108,7 +1105,11 @@ class RosettaBuilder:
                 )
             )
         parameters, state_vars = self._attribute_split()
-        state_vars += [StateVar(flag, "False", reset=True) for flag in flags]
+        state_vars += [
+            var
+            for flag in flags
+            for var in self._target.state_vars(flag, "flag", reset=True)
+        ]
         state_vars += root_gate_state
         self._check_state_names("", regions, sent, root_gate_state)
         ported = tuple(self._exported.get("", {}))
@@ -1305,10 +1306,10 @@ class RosettaBuilder:
 
     # -- mode assembly --
 
-    def _observe_log(self, verb: str, simple: str) -> str:
+    def _observe_log(self, verb: str, simple: str) -> Node:
         """An entry/exit DEBUG log line; flags the preamble for ``logging``."""
         self._needs.uses_logging = True
-        return f'logging.debug("{verb} {self._name}.{simple}")'
+        return self._target.log(f"{verb} {self._name}.{simple}")
 
     def _child_mode(
         self,
@@ -1316,15 +1317,15 @@ class RosettaBuilder:
         scope: str,
         container: StateFact,
         sent: list[str],
-        gen: LfPythonCodeGen,
+        gen: LfCodeGen,
         extra_state: list[StateVar],
-        exits: list[tuple[str, list[str], tuple[str, ...]]],
+        exits: list[tuple[str, Body, tuple[str, ...]]],
         tail: _Trailing,
     ) -> Mode:
         """Translate one state of ``scope`` into a mode of its reactor.
 
         In a reporting scope the mode also contributes its forced-exit
-        lines to ``exits`` (the scope's exit-request handler); a
+        statements to ``exits`` (the scope's exit-request handler); a
         composite/parallel state below a tracked state adds to ``tail``
         the reactions that drain its children on departure, the late
         resolutions of deferred exit ports and its cleanup-dependent
@@ -1400,9 +1401,10 @@ class RosettaBuilder:
                 {id(t): i for i, t in enumerate(outgoing)},
             )
         )
-        occurrence = "_tag" if lifecycle else _ARRIVAL
-        overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ())
-        retained: list[tuple[int, list[str], tuple[str, ...]]] = []
+        lang = self._target
+        occurrence = lang.tag() if lifecycle else lang.arrival()
+        overtaking: tuple[tuple[Node, ...], tuple[str, ...]] = ((), ())
+        retained: list[tuple[int, Body, tuple[str, ...]]] = []
         consumed_sources: list[tuple[int, tuple[str, ...]]] = []
         held: list[tuple[int, str]] = []
 
@@ -1413,37 +1415,37 @@ class RosettaBuilder:
         exit_log = (
             [self._observe_log("exited", simple)] if self._observe else []
         )
-        exit_stmts = [*exit_log, *self._statements(fact.exit_action, gen)]
+        exit_stmts: Body = (*exit_log, *self._statements(fact.exit_action, gen))
         timers: list[Timer] = []
         mode_actions: list[LogicalAction] = []
         reactions: list[Reaction] = []
-        entry_body = [f'{OUTPUT_PORT}.set("{simple}")']
+        entry_body: list[Node] = [
+            lang.announce(simple, scope.replace("::", "."))
+        ]
         entry_effects = [OUTPUT_PORT]
         if self._observe:
             entry_body.insert(0, self._observe_log("entered", simple))
         if self._reports(scope):
-            entry_body.append(f'self.{ACTIVE_VAR} = "{simple}"')
+            entry_body.append(lang.set_active(simple))
             if fact.kind is StateKind.LEAF:
-                forced = [
-                    *exit_stmts,
-                    *self._exit_ack(scope),
-                ]
+                forced = (*exit_stmts, *self._exit_ack(scope))
                 exits.append((simple, forced, (EXIT_ACK_PORT,)))
             else:
                 request = f"{insts[0]}.{EXIT_REQUEST_PORT}"
+                assert sel is not None
                 exits.append(
                     (
                         simple,
-                        [
-                            f"self.{sel} = ()",
-                            f'self.{ACTIVE_VAR} = ""',
-                            f"{request}.set(True)",
-                        ],
+                        (
+                            lang.sel_ancestor(sel),
+                            lang.set_active(CLEANUP),
+                            lang.set_port(request, lang.boolean(True)),
+                        ),
                         (request,),
                     )
                 )
         if self._reports(scope):
-            entry_body.append(f"self.{EXIT_PENDING_VAR} = False")
+            entry_body.append(lang.set_flag(EXIT_PENDING_VAR, False))
         entry_body += self._statements(fact.entry_action, gen)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
@@ -1462,7 +1464,9 @@ class RosettaBuilder:
             # Child-scope reactors are instantiated inside a parent `reset`
             # mode; lfc 0.11 requires their state vars be `reset state` (the
             # join-flag rule). Root-scope ("") flags stay plain `state`.
-            extra_state.append(StateVar(fired_flag, "False", reset=scope != ""))
+            extra_state += lang.state_vars(
+                fired_flag, "flag", reset=scope != ""
+            )
         pos = {id(t): i for i, t in enumerate(outgoing)}
         ordered: list[tuple[int, Reaction]] = []
 
@@ -1486,7 +1490,12 @@ class RosettaBuilder:
                 key = pos[id(transition)]
                 retained.append((key, body, targets))
                 body = self._retain(
-                    body, key, "None", fact, insts, "an after trigger"
+                    body,
+                    key,
+                    lang.no_payload(),
+                    fact,
+                    insts,
+                    "an after trigger",
                 )
             if isinstance(after, float):
                 trigger_name = (
@@ -1503,29 +1512,24 @@ class RosettaBuilder:
                 )
                 mode_actions.append(LogicalAction(trigger_name))
                 delay = gen.render_expression(after)
-                entry_body.append(f"_after_ns = int(({delay}) * 1e9)")
-                entry_body.append(f"{trigger_name}.schedule(_after_ns)")
+                entry_body.append(lang.bind_after(lang.seconds_to_ns(delay)))
+                entry_body.append(lang.schedule(trigger_name, "_after_ns"))
                 delay_ns = "_after_ns"
                 entry_effects.append(trigger_name)
             if self._is_reentered(fact):
                 due = f"_{trigger_name}_due"
-                extra_state.append(StateVar(due, "None", reset=scope != ""))
-                entry_body.append(
-                    f"self.{due} = lf.time.logical_elapsed() + {delay_ns}"
-                )
-                body = when_due(due, body)
+                extra_state += lang.state_vars(due, "due", reset=scope != "")
+                entry_body.append(lang.arm_due(due, delay_ns))
+                body = when_due(lang, due, body)
             if fired_flag is not None:
-                body = [
-                    f"if not self.{fired_flag}:",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                body = (nest(lang.not_var(fired_flag), body),)
             ordered.append(
                 (
                     pos[id(transition)],
                     make_reaction(
                         (trigger_name,),
                         targets,
-                        tuple(body),
+                        body,
                         sent,
                         self._scope_ports(scope),
                         sources=busy_sources,
@@ -1545,20 +1549,19 @@ class RosettaBuilder:
             if isinstance(instant, float):
                 instant_ns = str(round(instant * 1e9))
             else:
-                instant_ns = f"int(({gen.render_expression(instant)}) * 1e9)"
+                instant_ns = lang.seconds_to_ns(gen.render_expression(instant))
+            entry_body.append(lang.bind_at_delta(instant_ns))
             entry_body.append(
-                f"_at_delta = {instant_ns} - lf.time.logical_elapsed()"
+                nest(
+                    lang.at_delta_reached(),
+                    (lang.schedule(action_name, "_at_delta"),),
+                )
             )
-            entry_body.append("if _at_delta >= 0:")
-            entry_body.append(f"{_PY_INDENT}{action_name}.schedule(_at_delta)")
             entry_effects.append(action_name)
             due = f"_{action_name}_due" if self._is_reentered(fact) else None
             if due is not None:
-                extra_state.append(StateVar(due, "None", reset=scope != ""))
-                entry_body.append(
-                    f"self.{due} = lf.time.logical_elapsed() + _at_delta "
-                    "if _at_delta >= 0 else None"
-                )
+                extra_state += lang.state_vars(due, "due", reset=scope != "")
+                entry_body.append(lang.arm_at_due(due))
             body, targets = self._dispatch(
                 [transition],
                 exit_stmts,
@@ -1573,22 +1576,19 @@ class RosettaBuilder:
                 key = pos[id(transition)]
                 retained.append((key, body, targets))
                 body = self._retain(
-                    body, key, "None", fact, insts, "an at trigger"
+                    body, key, lang.no_payload(), fact, insts, "an at trigger"
                 )
             if due is not None:
-                body = when_due(due, body)
+                body = when_due(lang, due, body)
             if fired_flag is not None:
-                body = [
-                    f"if not self.{fired_flag}:",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                body = (nest(lang.not_var(fired_flag), body),)
             ordered.append(
                 (
                     pos[id(transition)],
                     make_reaction(
                         (action_name,),
                         targets,
-                        tuple(body),
+                        body,
                         sent,
                         self._scope_ports(scope),
                         sources=busy_sources,
@@ -1597,7 +1597,7 @@ class RosettaBuilder:
             )
 
         if whens:
-            entry_body.append(f"{CHANGE_ACT}.schedule(0)")
+            entry_body.append(lang.schedule(CHANGE_ACT))
             entry_effects.append(CHANGE_ACT)
         for index, transition in enumerate(whens):
             assert isinstance(transition.trigger, WhenTrigger)
@@ -1606,8 +1606,8 @@ class RosettaBuilder:
                 if len(whens) == 1
                 else f"{simple}_w{index}_armed"
             )
-            extra_state.append(StateVar(armed, "False", reset=scope != ""))
-            entry_body.append(f"self.{armed} = False")
+            extra_state += lang.state_vars(armed, "flag", reset=scope != "")
+            entry_body.append(lang.set_flag(armed, False))
             cond = gen.render_expression(transition.trigger.condition)
             inner, targets = self._dispatch(
                 [transition],
@@ -1623,19 +1623,26 @@ class RosettaBuilder:
                 key = pos[id(transition)]
                 retained.append((key, inner, targets))
                 inner = self._retain(
-                    inner, key, "None", fact, insts, "a change trigger"
+                    inner,
+                    key,
+                    lang.no_payload(),
+                    fact,
+                    insts,
+                    "a change trigger",
                 )
-            body = [
-                f"if not self.{armed}:",
-                f"{_PY_INDENT}if ({cond}):",
-                f"{_PY_INDENT}{_PY_INDENT}self.{armed} = True",
-                *(f"{_PY_INDENT}{_PY_INDENT}{line}" for line in inner),
-            ]
+            body = (
+                nest(
+                    lang.not_var(armed),
+                    (
+                        nest(
+                            lang.grouped(cond),
+                            (lang.set_flag(armed, True), *inner),
+                        ),
+                    ),
+                ),
+            )
             if fired_flag is not None:
-                body = [
-                    f"if not self.{fired_flag}:",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                body = (nest(lang.not_var(fired_flag), body),)
             ordered.append(
                 (
                     pos[id(transition)],
@@ -1686,37 +1693,36 @@ class RosettaBuilder:
                 )
                 continue
             triggers = tuple(trig)
-            prelude: list[str] = []
+            prelude: list[Node] = []
             group_gen = gen
             if is_input and is_self_sched:
-                value = (
-                    f"({signal}.value if {signal}.is_present "
-                    f"else {signal}_act.value)"
-                )
+                value = lang.value_or(signal, lang.value(f"{signal}_act"))
             elif is_input:
-                value = f"{signal}.value"
+                value = lang.value(signal)
             else:
-                value = f"{signal}_act.value"
-            payload = "None"
+                value = lang.value(f"{signal}_act")
+            payload = lang.no_payload()
             features = [
                 t.trigger.payload_feature
                 for t in group
                 if isinstance(t.trigger, SignalTrigger)
                 and t.trigger.payload_feature is not None
             ]
+            payload_signal: str | None = None
             if pending is not None and features:
-                prelude.append(f"_value = {value}")
+                prelude += lang.bind_value(value, signal)
                 payload = value = "_value"
+                payload_signal = signal
             bindings = dict.fromkeys(features, value)
             if bindings:
                 group_gen = self._make_codegen(
                     self._scope_attribute_names(scope),
                     payload_bindings=bindings,
                 )
-            group_exit = [
+            group_exit: Body = (
                 *exit_log,
                 *self._statements(fact.exit_action, group_gen),
-            ]
+            )
             consumed_flag = (
                 f"{signal}_consumed"
                 if signal in self._consumed.get(scope, {})
@@ -1733,6 +1739,7 @@ class RosettaBuilder:
                 occurrence=self._arrival(scope, signal),
                 drain=drain,
                 payload=payload,
+                signal=payload_signal,
             )
             key = min(pos[id(t)] for t in group)
             capture_key = capture_keys[signal]
@@ -1746,10 +1753,16 @@ class RosettaBuilder:
                         consumed=consumed_flag,
                         fired=fired_flag,
                         departing=pending,
-                        occurrence="_tag",
+                        occurrence=lang.tag(),
                         drain=drain,
                         payload=payload,
+                        signal=payload_signal,
                     )
+                    if payload_signal is not None:
+                        retained_body = (
+                            *lang.unpack_value((payload_signal,)),
+                            *retained_body,
+                        )
                     retained.append(
                         (capture_key, retained_body, retained_targets)
                     )
@@ -1764,53 +1777,58 @@ class RosettaBuilder:
                         f"signal {signal}",
                         consumed_flag,
                         self._arrival(scope, signal),
+                        payload_signal,
                     )
                 else:
-                    body = [
-                        f"if not ({busy_condition(simple, insts)}):",
-                        *(f"{_PY_INDENT}{line}" for line in body),
-                    ]
-                body = [*prelude, *body]
+                    body = (
+                        nest(
+                            lang.negate(busy_condition(lang, simple, insts)),
+                            body,
+                        ),
+                    )
+                body = (*prelude, *body)
                 prelude = []
             guard_srcs = self._interrupt_guard_sources(fact, signal)
             if guard_srcs and pending is not None and first_run:
                 consumed_sources.append((capture_key, guard_srcs))
             if guard_srcs:
-                cond = " or ".join(
-                    f"({src}.is_present and {src}.value not in (None, False))"
-                    for src in guard_srcs
+                cond = lang.any_of(
+                    [lang.consumption_decided(src) for src in guard_srcs]
                 )
-                arrived = " or ".join(f"{t}.is_present" for t in triggers)
-                body = [
-                    f"if ({arrived}) and not ({cond}):",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                arrived = lang.any_of(
+                    [lang.is_present(name) for name in triggers]
+                )
+                body = (
+                    nest(
+                        lang.all_of((lang.grouped(arrived), lang.negate(cond))),
+                        body,
+                    ),
+                )
                 # {sig}_consumed ports are reaction TRIGGERS, not sources/uses,
                 # so LF schedules this reaction whenever the flag port fires.
                 triggers = (*triggers, *guard_srcs)
             if (scope, signal) in self._origin:
                 since = f"_{simple}_since"
                 if not any(var.name == since for var in extra_state):
-                    extra_state.append(
-                        StateVar(since, "None", reset=scope != "")
+                    extra_state += lang.state_vars(
+                        since, "since", reset=scope != ""
                     )
-                    entry_body.insert(1, f"self.{since} = {_ARRIVAL}")
-                body = [
-                    f"if {self._arrival(scope, signal)} >= self.{since}:",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                    entry_body.insert(1, lang.mark_since(since))
+                body = (
+                    nest(
+                        lang.arrived_since(self._arrival(scope, signal), since),
+                        body,
+                    ),
+                )
             if fired_flag is not None:
-                body = [
-                    f"if not self.{fired_flag}:",
-                    *(f"{_PY_INDENT}{line}" for line in body),
-                ]
+                body = (nest(lang.not_var(fired_flag), body),)
             ordered.append(
                 (
                     pos[id(run[0])] if has_order else key,
                     make_reaction(
                         triggers,
                         targets,
-                        tuple(prelude + body),
+                        (*prelude, *body),
                         sent,
                         self._scope_ports(scope),
                         sources=(
@@ -1828,16 +1846,17 @@ class RosettaBuilder:
         ordered.sort(key=lambda item: item[0])
         reactions.extend(reaction for _, reaction in ordered)
         if fired_flag is not None:
-            entry_body.append(f"self.{fired_flag} = False")
+            entry_body.append(lang.set_flag(fired_flag, False))
 
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
         forwarding: list[Reaction] = [] if lifecycle else reactions
         resolutions: list[Reaction] = [] if lifecycle else reactions
-        region_exits: list[list[str]] = []
+        region_exits: list[Body] = []
         region_flags: list[str] = []
         if retained:
-            overtaking = (tuple(self._overtaking(fact, insts)), busy_sources)
+            newest, overtaken = self._overtaking(fact, insts)
+            overtaking = ((*newest, *overtaken), busy_sources)
 
         if fact.kind is StateKind.LEAF:
             if eventless:
@@ -1851,16 +1870,20 @@ class RosettaBuilder:
                     scope,
                     gen,
                     fired=fired_flag,
-                    occurrence=_CONTINUATION,
+                    occurrence=lang.continuation(),
                 )
                 entry_body += body
                 entry_effects += list(targets)
             if self._reports(scope):
-                settle = f"{SETTLED_PORT}.set(True)"
+                settle = lang.set_port(SETTLED_PORT, lang.boolean(True))
                 if not eventless:
                     entry_body.append(settle)
                 elif all(t.guard is not None for t in eventless):
-                    entry_body += ["else:", f"{_PY_INDENT}{settle}"]
+                    # Every transition is guarded: the dispatch is one
+                    # first-match conditional, settled when none fires.
+                    chain = entry_body[-1]
+                    assert isinstance(chain, If) and chain.orelse is None
+                    entry_body[-1] = replace(chain, orelse=(settle,))
                 # LF's Python target needs a possible writer even for absent ports.
                 entry_effects += [BUSY_PORT, SETTLED_PORT]
         elif fact.kind is StateKind.COMPOSITE:
@@ -1909,14 +1932,14 @@ class RosettaBuilder:
                     scope,
                     gen,
                     departing=pending,
-                    occurrence=_CONTINUATION,
+                    occurrence=lang.continuation(),
                 )
-                body, declined = declining(pending, held, body)
+                body, declined = declining(lang, pending, held, body)
                 reactions.append(
                     make_reaction(
                         (f"{inst}.{COMPLETED_PORT}",),
                         (*targets, *declined),
-                        tuple(body),
+                        body,
                         sent,
                         self._scope_ports(scope),
                     )
@@ -1940,7 +1963,11 @@ class RosettaBuilder:
                 extra_state += gate_state
                 region_gates += gates
                 # LF does not reset root-scope gate state.
-                entry_body += [f"self.{var.name} = None" for var in gate_state]
+                entry_body += [
+                    lang.clear_wait(var.name)
+                    for var in gate_state
+                    if var.name.endswith("_wait")
+                ]
                 reactions.append(
                     self._reemit(inst, r_simple, prefix=f"{simple}.{r_simple}.")
                 )
@@ -1981,22 +2008,25 @@ class RosettaBuilder:
                 flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
                 region_flags = flags
                 extra_state += [
-                    StateVar(flag, "False", reset=True) for flag in flags
+                    var
+                    for flag in flags
+                    for var in lang.state_vars(flag, "flag", reset=True)
                 ]
-                entry_body += [f"self.{flag} = False" for flag in flags]
+                entry_body += [lang.set_flag(flag, False) for flag in flags]
                 # Finalize ready regions in declaration order.
-                join_body: list[str] = []
+                join_body: list[Node] = []
                 for region, flag, region_exit in zip(
                     regions, flags, region_exits, strict=True
                 ):
                     if region.name not in self._needs_done:
                         continue
                     inst = f"c_{_simple(region.name)}"
-                    join_body.append(f"if {inst}.{COMPLETED_PORT}.is_present:")
-                    join_body += [
-                        f"{_PY_INDENT}{line}"
-                        for line in (*region_exit, f"self.{flag} = True")
-                    ]
+                    join_body.append(
+                        nest(
+                            lang.is_present(f"{inst}.{COMPLETED_PORT}"),
+                            (*region_exit, lang.set_flag(flag, True)),
+                        )
+                    )
                 targets: tuple[str, ...] = ()
                 if eventless:
                     body, targets = self._dispatch(
@@ -2005,13 +2035,12 @@ class RosettaBuilder:
                         scope,
                         gen,
                         departing=pending,
-                        occurrence=_CONTINUATION,
+                        occurrence=lang.continuation(),
                     )
-                    body, declined = declining(pending, held, body)
+                    body, declined = declining(lang, pending, held, body)
                     targets = (*targets, *declined)
-                    condition = " and ".join(f"self.{flag}" for flag in flags)
-                    join_body.append(f"if {condition}:")
-                    join_body += [f"{_PY_INDENT}{line}" for line in body]
+                    condition = lang.all_of([lang.var(flag) for flag in flags])
+                    join_body.append(nest(condition, body))
                 reactions.append(
                     make_reaction(
                         tuple(
@@ -2026,22 +2055,25 @@ class RosettaBuilder:
                 )
 
         if pending is not None:
-            busy = f"_{simple}_busy"
             extra_state += [
-                StateVar(busy, "None", reset=scope != ""),
-                StateVar(pending, "None", reset=scope != ""),
+                *lang.state_vars(
+                    simple, "busy", reset=scope != "", insts=insts
+                ),
+                *lang.state_vars(pending, "pending", reset=scope != ""),
             ]
             if sel is not None:
-                extra_state.append(StateVar(sel, "None", reset=scope != ""))
-                entry_body.append(f"self.{sel} = None")
-            entering = ", ".join(json.dumps(inst) for inst in insts)
+                extra_state += lang.state_vars(
+                    sel, "selection", reset=scope != ""
+                )
+                entry_body.append(lang.sel_idle(sel))
             entry_body += [
-                f"self.{busy} = {{{entering}}}",
-                f"self.{pending} = ()",
+                *lang.busy_init(simple, insts),
+                lang.pending_open(pending),
             ]
             # Finalize regions and automatic departures before pending triggers.
             reactions.append(
                 lifecycle_reaction(
+                    lang,
                     simple,
                     insts,
                     retained,
@@ -2096,7 +2128,7 @@ class RosettaBuilder:
         return Reaction(
             (f"{inst}.{OUTPUT_PORT}",),
             (OUTPUT_PORT,),
-            (f'{OUTPUT_PORT}.set("{prefix}" + {inst}.{OUTPUT_PORT}.value)',),
+            stored((self._target.reemit(inst, prefix),)),
         )
 
     def _port_reemit(self, inst: str, sig: str) -> Reaction:
@@ -2104,7 +2136,11 @@ class RosettaBuilder:
         return Reaction(
             (f"{inst}.{sig}",),
             (sig,),
-            event_write(sig, f"{inst}.{sig}.value"),
+            stored(
+                self._target.write_event(
+                    sig, self._target.value(f"{inst}.{sig}")
+                )
+            ),
         )
 
     def _consumed_reemit(
@@ -2129,21 +2165,13 @@ class RosettaBuilder:
         """
         flag = f"{sig}_consumed"
         keys = [key for key, held_flag in held if held_flag == flag]
-        if pending is None or not keys:
-            return Reaction(
-                (f"{inst}.{flag}",),
-                (flag,),
-                (f"{flag}.set({inst}.{flag}.value)",),
-            )
         return Reaction(
             (f"{inst}.{flag}",),
             (flag,),
-            (
-                f"_value = {inst}.{flag}.value",
-                f"if _value is False and self.{pending} and "
-                f"self.{pending}[0] in ({''.join(f'{k}, ' for k in keys)}):",
-                f"{_PY_INDENT}_value = None",
-                f"{flag}.set(_value)",
+            stored(
+                self._target.forward_consumption(
+                    flag, f"{inst}.{flag}", pending, keys
+                )
             ),
         )
 
@@ -2151,11 +2179,11 @@ class RosettaBuilder:
         self,
         inst: str,
         exited_scope: str,
-        exit_stmts: list[str],
+        exit_stmts: Body,
         scope: str,
         sent: list[str],
         departing: str | None = None,
-        overtaking: tuple[tuple[str, ...], tuple[str, ...]] = ((), ()),
+        overtaking: tuple[tuple[Node, ...], tuple[str, ...]] = ((), ()),
         trailing: list[Reaction] | None = None,
         held: list[tuple[int, str]] | None = None,
     ) -> list[Reaction]:
@@ -2177,8 +2205,11 @@ class RosettaBuilder:
         chains. Keeping early selection separate from late completion
         avoids a static LF dependency cycle through the exit requests.
         """
+        lang = self._target
         out: list[Reaction] = []
-        closing = [f"self.{departing} = None"] if departing else []
+        closing: list[Node] = (
+            [lang.pending_close(departing)] if departing else []
+        )
         parent = self._facts.get(_scope_of(exited_scope))
         parallel = (
             parent
@@ -2188,7 +2219,7 @@ class RosettaBuilder:
         for target, port in self._exit_ports.get(exited_scope, {}).items():
             effect, set_line = self._resolve_target(scope, target)
             late = self._late_port(exited_scope, target)
-            ending = [set_line, *closing]
+            ending: list[Node] = [set_line, *closing]
             if parallel is not None:
                 selected = f"_{_simple(parallel.name)}_sel"
                 key = self._escaping[parallel.name][target]
@@ -2198,11 +2229,12 @@ class RosettaBuilder:
                     f"state {self._display(parallel)} at one tag are not supported"
                 )
                 ending = [
-                    f"if self.{selected} is not None:",
-                    f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
-                    f"self.{selected} = ({-key - 1}, None)",
+                    nest(lang.sel_busy(selected), (lang.fail(message),)),
+                    lang.sel_select(
+                        selected, -key - 1, lang.no_payload(), None
+                    ),
                     *ending,
-                    f"{request}.set(True)",
+                    lang.set_port(request, lang.boolean(True)),
                 ]
                 early_effects = (effect, request)
             else:
@@ -2210,17 +2242,23 @@ class RosettaBuilder:
                 if late is None:
                     ending = [*exit_stmts, *ending]
             if self._reports(scope):
-                ending.append(f'self.{ACTIVE_VAR} = ""')
-            ending, declined = declining(departing, held or [], ending)
-            body = (*overtaking[0], *ending)
+                ending.append(lang.set_active(CLEANUP))
+            declined_body, declined = declining(
+                lang, departing, held or [], tuple(ending)
+            )
+            body = (*overtaking[0], *declined_body)
             if parallel is None and late is not None:
                 assert trailing is not None
                 outer = self._late_port(scope, target)
-                final = [
+                final = (
                     *exit_stmts,
-                    *(() if outer is None else (f"{outer}.set(True)",)),
+                    *(
+                        ()
+                        if outer is None
+                        else (lang.set_port(outer, lang.boolean(True)),)
+                    ),
                     *self._exit_ack(scope),
-                ]
+                )
                 trailing.append(
                     make_reaction(
                         (f"{inst}.{late}",),
@@ -2228,7 +2266,7 @@ class RosettaBuilder:
                             *(() if outer is None else (outer,)),
                             *((EXIT_ACK_PORT,) if self._reports(scope) else ()),
                         ),
-                        tuple(final) or ("pass",),
+                        final or (Pass(),),
                         sent,
                         self._scope_ports(scope),
                     )
@@ -2248,24 +2286,29 @@ class RosettaBuilder:
             )
         return out
 
-    def _exit_ack(self, scope: str) -> list[str]:
+    def _exit_ack(self, scope: str) -> Body:
         """Finish a scope's cleanup and acknowledge an outstanding request."""
         if not self._reports(scope):
-            return []
-        return [
-            f"self.{ACTIVE_VAR} = None",
-            f"if self.{EXIT_PENDING_VAR}:",
-            f"{_PY_INDENT}{EXIT_ACK_PORT}.set(True)",
-            f"{_PY_INDENT}self.{EXIT_PENDING_VAR} = False",
-        ]
+            return ()
+        lang = self._target
+        return (
+            lang.set_active(None),
+            nest(
+                lang.var(EXIT_PENDING_VAR),
+                (
+                    lang.set_port(EXIT_ACK_PORT, lang.boolean(True)),
+                    lang.set_flag(EXIT_PENDING_VAR, False),
+                ),
+            ),
+        )
 
     def _drain_chain(
         self,
         fact: StateFact,
         scope: str,
         insts: tuple[str, ...],
-        exit_stmts: list[str],
-        region_exits: list[list[str]],
+        exit_stmts: Body,
+        region_exits: list[Body],
         region_flags: list[str],
         outgoing: list[TransitionFact],
         sent: list[str],
@@ -2297,23 +2340,18 @@ class RosettaBuilder:
             outgoing: The source state's outgoing transitions.
             sent: Signals sent in this scope.
         """
+        lang = self._target
         simple = _simple(fact.name)
-        sel = f"self._{simple}_sel"
-        final = [
-            f"if {sel}:",
-            f"{_PY_INDENT}_key, _value = {sel}",
-        ]
+        sel = f"_{simple}_sel"
+        branches: list[tuple[str, Body]] = []
         effects: list[str] = []
-        keyword = "if"
         for target, key in self._escaping.get(fact.name, {}).items():
             late = self._late_port(scope, target)
-            lines = [*exit_stmts]
+            lines: list[Node] = [*exit_stmts]
             if late is not None:
-                lines.append(f"{late}.set(True)")
+                lines.append(lang.set_port(late, lang.boolean(True)))
                 effects.append(late)
-            final.append(f"{_PY_INDENT}{keyword} _key == {-key - 1}:")
-            final += [f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]]
-            keyword = "elif"
+            branches.append((lang.taken_key_is(-key - 1), tuple(lines)))
         for key, transition in enumerate(outgoing):
             if transition.trigger is None:
                 continue
@@ -2330,39 +2368,47 @@ class RosettaBuilder:
             exit_log = (
                 [self._observe_log("exited", simple)] if self._observe else []
             )
+            unpack = (
+                lang.unpack_value(self._channels(transition.trigger))
+                if features and isinstance(transition.trigger, SignalTrigger)
+                else ()
+            )
             lines = [
+                *unpack,
                 *exit_log,
                 *self._statements(fact.exit_action, gen),
                 *self._statements(transition.effect, gen),
             ]
             late = self._late_port(scope, transition.target)
             if late is not None:
-                lines.append(f"{late}.set(True)")
+                lines.append(lang.set_port(late, lang.boolean(True)))
                 effects.append(late)
-            final.append(f"{_PY_INDENT}{keyword} _key == {key}:")
-            final += [f"{_PY_INDENT * 2}{line}" for line in lines or ["pass"]]
-            keyword = "elif"
-        final += [
-            "else:",
-            *(f"{_PY_INDENT}{line}" for line in exit_stmts or ["pass"]),
-            f"{sel} = None",
+            branches.append((lang.taken_key_is(key), tuple(lines)))
+        selected: Body = (
+            *lang.sel_take(sel),
+            *((If(tuple(branches)),) if branches else ()),
+        )
+        final: Body = (
+            If(((lang.sel_selected(sel), selected),), orelse=exit_stmts),
+            lang.sel_idle(sel),
             *self._exit_ack(scope),
-        ]
+        )
         if self._reports(scope):
             effects.append(EXIT_ACK_PORT)
         chain: list[Reaction] = []
         for index, inst in enumerate(insts):
-            body: list[str] = []
+            body: list[Node] = []
             if region_exits:
-                region_exit = region_exits[index] or ["pass"]
+                region_exit = region_exits[index] or (Pass(),)
                 if region_flags:
-                    body.append(f"if not self.{region_flags[index]}:")
-                    body += [f"{_PY_INDENT}{line}" for line in region_exit]
+                    body.append(
+                        nest(lang.not_var(region_flags[index]), region_exit)
+                    )
                 else:
                     body += region_exit
             if index + 1 < len(insts):
                 request = f"{insts[index + 1]}.{EXIT_REQUEST_PORT}"
-                body.append(f"{request}.set(True)")
+                body.append(lang.set_port(request, lang.boolean(True)))
                 step_effects: tuple[str, ...] = (request,)
             else:
                 body += final
@@ -2371,10 +2417,7 @@ class RosettaBuilder:
                 make_reaction(
                     (f"{inst}.{EXIT_ACK_PORT}",),
                     step_effects,
-                    (
-                        f"if {sel} is not None:",
-                        *(f"{_PY_INDENT}{line}" for line in body),
-                    ),
+                    (nest(lang.sel_busy(sel), tuple(body)),),
                     sent,
                     self._scope_ports(scope),
                 )
@@ -2383,15 +2426,16 @@ class RosettaBuilder:
 
     def _retain(
         self,
-        body: list[str],
+        body: Body,
         key: int,
         payload: str,
         fact: StateFact,
         insts: tuple[str, ...],
         what: str,
         consumed: str | None = None,
-        arrival: str = _ARRIVAL,
-    ) -> list[str]:
+        arrival: str | None = None,
+        signal: str | None = None,
+    ) -> Body:
         """Resolve a source state's names and retained-overlap diagnostic."""
         message = (
             f"{self._source_qn}: {what} arrived at state "
@@ -2400,6 +2444,7 @@ class RosettaBuilder:
             "not supported"
         )
         return retain(
+            self._target,
             body,
             key,
             payload,
@@ -2408,9 +2453,12 @@ class RosettaBuilder:
             message,
             consumed,
             arrival,
+            signal,
         )
 
-    def _overtaking(self, fact: StateFact, insts: tuple[str, ...]) -> list[str]:
+    def _overtaking(
+        self, fact: StateFact, insts: tuple[str, ...]
+    ) -> tuple[Body, Body]:
         """Resolve a source state's names and overtaking diagnostic."""
         message = (
             f"{self._source_qn}: a substate of {self._display(fact)} "
@@ -2418,7 +2466,7 @@ class RosettaBuilder:
             f"{self._display(fact)}; reordering overlapping events is not "
             "supported"
         )
-        return overtaking(_simple(fact.name), insts, message)
+        return overtaking(self._target, _simple(fact.name), insts, message)
 
     def _display(self, fact: StateFact) -> str:
         """A state's dotted path, as model-facing diagnostics name it."""
@@ -2448,19 +2496,20 @@ class RosettaBuilder:
 
     def _resolve_target(
         self, scope: str, target: str | CompletionTarget
-    ) -> tuple[str, str]:
-        """Render a transition target as (reaction effect, body line)."""
+    ) -> tuple[str, Node]:
+        """Render a transition target as (reaction effect, statement)."""
+        lang = self._target
         if isinstance(target, CompletionTarget):
             self._needs_done.add(scope)
-            return f"reset({DONE_MODE})", f"{DONE_MODE}.set()"
+            return f"reset({DONE_MODE})", lang.set_mode(DONE_MODE)
         if _scope_of(target) == scope:
             mode = _simple(target)
-            return f"reset({mode})", f"{mode}.set()"
+            return f"reset({mode})", lang.set_mode(mode)
         # The target lives in an enclosing scope: raise a dedicated exit
         # port (one per distinct target) for the parent to resolve.
         ports = self._exit_ports.setdefault(scope, {})
         port = ports.setdefault(target, f"exit_{len(ports)}")
-        return port, f"{port}.set(True)"
+        return port, lang.set_port(port, lang.boolean(True))
 
     def _interrupt_guard_sources(
         self, fact: StateFact, signal: str
@@ -2490,16 +2539,17 @@ class RosettaBuilder:
     def _dispatch(
         self,
         group: list[TransitionFact],
-        exit_stmts: list[str],
+        exit_stmts: Body,
         scope: str,
-        gen: LfPythonCodeGen,
+        gen: LfCodeGen,
         consumed: str | None = None,
         fired: str | None = None,
         departing: str | None = None,
-        occurrence: str = _ARRIVAL,
+        occurrence: str | None = None,
         drain: _Drain | None = None,
-        payload: str = "None",
-    ) -> tuple[list[str], tuple[str, ...]]:
+        payload: str | None = None,
+        signal: str | None = None,
+    ) -> tuple[Body, tuple[str, ...]]:
         """Render a same-trigger group as a first-match if/elif dispatch.
 
         Declaration order is firing priority; a guardless branch always
@@ -2523,39 +2573,48 @@ class RosettaBuilder:
             departing: The source state's pending-trigger variable; each
                 firing branch clears it to ``None`` because the source
                 activation ends, or None.
-            occurrence: Python expression for the selecting occurrence's
-                arrival tag, or ``()`` for an eventless continuation.
+            occurrence: Expression for the selecting occurrence's arrival
+                tag (the current tag when None), or the continuation for an
+                eventless one.
             drain: For a draining source state, each firing branch records
                 its key and ``payload`` and requests the children's exits
                 instead of running the exit, effect and any exit port; the
                 drain continuation runs those. A mode switch is still
                 declared here and applies after the tag's cleanup. None
                 runs them inline.
-            payload: Python expression for the payload a drained branch
-                records.
+            payload: Expression for the payload a drained branch records;
+                no payload when None.
+            signal: The channel ``payload`` comes from, or None.
         """
-        body: list[str] = []
+        lang = self._target
+        if occurrence is None:
+            occurrence = lang.arrival()
+        if payload is None:
+            payload = lang.no_payload()
+        branches: list[tuple[str, Body]] = []
+        orelse: Body | None = None
         effects: dict[str, None] = {}
         reports = self._reports(scope)
         for index, transition in enumerate(group):
             effect, set_line = self._resolve_target(scope, transition.target)
             late = self._late_port(scope, transition.target)
+            branch: list[Node]
             if drain is None:
                 effects.setdefault(effect, None)
-                branch = (
-                    exit_stmts
-                    + self._statements(transition.effect, gen)
-                    + [set_line]
-                )
+                branch = [
+                    *exit_stmts,
+                    *self._statements(transition.effect, gen),
+                    set_line,
+                ]
                 if late is not None:
                     effects.setdefault(late, None)
-                    branch.append(f"{late}.set(True)")
+                    branch.append(lang.set_port(late, lang.boolean(True)))
             else:
                 key = drain.keys[id(transition)]
                 effects.setdefault(drain.request, None)
                 branch = [
-                    f"self.{drain.sel} = ({key}, {payload})",
-                    f"{drain.request}.set(True)",
+                    lang.sel_select(drain.sel, key, payload, signal),
+                    lang.set_port(drain.request, lang.boolean(True)),
                 ]
                 effects.setdefault(effect, None)
                 branch.append(set_line)
@@ -2566,8 +2625,7 @@ class RosettaBuilder:
                         f"state {self._display(fact)} at one tag are not supported"
                     )
                     branch = [
-                        f"if self.{drain.sel} is not None:",
-                        f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
+                        nest(lang.sel_busy(drain.sel), (lang.fail(message),)),
                         *branch,
                     ]
             if reports:
@@ -2575,27 +2633,36 @@ class RosettaBuilder:
                     branch += self._exit_ack(scope)
                     effects[EXIT_ACK_PORT] = None
                 else:
-                    branch.append(f'self.{ACTIVE_VAR} = ""')
+                    branch.append(lang.set_active(CLEANUP))
             if consumed is not None:
-                flag = occurrence if reports else "True"
-                branch = [*branch, f"{consumed}.set({flag})"]
+                outcome = occurrence if reports else lang.accepted()
+                branch.append(lang.consume(consumed, outcome))
             if fired is not None:
-                branch = [*branch, f"self.{fired} = True"]
+                branch.append(lang.set_flag(fired, True))
             if departing is not None:
-                branch = [*branch, f"self.{departing} = None"]
+                branch.append(lang.pending_close(departing))
             if reports:
-                branch = [*branch, report_busy(occurrence)]
+                branch.append(lang.report_busy(occurrence))
             if transition.guard is None:
                 if index == 0:
-                    body += branch
-                else:
-                    body.append("else:")
-                    body += [f"{_PY_INDENT}{line}" for line in branch]
+                    return self._dispatch_result(
+                        tuple(branch), effects, consumed, reports
+                    )
+                orelse = tuple(branch)
                 break  # later branches are unreachable
-            keyword = "if" if index == 0 else "elif"
             guard = gen.render_expression(transition.guard)
-            body.append(f"{keyword} {guard}:")
-            body += [f"{_PY_INDENT}{line}" for line in branch]
+            branches.append((guard, tuple(branch)))
+        body: Body = (If(tuple(branches), orelse),) if branches else ()
+        return self._dispatch_result(body, effects, consumed, reports)
+
+    def _dispatch_result(
+        self,
+        body: Body,
+        effects: dict[str, None],
+        consumed: str | None,
+        reports: bool,
+    ) -> tuple[Body, tuple[str, ...]]:
+        """Finish a dispatch's effects with its consumption and busy ports."""
         if consumed is not None:
             effects[consumed] = None
         if reports:
@@ -2604,16 +2671,20 @@ class RosettaBuilder:
 
     def _done_mode(self, scope: str, sent: list[str]) -> Mode:
         """The final mode: the root exits and stops; a child completes."""
+        lang = self._target
         is_root = scope == ""
-        body = [f'{OUTPUT_PORT}.set("{DONE_MODE}")']
+        body: list[Node] = [lang.announce(DONE_MODE, scope.replace("::", "."))]
         effects = [OUTPUT_PORT]
         if is_root:
-            body += [*self._root_exit, "request_stop()"]
+            body += [*self._root_exit, lang.request_stop()]
         else:
-            body.append(f"{COMPLETED_PORT}.set(True)")
+            body.append(lang.set_port(COMPLETED_PORT, lang.boolean(True)))
             effects.append(COMPLETED_PORT)
         if self._reports(scope):
-            body += [f"self.{ACTIVE_VAR} = None", f"{SETTLED_PORT}.set(True)"]
+            body += [
+                lang.set_active(None),
+                lang.set_port(SETTLED_PORT, lang.boolean(True)),
+            ]
             effects += [BUSY_PORT, SETTLED_PORT]
         entry = make_reaction(
             ("reset", "startup"),
@@ -2634,7 +2705,7 @@ class RosettaBuilder:
     ) -> list[Reaction]:
         """Render the root/region startup entry and ``do`` actions."""
         gen = self._codegen
-        body: list[str] = []
+        body: list[Node] = []
         for fact in (root, *(regions or ())):
             body += self._statements(fact.entry_action, gen)
             if fact.do_action is not None:
@@ -2654,27 +2725,48 @@ class RosettaBuilder:
     def _statements(
         self,
         action: syside.ActionUsage | None,
-        codegen: LfPythonCodeGen,
-    ) -> list[str]:
-        return [
-            line
+        codegen: LfCodeGen,
+    ) -> Body:
+        return tuple(
+            node
             for candidate in actions.inline_actions(action)
-            for line in codegen.render_action(candidate).split("\n")
-            if line
-        ]
+            for node in codegen.render_statements(candidate)
+        )
+
+
+def render_reactor(reactor: Reactor, target: LfTarget) -> Reactor:
+    """Render every reaction body of ``reactor`` to lines of ``target``.
+
+    Bodies already rendered (plain lines) are returned unchanged.
+    """
+
+    def rendered(reaction: Reaction) -> Reaction:
+        return replace(reaction, body=target.render(reaction.body))
+
+    return replace(
+        reactor,
+        reactions=tuple(rendered(r) for r in reactor.reactions),
+        modes=tuple(
+            replace(mode, reactions=tuple(rendered(r) for r in mode.reactions))
+            for mode in reactor.modes
+        ),
+        trailing_reactions=tuple(
+            rendered(r) for r in reactor.trailing_reactions
+        ),
+    )
 
 
 def finalize(
     program: LfProgram,
     needs: PreambleNeeds,
 ) -> LfProgram:
-    """Attach the companion module + ``files:`` to a built program."""
+    """Attach the preamble, companion files and target options to a program.
+
+    Called once the program's reactors are all built, so the preamble and
+    the companions see everything the builders registered on ``needs``.
+    """
     companion = needs.companion_module_lines()
-    file_opt = files_option(
-        needs.types_module if companion else None,
-        needs.external,
-    )
-    options = program.target_options + ((file_opt,) if file_opt else ())
+    options = program.target_options + needs.target.target_options(needs)
     for event_name, port in sorted(needs.undeliverable_sends):
         logger.warning(
             "machine %r: send %r via %r has no connected peer; the signal "
@@ -2692,9 +2784,12 @@ def finalize(
                 aliases.setdefault(definition.name, []).append(channel)
     return replace(
         program,
+        preamble=tuple(needs.target.preamble_lines(needs)),
         target_options=options,
         types_module_name=needs.types_module if companion else None,
         types_module_lines=tuple(companion),
+        support_files=needs.target.support_files(needs),
+        target=needs.target.name,
         signal_aliases=tuple(
             (name, channels[0])
             for name, channels in sorted(aliases.items())
@@ -2711,6 +2806,7 @@ def build_program(
     state_def_qn: str,
     *,
     external: list[ForeignArtifact] | None = None,
+    target: LfTarget | None = None,
 ) -> LfProgram:
     """Build a Lingua Franca program from a SysML state definition.
 
@@ -2720,15 +2816,16 @@ def build_program(
     Args:
         model: Loaded syside model containing the SysML state def.
         state_def_qn: Qualified name of the SysML ``state def`` to translate.
-        external: Optional foreign artifacts providing Python implementations
-            for external ``calc def`` calls. The core parses each artifact's
-            module name and available function names.
+        external: Optional foreign artifacts implementing external
+            ``calc def`` calls in the target's language. The core parses each
+            artifact's module name and available function names.
+        target: The LF target language; Python when None.
 
     Returns:
         The assembled ``LfProgram``.
     """
     name = state_def_qn.split("::")[-1]
-    needs = PreambleNeeds(SignalCatalog(model, [state_def_qn]))
+    needs = PreambleNeeds(SignalCatalog(model, [state_def_qn]), target=target)
     needs.types_module = f"{name}_types"
     if external is not None:
         needs.external = external

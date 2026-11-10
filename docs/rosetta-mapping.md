@@ -1,7 +1,9 @@
 # rosetta — SysML v2 → Lingua Franca mapping reference
 
 How the **rosetta** backend translates SysML v2 state definitions into
-Lingua Franca (LF) programs targeting the Python runtime. This document
+Lingua Franca (LF) programs targeting the Python runtime, or the C runtime
+(reactor-c) with `--target c`. Sections 1–13 describe the mapping in Python
+spelling; section 14 lists how the C target spells it. This document
 describes supported constructs, their LF counterparts and known limitations.
 Bundled model scenarios and focused tests marked `lf` compile and execute
 generated programs to check selected behaviors, including hierarchy lifecycle
@@ -1097,3 +1099,62 @@ Not yet supported (each a separate future addition):
   render as LF `reset state` (not plain `state`) so lfc accepts the child reactor
   when it is instantiated inside a `reset` mode (the flags correctly reset on
   composite re-entry).
+
+## 14. The C target (reactor-c)
+
+`--target c` emits the same reactors, modes, reactions and run-to-completion
+protocol as the Python target. The difference lies in the declarations and reaction
+source renders. The builder assembles reaction bodies as a statement tree
+(`statements.py`) and asks the target (`targets/python.py`, `targets/c.py`)
+to spell each statement. The generated C never allocates memory: every value
+is fixed-size, and `current_state` is set only from string literals.
+
+| Python target                                  | C target                                              |
+| ---------------------------------------------- | ----------------------------------------------------- |
+| `target Python`, companion `<base>_types.py`   | `target C`, companion `<base>_types.h` in `files:`    |
+| untyped ports and state                        | typed ports and state (`bool`, `tag_t`, payload structs) |
+| `self.x`, `p.set(v)`, `p.is_present`           | `self->x`, `lf_set(p, (v));`, `p->is_present`         |
+| `m.set()`                                      | `lf_set_mode(m);`                                     |
+| `S_act.schedule(0, T(...))`                    | `lf_schedule_copy(S_act, 0, &((T){ ... }), 1);`       |
+| `raise RuntimeError(...)`                      | `lf_print_error_and_exit("%s", ...);`                 |
+| `assert c, "..."`                              | `if (!(c)) { fprintf(stderr, "AssertionError: %s\n", ...); exit(1); }` |
+| `logging.debug(...)`                           | `LF_PRINT_DEBUG("%s", ...);`                          |
+| arrival tag `(elapsed, microstep)`, `()`       | `tag_t` from `lf_tag()`, `NEVER_TAG`                  |
+| busy set `{"c_a", "c_b"}`                      | one `bool` per child: `_<state>_c_a_busy`             |
+| pending slot `None` / `()` / `(key, v, tag)`   | `sysmlc_pending_t` with `slot` CLOSED / OPEN / HOLDING |
+| selection `None` / `()` / `(key, v)`           | `sysmlc_selection_t` with `state` IDLE / ANCESTOR / SELECTED |
+| consumption flag `True` / tag / `None` / `False` | `sysmlc_consumption_t` ACCEPTED (+ tag) / HELD / DECLINED |
+| `_active` `None` / `""` / `"<mode>"`           | `int` 0 / 1 / a number per mode                       |
+| `"heating." + child.current_state.value`       | each reactor announces its full path, parents forward it |
+
+**Types.** Payloads and structured attributes become `typedef struct`s and
+enumerations `typedef enum`s, in `<base>_types.h`. A type is named after its
+definition's qualified name, in lowercase snake case plus `_t`
+(`Microwave::StartCmd` → `microwave_start_cmd_t`). An enumeration constant is
+`<TYPE>_<LITERAL>` and `<type>_names[]` holds the literals' names. `Integer`
+is `int32_t`, `Real` and scalar quantities `double`, `Boolean` `bool`,
+`String` `const char*` (literals only). A payload type without fields is a
+plain `bool` port.
+
+**External functions.** A `calc def` backed by a C artifact (`--c`/`--c_h`,
+`@ForeignArtifact { lang = "C"; ... }` or a `rep ... language "C"` body) is
+called by its plain name. Without any C artifact, it is declared
+`extern` under its qualified name in snake case (`sm15_p_step`) for a
+hand-written C file to define, as in statix. Either way `<base>_types.h`
+holds its prototype, so every call is type-checked. The artifacts ship
+beside the program: the headers are included from the preamble and the
+sources compile through a generated `<base>_types.cmake` (`cmake-include`).
+An artifact uses the types by including `<base>_types.h`, as
+`showcase/furuta-pendulum/furuta_physics.c` does.
+
+**Rejections specific to C.** Each is an `UnsupportedConstructError`:
+
+- comparing or adding `String` values, since C strings are pointers;
+- ordering enumeration literals (`<`, `>=`), since their C constants are
+  positions;
+- a type without a C mapping;
+- a payload drained or retained from several channels of different C types;
+- model names that are C keywords, names of reactor-c (`self`, `base`,
+  `NEVER`, `MSEC`, ...) or of the C library calls the generated code makes
+  (`printf`, `exit`, ...), and names with the prefixes `lf_`, `LF_`, `_lf`,
+  `sysmlc_` or `SYSMLC_`.

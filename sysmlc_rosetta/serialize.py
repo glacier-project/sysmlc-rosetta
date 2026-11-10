@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sysmlc_rosetta.targets import TARGETS
+
 if TYPE_CHECKING:
     from sysmlc_rosetta.program import (
         LfProgram,
+        LogicalAction,
         MainReactor,
         Mode,
         Reaction,
@@ -40,7 +43,10 @@ def to_lf(program: LfProgram) -> str:
     definition before use); the trivial ``main`` instantiates the machine
     (the last reactor).
     """
-    lines: list[str] = [*_target_lines(program.target_options), ""]
+    lines: list[str] = [
+        *_target_lines(TARGETS[program.target].lf_name, program.target_options),
+        "",
+    ]
     if program.preamble:
         lines.append("preamble {=")
         lines.extend(f"{_INDENT}{line}" for line in program.preamble)
@@ -52,11 +58,13 @@ def to_lf(program: LfProgram) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _target_lines(options: tuple[tuple[str, str], ...]) -> list[str]:
-    # No options -> bare ``target Python`` (byte-identical legacy output).
+def _target_lines(
+    target: str, options: tuple[tuple[str, str], ...]
+) -> list[str]:
+    # No options -> bare ``target <Name>`` (byte-identical legacy output).
     if not options:
-        return ["target Python"]
-    lines = ["target Python {"]
+        return [f"target {target}"]
+    lines = [f"target {target} {{"]
     lines.extend(f"{_INDENT}{key}: {value}," for key, value in options)
     lines.append("}")
     return lines
@@ -94,7 +102,8 @@ def _reactor_lines(reactor: Reactor) -> list[str]:
     # unconditionally: lfc parses bare initializers as LF values and rejects
     # any non-literal Python (e.g. Point(x=0.5), LightColor.red).
     params = ", ".join(
-        f"{p.name} = {{= {p.default} =}}" for p in reactor.parameters
+        f"{p.name}{_typed(p.type)} = {{= {p.default} =}}"
+        for p in reactor.parameters
     )
     header = (
         f"reactor {reactor.name}({params})"
@@ -102,16 +111,21 @@ def _reactor_lines(reactor: Reactor) -> list[str]:
         else f"reactor {reactor.name}"
     )
     lines = [f"{header} {{"]
-    lines.extend(f"{_INDENT}input {name}" for name in reactor.inputs)
-    lines.extend(f"{_INDENT}output {name}" for name in reactor.outputs)
+    ports = dict(reactor.port_types)
+    lines.extend(
+        f"{_INDENT}input {name}{_typed(ports.get(name))}"
+        for name in reactor.inputs
+    )
+    lines.extend(
+        f"{_INDENT}output {name}{_typed(ports.get(name))}"
+        for name in reactor.outputs
+    )
     lines.extend(
         f"{_INDENT}{'reset ' if var.reset else ''}"
-        f"state {var.name} = {{= {var.init} =}}"
+        f"state {var.name}{_typed(var.type)} = {{= {var.init} =}}"
         for var in reactor.state_vars
     )
-    lines.extend(
-        f"{_INDENT}logical action {action.name}" for action in reactor.actions
-    )
+    lines.extend(_action_line(_INDENT, action) for action in reactor.actions)
     lines.extend(
         f"{_INDENT}{inst.name} = new {inst.reactor}()"
         for inst in reactor.instantiations
@@ -137,9 +151,7 @@ def _mode_lines(mode: Mode) -> list[str]:
         f"{_INDENT * 2}timer {timer.name}({timer.offset})"
         for timer in mode.timers
     )
-    lines.extend(
-        f"{_INDENT * 2}logical action {action.name}" for action in mode.actions
-    )
+    lines.extend(_action_line(_INDENT * 2, action) for action in mode.actions)
     lines.extend(
         f"{_INDENT * 2}{inst.name} = new {inst.reactor}()"
         for inst in mode.instantiations
@@ -164,3 +176,18 @@ def _reaction_lines(reaction: Reaction, depth: int) -> list[str]:
     lines.extend(f"{pad}{_INDENT}{line}" for line in reaction.body)
     lines.append(f"{pad}=}}")
     return lines
+
+
+def _typed(ctype: str | None) -> str:
+    """A declaration's ``: <type>`` suffix; nothing for an untyped one.
+
+    A type LF cannot parse as an identifier (``const char*``) is target
+    code: ``{= ... =}``.
+    """
+    if ctype is None:
+        return ""
+    return f": {ctype}" if ctype.isidentifier() else f": {{= {ctype} =}}"
+
+
+def _action_line(pad: str, action: LogicalAction) -> str:
+    return f"{pad}logical action {action.name}{_typed(action.type)}"

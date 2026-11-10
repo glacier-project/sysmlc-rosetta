@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import json
+from abc import abstractmethod
 from typing import TYPE_CHECKING, override
 
 import syside
+from sysmlc.codegen.expression import ExpressionCodeGen
 from sysmlc.codegen.python import (
     PythonCodeGen,
     payload_fields,
@@ -20,12 +21,19 @@ from sysmlc.semantics.statemachine.interface import (
     send_via_port,
 )
 
+from sysmlc_rosetta.statements import Stmt
+from sysmlc_rosetta.targets.python import PythonTarget
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sysmlc.codegen.python import PythonCodeGenContext
     from sysmlc.semantics.statemachine.signals import SignalCatalog
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.program import LfConstraint
+    from sysmlc_rosetta.statements import Body
+    from sysmlc_rosetta.targets.base import LfTarget
 
 # ---------------------------------------------------------------------------
 # Verified syside node shapes for call-effect transitions (2026-06-15)
@@ -57,19 +65,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def event_write(port: str, value: str) -> tuple[str, ...]:
-    """Write one modeled event without overwriting an event at this tag."""
-    message = (
-        f"multiple modeled events on LF port {port} at the same tag; "
-        "event coalescing is not supported"
-    )
-    return (
-        f"if {port}.is_present:",
-        f"    raise RuntimeError({json.dumps(message)})",
-        f"{port}.set({value})",
-    )
-
-
 class PreambleNeeds:
     """Collects and renders everything the generated LF preamble declares.
 
@@ -81,10 +76,21 @@ class PreambleNeeds:
 
     Source identities for generated constraint checks are retained for
     consumers of the assembled program.
+
+    Args:
+        catalog: Concrete signal identities, or None for catalog-free use.
+        target: The LF target language every generator spells bodies in;
+            Python when None.
     """
 
-    def __init__(self, catalog: SignalCatalog | None = None) -> None:
+    def __init__(
+        self,
+        catalog: SignalCatalog | None = None,
+        *,
+        target: LfTarget | None = None,
+    ) -> None:
         self.catalog = catalog
+        self.target: LfTarget = target if target is not None else PythonTarget()
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
         self.dataclasses = DataclassRegistry(
             symbols=catalog.definition_symbols if catalog else None
@@ -203,35 +209,260 @@ class PreambleNeeds:
         return lines
 
 
-def files_option(
-    types_module: str | None, external: list[ForeignArtifact] | None
-) -> tuple[str, str] | None:
-    """Build the ``files:`` target option, or None when nothing to ship."""
-    names: list[str] = []
-    if types_module is not None:
-        names.append(f"{types_module}.py")
-    if external:
-        for artifact in external:
-            names.append(artifact.path.name)
-    if not names:
-        return None
-    listed = ", ".join(f'"{n}"' for n in names)
-    return ("files", f"[{listed}]")
+class LfActions(ExpressionCodeGen):
+    """Reaction-body translation shared by the Python and C generators.
+
+    A language's generator mixes this in ahead of its expression generator,
+    so ``super()`` reaches the language's plain rendering. References to
+    attributes render through the program's target (``self.x``,
+    ``self->x``); payload bindings resolve by source feature identity to
+    the delivered value; unknown references produce diagnostics.
+    """
+
+    render_fields: Callable[..., str]
+
+    def _bind(
+        self,
+        needs: PreambleNeeds,
+        attribute_names: frozenset[str],
+        *,
+        self_prefix: bool,
+        local_names: frozenset[str],
+        port_signals: frozenset[str],
+        payload_bindings: dict[syside.Feature, str] | None,
+    ) -> None:
+        """Record the generator's scope; see the subclasses' arguments."""
+        self._needs = needs
+        self._used_external = needs.used_external
+        self._attribute_names = attribute_names
+        self._self_prefix = self_prefix
+        self._local_names = local_names
+        self._port_signals = port_signals
+        self._payload_bindings = payload_bindings or {}
+
+    @override
+    def _emit_feature_reference(
+        self, expr: syside.FeatureReferenceExpression
+    ) -> str:
+        """Emit a payload binding, enumeration literal, local or attribute.
+
+        A local (in ``local_names``) renders bare, and so does an attribute
+        when ``self_prefix`` is False (an initializer, outside reactions).
+
+        Raises:
+            UnsupportedConstructError: If the referent is not an enum
+                literal, not a local name, and not a bound attribute.
+            ValueError: If the referent has no resolved name.
+        """
+        ref = expr.referent
+        if ref in self._payload_bindings:
+            return self._payload_bindings[ref]
+        if isinstance(ref, syside.EnumerationUsage):
+            return self._enum_literal(ref)
+        if ref is None or ref.name is None:
+            raise ValueError(
+                "FeatureReferenceExpression has no resolved referent"
+            )
+        name = ref.name
+        if name in self._local_names or not self._self_prefix:
+            return name
+        self._require_attribute(name, expr)
+        return self._needs.target.var(name)
+
+    @override
+    def render_assignment_target(
+        self, assign: syside.AssignmentActionUsage
+    ) -> str:
+        """Emit an assignment target as an attribute of the reactor.
+
+        Only the base segment is validated against the attribute set; tail
+        segments (the ``x`` in ``pt.x``) are fields of a composite attribute
+        and cannot be checked here.
+
+        Raises:
+            UnsupportedConstructError: If the base feature name is not in
+                the bound attribute set.
+            ValueError: If the assignment target has no resolved feature.
+        """
+        path = super().render_assignment_target(assign)
+        self._require_attribute(path.split(".")[0], assign)
+        return self._needs.target.var(path)
+
+    def render_statements(self, action: syside.ActionUsage) -> Body:
+        """Translate an assignment or send to statements.
+
+        An assignment records its target when it is a bound attribute
+        assigned directly, for the constraint and change-notification
+        passes.
+
+        Args:
+            action: An assignment or send action.
+
+        Returns:
+            The statements, none for a dropped ``via`` send.
+
+        Raises:
+            UnsupportedConstructError: If the action is of another kind.
+        """
+        if isinstance(action, syside.SendActionUsage):
+            return self.render_send_statements(action)
+        if not isinstance(action, syside.AssignmentActionUsage):
+            raise UnsupportedConstructError(
+                "unsupported action type", node=action
+            )
+        referent = action.referent
+        attribute = (
+            referent.name
+            if action.target_argument is None and referent is not None
+            else None
+        )
+        return (
+            Stmt(
+                self.render_assignment(action),
+                assigns=frozenset(() if attribute is None else (attribute,)),
+            ),
+        )
+
+    @override
+    def render_send(self, send: syside.SendActionUsage) -> str:
+        """Translate a send to source lines joined by newlines.
+
+        See :meth:`render_send_statements`; a dropped ``via`` send is
+        ``""``.
+        """
+        return "\n".join(
+            self._needs.target.render(self.render_send_statements(send))
+        )
+
+    def render_send_statements(self, send: syside.SendActionUsage) -> Body:
+        """Translate a send by its declared receiver (SysML/KerML semantics).
+
+        - A ``to`` receiver that is not the machine's own port is
+          cross-machine addressing and is rejected (route with ``via`` + a
+          ``connect`` instead).
+        - A ``via`` send routes over the port's connections: it sets the LF
+          output port when a connected peer accepts the signal, and is
+          dropped (recorded for a build warning) otherwise. It never also
+          schedules a self-event -- one send is one transfer.
+        - A ``to <own port>`` send (or a bare send) is an internal
+          self-event: ``<Event>_act.schedule(0[, <payload>])``.
+
+        The payload is built by :meth:`_construct` from its fields: first
+        each constructor argument, named by the field it binds, then each
+        omitted field with the value its type gives it, so the arguments
+        are evaluated once, at the send, in constructor order. A type
+        without fields is sent as a bare signal.
+
+        Args:
+            send: The ``send new <Type>(<args>)`` action to translate.
+
+        Returns:
+            The send's statements, none for a dropped ``via`` send.
+
+        Raises:
+            UnsupportedConstructError: If the ``to`` receiver is not the
+                machine's own port, or an omitted field's value from its
+                type is not a literal constant.
+            ValueError: If the payload is not a ``new <Type>(...)``
+                constructor resolving to a named definition, or an argument
+                does not bind exactly one field.
+        """
+        event_name, _arguments = payload_signature(send)
+        definition = constructed_payload_definition(send)
+        if self._needs.catalog is not None:
+            assert definition is not None
+            event_name = self._needs.catalog.channel_for(definition)
+        if send.receiver_argument is not None and not send_receiver_is_own_port(
+            send
+        ):
+            raise UnsupportedConstructError(
+                f"send {event_name!r} addresses a receiver that is not the "
+                "machine's own port; cross-machine 'to' addressing is not "
+                "supported. Route the signal with 'via <port>' and a "
+                "connect instead.",
+                node=send,
+            )
+        via_port = send_via_port(send)
+        if via_port is not None and event_name not in self._port_signals:
+            self._needs.undeliverable_sends.add((event_name, via_port))
+            return ()
+        fields = payload_fields(send)
+        payload = (
+            self._construct(
+                definition,
+                event_name,
+                self.render_fields(
+                    (field.name, field.value) for field in fields
+                ),
+            )
+            if fields
+            else None
+        )
+        lang = self._needs.target
+        if via_port is not None:
+            return lang.write_event(event_name, payload)
+        return (lang.schedule(f"{event_name}_act", "0", payload),)
+
+    @override
+    def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
+        """Emit a library call or an external calc-def calls. Passsing missing 
+        functions raise an error."""
+        library_call = self._emit_library_invocation(expr)
+        if library_call is not None:
+            source, needs_math = library_call
+            if needs_math:
+                self._needs.uses_math = True
+            return source
+        external_call = self._emit_external_calculation_invocation(
+            expr,
+            external=self._needs.external,
+            used_external=self._needs.used_external,
+        )
+        if external_call is not None:
+            return external_call
+        func = expr.function
+        qn = None if func is None else func.qualified_name
+        raise UnsupportedConstructError(
+            f"function {qn or '<unresolved>'!s} is not in rosetta's "
+            "supported set.",
+            node=expr,
+        )
+
+    @abstractmethod
+    def _construct(
+        self,
+        definition: syside.Definition | None,
+        event_name: str,
+        fields: str,
+    ) -> str:
+        """Build a payload value from its rendered fields.
+
+        Args:
+            definition: The payload's definition, if resolved.
+            event_name: The payload's channel.
+            fields: The rendered fields, in the language's syntax.
+        """
+
+    @abstractmethod
+    def _enum_literal(self, literal: syside.EnumerationUsage) -> str:
+        """The language's spelling of an enumeration literal."""
+
+    def _require_attribute(self, name: str, node: syside.Element) -> None:
+        if name not in self._attribute_names:
+            raise UnsupportedConstructError(
+                f"reference to {name!r} does not resolve to a bound "
+                "attribute; referencing an accept payload or any other "
+                "non-attribute feature is not supported by rosetta yet.",
+                node=node,
+            )
 
 
-class LfPythonCodeGen(PythonCodeGen):
+class LfPythonCodeGen(LfActions, PythonCodeGen):
     """Python code generator for Lingua Franca reaction bodies.
 
     Reaction bodies run as methods of the generated reactor, so attribute
-    references render as ``self.<name>``. Payload bindings resolve by source
-    feature identity to the delivered value. Unknown references produce
-    diagnostics.
-
-    For chained references (``a.b``), the base feature is prefixed with
-    ``self.`` automatically: the chain handler in the base class calls
-    ``self._emit(operands[0])``, which dispatches back into the overridden
-    ``_emit_feature_reference``, so ``self.pt.x`` falls out without
-    overriding the chain handler.
+    references render as ``self.<name>``; a chained reference ``a.b``
+    renders its base through the same hook, giving ``self.a.b``.
 
     Enum literals (``LightColor::red``) are resolved via ``PreambleNeeds``:
     the first encounter registers the owning ``EnumerationDefinition`` and
@@ -266,197 +497,50 @@ class LfPythonCodeGen(PythonCodeGen):
         port_signals: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
     ) -> None:
-        self._needs = needs if needs is not None else PreambleNeeds()
+        needs = needs if needs is not None else PreambleNeeds()
         super().__init__(
             context,
-            external=self._needs.external,
+            external=needs.external,
             definition_symbols={
                 qn: f"_sysmlc_types.{symbol}"
                 for qn, symbol in (
-                    self._needs.catalog.definition_symbols.items()
-                    if self._needs.catalog
+                    needs.catalog.definition_symbols.items()
+                    if needs.catalog
                     else ()
                 )
             },
         )
-        self._payload_bindings = payload_bindings or {}
-        self._used_external = self._needs.used_external
-        self._attribute_names = attribute_names
-        self._self_prefix = self_prefix
-        self._local_names = local_names
-        self._port_signals = port_signals
+        self._bind(
+            needs,
+            attribute_names,
+            self_prefix=self_prefix,
+            local_names=local_names,
+            port_signals=port_signals,
+            payload_bindings=payload_bindings,
+        )
 
     @override
-    def _emit_feature_reference(
-        self, expr: syside.FeatureReferenceExpression
+    def _construct(
+        self,
+        definition: syside.Definition | None,
+        event_name: str,
+        fields: str,
     ) -> str:
-        """Emit a feature reference as the appropriate Python source.
+        """Construct the payload's generated class by keyword.
 
-        Three reference kinds are handled:
-
-        - **Enum literal** (referent is an ``EnumerationUsage``): the
-          owning definition is registered in ``PreambleNeeds`` and the
-          literal is returned as ``DefName.literal``.
-        - **Local name** (in ``local_names``): returned bare, no prefix.
-        - **Attribute** (in ``attribute_names``): returned as
-          ``self.<name>`` when ``self_prefix`` is ``True``; otherwise bare.
-
-        Args:
-            expr: The feature reference to translate.
-
-        Returns:
-            Python source for ``expr``.
-
-        Raises:
-            UnsupportedConstructError: If the referent is not an enum
-                literal, not a local name, and not a bound attribute.
-            ValueError: If the referent has no resolved name.
+        Constructors use the generated types module alias so LF port
+        parameters cannot shadow their class symbols.
         """
-        ref = expr.referent
-        if ref in self._payload_bindings:
-            return self._payload_bindings[ref]
-        if isinstance(ref, syside.EnumerationUsage):
-            return self._needs.register_enum(ref)
-        name = super()._emit_feature_reference(expr)
-        if name in self._local_names:
-            return name
-        if not self._self_prefix:
-            return name
-        self._require_attribute(name, expr)
-        return f"self.{name}"
-
-    @override
-    def render_assignment_target(
-        self, assign: syside.AssignmentActionUsage
-    ) -> str:
-        """Emit an assignment target as ``self.<target>``.
-
-        Only the base segment is validated against the attribute set; tail
-        segments (the ``x`` in ``pt.x``) are fields of a composite attribute
-        and cannot be checked here.
-
-        Args:
-            assign: The ``assign <target> := <expr>`` action to inspect.
-
-        Returns:
-            Python source for the assignment target, e.g. ``self.counter``
-            or ``self.equipment.flag``.
-
-        Raises:
-            UnsupportedConstructError: If the base feature name is not in
-                the bound attribute set.
-            ValueError: If the assignment target has no resolved feature.
-        """
-        target = super().render_assignment_target(assign)
-        self._require_attribute(target.split(".")[0], assign)
-        return f"self.{target}"
-
-    @override
-    def render_send(self, send: syside.SendActionUsage) -> str:
-        """Translate a send by its declared receiver (SysML/KerML semantics).
-
-        - A ``to`` receiver that is not the machine's own port is
-          cross-machine addressing and is rejected (route with ``via`` + a
-          ``connect`` instead).
-        - A ``via`` send routes over the port's connections: it sets the LF
-          output port when a connected peer accepts the signal, and is
-          dropped (recorded for a build warning) otherwise. It never also
-          schedules a self-event -- one send is one transfer.
-        - A ``to <own port>`` send (or a bare send) is an internal
-          self-event: ``<Event>_act.schedule(0[, <payload>])``.
-
-        The payload constructs the type's generated class with its fields
-        by keyword: first each constructor argument, named by the field it
-        binds, then each omitted field with the value its type gives it, so
-        the arguments are evaluated once, at the send, in constructor
-        order. An omitted field without a value keeps the class's
-        placeholder. A type without fields is sent as a bare signal.
-
-        Payload constructors use the generated types module alias so LF
-        port parameters cannot shadow their class symbols.
-
-        Args:
-            send: The ``send new <Type>(<args>)`` action to translate.
-
-        Returns:
-            Python source for the statement, or ``""`` for a dropped ``via``
-            send.
-
-        Raises:
-            UnsupportedConstructError: If the ``to`` receiver is not the
-                machine's own port, or an omitted field's value from its
-                type is not a literal constant.
-            ValueError: If the payload is not a ``new <Type>(...)``
-                constructor resolving to a named definition, or an argument
-                does not bind exactly one field.
-        """
-        event_name, _arguments = payload_signature(send)
-        definition = constructed_payload_definition(send)
-        if self._needs.catalog is not None:
-            assert definition is not None
-            event_name = self._needs.catalog.channel_for(definition)
         symbol = (
             self._needs.dataclasses.symbol_for(definition)
             if definition is not None
             else event_name
         )
-        constructor = (
-            f"_sysmlc_types.{symbol}" if self._needs.types_module else symbol
-        )
-        if send.receiver_argument is not None and not send_receiver_is_own_port(
-            send
-        ):
-            raise UnsupportedConstructError(
-                f"send {event_name!r} addresses a receiver that is not the "
-                "machine's own port; cross-machine 'to' addressing is not "
-                "supported. Route the signal with 'via <port>' and a "
-                "connect instead.",
-                node=send,
-            )
-        via_port = send_via_port(send)
-        if via_port is not None and event_name not in self._port_signals:
-            self._needs.undeliverable_sends.add((event_name, via_port))
-            return ""
-        fields = payload_fields(send)
-        args = self.render_fields((field.name, field.value) for field in fields)
-        payload = f"{constructor}({args})" if fields else None
-        if via_port is not None:
-            return "\n".join(event_write(event_name, payload or "True"))
-        return (
-            f"{event_name}_act.schedule(0, {payload})"
-            if payload
-            else f"{event_name}_act.schedule(0)"
-        )
+        if self._needs.types_module:
+            symbol = f"_sysmlc_types.{symbol}"
+        return f"{symbol}({fields})"
 
     @override
-    def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
-        """Emit a shared library call or backend-specific calc-def call."""
-        library_call = self._emit_library_invocation(expr)
-        if library_call is not None:
-            source, needs_math = library_call
-            if needs_math:
-                self._needs.uses_math = True
-            return source
-        external_call = self._emit_external_calculation_invocation(
-            expr,
-            external=self._needs.external,
-            used_external=self._needs.used_external,
-        )
-        if external_call is not None:
-            return external_call
-        func = expr.function
-        qn = None if func is None else func.qualified_name
-        raise UnsupportedConstructError(
-            f"function {qn or '<unresolved>'!s} is not in rosetta's "
-            "supported set.",
-            node=expr,
-        )
-
-    def _require_attribute(self, name: str, node: syside.Element) -> None:
-        if name not in self._attribute_names:
-            raise UnsupportedConstructError(
-                f"reference to {name!r} does not resolve to a bound "
-                "attribute; referencing an accept payload or any other "
-                "non-attribute feature is not supported by rosetta yet.",
-                node=node,
-            )
+    def _enum_literal(self, literal: syside.EnumerationUsage) -> str:
+        """Register the literal's enum class; return ``Def.literal``."""
+        return self._needs.register_enum(literal)

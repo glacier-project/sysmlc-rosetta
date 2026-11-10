@@ -50,6 +50,8 @@ if TYPE_CHECKING:
     import syside
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
+    from sysmlc_rosetta.targets.base import LfTarget
+
 logger = logging.getLogger(__name__)
 
 
@@ -135,16 +137,20 @@ def compose_exhibits(
             Connection(f"{inst}.{OUTPUT_PORT}", f"{inst}_{OUTPUT_PORT}")
         )
 
-    composite = Reactor(
-        name=composite_name,
-        outputs=tuple(f"{inst}_{OUTPUT_PORT}" for inst, _qn, _face in faces),
-        instantiations=tuple(
-            Instantiation(inst, mach.name)
-            for (inst, _qn, _face), mach in zip(
-                faces, machine_reactors, strict=True
-            )
-        ),
-        connections=tuple(connections),
+    composite = needs.target.declare(
+        Reactor(
+            name=composite_name,
+            outputs=tuple(
+                f"{inst}_{OUTPUT_PORT}" for inst, _qn, _face in faces
+            ),
+            instantiations=tuple(
+                Instantiation(inst, mach.name)
+                for (inst, _qn, _face), mach in zip(
+                    faces, machine_reactors, strict=True
+                )
+            ),
+            connections=tuple(connections),
+        )
     )
     return tuple(child_reactors), composite
 
@@ -205,6 +211,7 @@ def build_part_program(
     *,
     target_options: tuple[tuple[str, str], ...] = (),
     external: list[ForeignArtifact] | None = None,
+    target: LfTarget | None = None,
 ) -> LfProgram:
     """Build the composed LF program for a top-level part usage.
 
@@ -224,11 +231,11 @@ def build_part_program(
     Args:
         model: Loaded syside model.
         usage_qn: Qualified name of the top-level part usage to assemble.
-        target_options: Key/value pairs for the LF ``target Python { … }``
-            header (e.g. ``(("fast", "true"), ("timeout", "5 sec"))``).
-        external: Optional foreign artifacts whose top-level Python functions
-            back external ``calc def`` calls. Their module names and matched
-            functions are emitted in the generated preamble.
+        target_options: Key/value pairs for the LF ``target`` header (e.g.
+            ``(("fast", "true"), ("timeout", "5 sec"))``).
+        external: Optional foreign artifacts whose functions, in the target's
+            language, back external ``calc def`` calls.
+        target: The LF target language; Python when None.
     """
     g = part_graph(model, usage_qn)
 
@@ -262,6 +269,7 @@ def build_part_program(
         module_name=module_name,
         catalog=catalog,
         external=external,
+        target=target,
     )
 
     main = MainReactor(
@@ -272,7 +280,6 @@ def build_part_program(
     )
     program = LfProgram(
         reactors=reactors,
-        preamble=tuple(needs.preamble_lines()),
         main=main,
         target_options=target_options,
         constraints=tuple(needs.constraints.values()),
@@ -304,6 +311,7 @@ def _build_reactors(
     module_name: str,
     catalog: SignalCatalog | None = None,
     external: list[ForeignArtifact] | None = None,
+    target: LfTarget | None = None,
 ) -> tuple[tuple[Reactor, ...], PreambleNeeds]:
     """Build reactor classes for all part nodes, sharing one preamble.
 
@@ -328,12 +336,13 @@ def _build_reactors(
         external: Optional foreign artifacts. When supplied, registered on
             the shared :class:`PreambleNeeds` before any builder pass so that
             matched calls land in the preamble.
+        target: The LF target language; Python when None.
 
     Returns:
         A tuple of ``(reactor_classes, needs)`` where ``needs`` is the shared
         preamble registry, ready for :func:`_finalize`.
     """
-    needs = PreambleNeeds(catalog)
+    needs = PreambleNeeds(catalog, target=target)
     needs.types_module = module_name
     if external:
         needs.external = external
