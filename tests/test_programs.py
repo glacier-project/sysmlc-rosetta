@@ -503,11 +503,12 @@ def test_dispatch_fired_sets_flag_per_branch() -> None:
         and isinstance(t.trigger, SignalTrigger)
         and t.trigger.signal_name == "A"
     ]
-    body, _ = b._dispatch(group, [], "", gen, fired="idle_fired")
-    assert any("self.idle_fired = True" in line for line in body)
+    body, _ = b._dispatch(group, (), "", gen, fired="idle_fired")
+    lines = b._target.render(body)
+    assert any("self.idle_fired = True" in line for line in lines)
     # Without `fired`, no flag write appears.
-    body2, _ = b._dispatch(group, [], "", gen)
-    assert not any("idle_fired" in line for line in body2)
+    body2, _ = b._dispatch(group, (), "", gen)
+    assert not any("idle_fired" in line for line in b._target.render(body2))
 
 
 # -- sm16: accept when change triggers --

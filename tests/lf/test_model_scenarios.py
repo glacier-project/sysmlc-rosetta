@@ -6,6 +6,7 @@ import pytest
 from sysmlc_models.catalog import iter_models, model_path
 from sysmlc_models.scenarios import SCENARIOS
 from sysmlc_models.validation import (
+    BACKENDS,
     Scenario,
     validate_rosetta_inertness,
     validate_scenario,
@@ -17,13 +18,22 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.lf
 
 
+# The C target's scenarios run once the installed models know the backend.
+_TARGETS = [
+    backend for backend in ("rosetta", "rosetta-c") if backend in BACKENDS
+]
+
+
+@pytest.mark.parametrize("backend", _TARGETS)
 @pytest.mark.parametrize(
     "scenario",
     [s for s in SCENARIOS if "rosetta" in s.backends],
     ids=lambda s: s.name,
 )
-def test_shared_model_scenario(scenario: Scenario, tmp_path: Path) -> None:
-    validate_scenario(scenario, "rosetta", tmp_path)
+def test_shared_model_scenario(
+    scenario: Scenario, backend: str, tmp_path: Path
+) -> None:
+    validate_scenario(scenario, backend, tmp_path)
 
 
 @pytest.mark.parametrize(

@@ -50,8 +50,9 @@ def test_formats(backend: RosettaBackend) -> None:
 
 
 def test_supported_foreign_artifact_languages(backend: RosettaBackend) -> None:
+    # Every target's languages, so the CLI offers --python, --c and --c_h.
     assert backend.supported_foreign_artifact_languages() == frozenset(
-        {"python"}
+        {"python", "c", "c_h"}
     )
 
 
