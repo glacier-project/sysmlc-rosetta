@@ -1000,7 +1000,7 @@ class per part def plus an explicit `main reactor`.
 | `part def Foo { exhibit state : Beh; }`   | `reactor Foo { … }` (the inlined machine `Beh`, named after the part def) |
 | nested `part f : Foo;` in a usage         | `f = new Foo()` inside `main reactor`                                     |
 | top-level **part usage** `part sys { … }` | the `main reactor`                                                        |
-| `interface a.pa to b.pb;`                   | LF connections for the signals that cross those ports (§13.1)             |
+| `interface a.pa to b.pb;`                 | LF connections for the signals that cross those ports (§13.1)             |
 | CLI `--fast` / `--timeout "5 sec"`        | `target Python { fast: true, timeout: 5 sec, }` header                    |
 
 A part def with **1 exhibit** inlines that machine; **≥2 exhibits** compose
