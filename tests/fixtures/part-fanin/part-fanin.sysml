@@ -27,7 +27,7 @@ package PartFanin {
         part s1 : Source1;
         part s2 : Source2;
         part sink : Sink;
-        connect s1.tx to sink.rx;
-        connect s2.tx to sink.rx;
+        interface s1.tx to sink.rx;
+        interface s2.tx to sink.rx;
     }
 }

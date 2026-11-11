@@ -338,9 +338,9 @@ class LfActions(ExpressionCodeGen):
         """Translate a send by its declared receiver (SysML/KerML semantics).
 
         - A ``to`` receiver that is not the machine's own port is
-          cross-machine addressing and is rejected (route with ``via`` + a
-          ``connect`` instead).
-        - A ``via`` send routes over the port's connections: it sets the LF
+          cross-machine addressing and is rejected (route with ``via`` and
+          an interface instead).
+        - A ``via`` send routes over the port's interfaces: it sets the LF
           output port when a connected peer accepts the signal, and is
           dropped (recorded for a build warning) otherwise. It never also
           schedules a self-event -- one send is one transfer.
@@ -378,8 +378,8 @@ class LfActions(ExpressionCodeGen):
             raise UnsupportedConstructError(
                 f"send {event_name!r} addresses a receiver that is not the "
                 "machine's own port; cross-machine 'to' addressing is not "
-                "supported. Route the signal with 'via <port>' and a "
-                "connect instead.",
+                "supported. Route the signal with 'via <port>' and an "
+                "interface instead.",
                 node=send,
             )
         via_port = send_via_port(send)
