@@ -405,8 +405,10 @@ class LfActions(ExpressionCodeGen):
 
     @override
     def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
-        """Emit a library call or an external calc-def calls. Passsing missing 
-        functions raise an error."""
+        """Emit a library call or an external calc-def calls.
+
+        Passing missing functions raise an error.
+        """
         library_call = self._emit_library_invocation(expr)
         if library_call is not None:
             source, needs_math = library_call

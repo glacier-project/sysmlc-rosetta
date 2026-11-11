@@ -1109,23 +1109,23 @@ source renders. The builder assembles reaction bodies as a statement tree
 to spell each statement. The generated C never allocates memory: every value
 is fixed-size, and `current_state` is set only from string literals.
 
-| Python target                                  | C target                                              |
-| ---------------------------------------------- | ----------------------------------------------------- |
-| `target Python`, companion `<base>_types.py`   | `target C`, companion `<base>_types.h` in `files:`    |
-| untyped ports and state                        | typed ports and state (`bool`, `tag_t`, payload structs) |
-| `self.x`, `p.set(v)`, `p.is_present`           | `self->x`, `lf_set(p, (v));`, `p->is_present`         |
-| `m.set()`                                      | `lf_set_mode(m);`                                     |
-| `S_act.schedule(0, T(...))`                    | `lf_schedule_copy(S_act, 0, &((T){ ... }), 1);`       |
-| `raise RuntimeError(...)`                      | `lf_print_error_and_exit("%s", ...);`                 |
-| `assert c, "..."`                              | `if (!(c)) { fprintf(stderr, "AssertionError: %s\n", ...); exit(1); }` |
-| `logging.debug(...)`                           | `LF_PRINT_DEBUG("%s", ...);`                          |
-| arrival tag `(elapsed, microstep)`, `()`       | `tag_t` from `lf_tag()`, `NEVER_TAG`                  |
-| busy set `{"c_a", "c_b"}`                      | one `bool` per child: `_<state>_c_a_busy`             |
-| pending slot `None` / `()` / `(key, v, tag)`   | `sysmlc_pending_t` with `slot` CLOSED / OPEN / HOLDING |
-| selection `None` / `()` / `(key, v)`           | `sysmlc_selection_t` with `state` IDLE / ANCESTOR / SELECTED |
-| consumption flag `True` / tag / `None` / `False` | `sysmlc_consumption_t` ACCEPTED (+ tag) / HELD / DECLINED |
-| `_active` `None` / `""` / `"<mode>"`           | `int` 0 / 1 / a number per mode                       |
-| `"heating." + child.current_state.value`       | each reactor announces its full path, parents forward it |
+| Python target                                    | C target                                                               |
+| ------------------------------------------------ | ---------------------------------------------------------------------- |
+| `target Python`, companion `<base>_types.py`     | `target C`, companion `<base>_types.h` in `files:`                     |
+| untyped ports and state                          | typed ports and state (`bool`, `tag_t`, payload structs)               |
+| `self.x`, `p.set(v)`, `p.is_present`             | `self->x`, `lf_set(p, (v));`, `p->is_present`                          |
+| `m.set()`                                        | `lf_set_mode(m);`                                                      |
+| `S_act.schedule(0, T(...))`                      | `lf_schedule_copy(S_act, 0, &((T){ ... }), 1);`                        |
+| `raise RuntimeError(...)`                        | `lf_print_error_and_exit("%s", ...);`                                  |
+| `assert c, "..."`                                | `if (!(c)) { fprintf(stderr, "AssertionError: %s\n", ...); exit(1); }` |
+| `logging.debug(...)`                             | `LF_PRINT_DEBUG("%s", ...);`                                           |
+| arrival tag `(elapsed, microstep)`, `()`         | `tag_t` from `lf_tag()`, `NEVER_TAG`                                   |
+| busy set `{"c_a", "c_b"}`                        | one `bool` per child: `_<state>_c_a_busy`                              |
+| pending slot `None` / `()` / `(key, v, tag)`     | `sysmlc_pending_t` with `slot` CLOSED / OPEN / HOLDING                 |
+| selection `None` / `()` / `(key, v)`             | `sysmlc_selection_t` with `state` IDLE / ANCESTOR / SELECTED           |
+| consumption flag `True` / tag / `None` / `False` | `sysmlc_consumption_t` ACCEPTED (+ tag) / HELD / DECLINED              |
+| `_active` `None` / `""` / `"<mode>"`             | `int` 0 / 1 / a number per mode                                        |
+| `"heating." + child.current_state.value`         | each reactor announces its full path, parents forward it               |
 
 **Types.** Payloads and structured attributes become `typedef struct`s and
 enumerations `typedef enum`s, in `<base>_types.h`. A type is named after its

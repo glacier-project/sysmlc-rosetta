@@ -209,8 +209,8 @@ class RosettaBackend(Backend):
             usage_qn: Qualified name of the top-level part usage.
             target_options: Key/value pairs for the LF target header.
             external: Optional foreign artifacts that implement external
-                ``calc def`` calls. Artifacts are choosen based on the specified
-                target language. 
+                ``calc def`` calls. Artifacts are chosen based on the specified
+                target language.
             strict_extern: Unused.
         """
         return build_part_program(
