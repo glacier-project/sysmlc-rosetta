@@ -404,8 +404,9 @@ child reactor, and the parent's mode forwards them down
   re-enters the mode and restarts the timer — the periodic-tick idiom.
 - **`accept after pickDuration`** (attribute) → a mode-local logical
   action scheduled on entry with the attribute's value (seconds → ns).
-- **`after` + `if`** is supported (the guard is evaluated when the timer
-  fires) — a capability the quake backend must reject.
+- **`after` + `if`** is supported: the guard is evaluated when the timer
+  fires. Quake also supports this one-shot guarded delivery; a false guard at
+  the deadline does not allow a late firing when the condition later changes.
 - **`accept at t`** → a mode-local logical action scheduled on entry for
   the instant `t`, measured as logical time since startup; an instant that
   has already passed at entry schedules nothing.
