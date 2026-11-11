@@ -1000,7 +1000,7 @@ class per part def plus an explicit `main reactor`.
 | `part def Foo { exhibit state : Beh; }`   | `reactor Foo { … }` (the inlined machine `Beh`, named after the part def) |
 | nested `part f : Foo;` in a usage         | `f = new Foo()` inside `main reactor`                                     |
 | top-level **part usage** `part sys { … }` | the `main reactor`                                                        |
-| `connect a.pa to b.pb;`                   | LF connections for the signals that cross those ports (§13.1)             |
+| `interface a.pa to b.pb;`                   | LF connections for the signals that cross those ports (§13.1)             |
 | CLI `--fast` / `--timeout "5 sec"`        | `target Python { fast: true, timeout: 5 sec, }` header                    |
 
 A part def with **1 exhibit** inlines that machine; **≥2 exhibits** compose
@@ -1012,14 +1012,14 @@ reactor **once** and is instantiated per usage.
 ### 13.1 Connections are port-based (not name-based)
 
 Routing follows the **connected ports**, honoring the SysML model — not a
-global same-name auto-wire. For `connect a.pa to b.pb`, a signal `S` crosses
+global same-name auto-wire. For `interface a.pa to b.pb`, a signal `S` crosses
 **only if** one end *sends* `S` `via pa` and the other *accepts* `S` `via pb`:
 
 ```sysml
 part def Pinger { port commPort; exhibit state : PingerBehavior; }   // sends Ping via commPort
 part def Ponger { port commPort; exhibit state : PongerBehavior; }   // sends Pong via commPort
 part pingSystem { part a : Pinger; part b : Ponger;
-                  connect a.commPort to b.commPort; }
+                  interface a.commPort to b.commPort; }
 ```
 
 →
@@ -1041,9 +1041,15 @@ named by **signal** (`Ping`, `Pong`); the SysML port scopes *which* signals a
 connection carries — so a part with two ports routes each port independently
 (a signal sent via one port does not leak to a peer on the other).
 
+Generic structural connections do not establish signal transport. An interface
+may use shorthand `interface a.pa to b.pb;`, an explicitly typed interface,
+or a `connection` typed by an interface definition. Generic connections are
+ignored during route extraction. A send without an eligible accepting peer
+receives the ordinary unrouted-send warning.
+
 ### 13.2 Strict validation & rejections
 
-- A `connect` naming a part or port that the model does not declare → rejected.
+- An interface naming a part or port that the model does not declare → rejected.
 - A behavior that `send/accept`s `via` a port the part def does not declare →
   rejected (the inlined machine's ports must resolve against the part's).
 - **Single-channel fan-in** — two sources into one input port (the same LF

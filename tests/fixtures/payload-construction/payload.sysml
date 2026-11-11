@@ -197,7 +197,7 @@ package PayloadConstruction {
         part rx : PeerReceiver;
         part defaultTx : DefaultSender;
         part defaultRx : DefaultReceiver;
-        connect tx.outPort to rx.rxPort;
-        connect defaultTx.outPort to defaultRx.rxPort;
+        interface tx.outPort to rx.rxPort;
+        interface defaultTx.outPort to defaultRx.rxPort;
     }
 }

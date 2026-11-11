@@ -6,7 +6,7 @@ part def), and emits an explicit ``main reactor`` that instantiates each part
 and wires its connected ports.
 
 Connection routing is **port-based** (spec rosetta-parts-design.md §5.3): for
-``connect a.pa to b.pb`` a signal crosses only if it is *sent via* ``pa`` on
+``interface a.pa to b.pb`` a signal crosses only if it is *sent via* ``pa`` on
 one end and *accepted via* ``pb`` on the other (the port-aware interface
 maps). This generalizes the rig's name-based ``_cross`` to N parts while
 honouring the SysML ports, and validates ports strictly.
@@ -222,7 +222,7 @@ def build_part_program(
     * **Multi-exhibit** (``len(node.behaviors) >= 2``): self-contained
       sub-systems built via :func:`compose_exhibits`.  They do not
       participate in ``faces`` / ``_peer_accepts`` (their signals are
-      internal).  A ``connect`` that
+      internal).  An interface that
       references a multi-exhibit part is rejected with
       :class:`~sysmlc.errors.UnsupportedConstructError`.
 
@@ -243,12 +243,12 @@ def build_part_program(
     multi_nodes = tuple(p for p in g.parts if len(p.behaviors) >= 2)
     multi_names = {p.usage_name for p in multi_nodes}
 
-    # Reject connections that touch multi-exhibit parts (not supported yet).
-    for (ia, _pa), (ib, _pb) in g.connections:
+    # Reject interfaces that touch multi-exhibit parts (not supported yet).
+    for (ia, _pa), (ib, _pb) in g.interfaces:
         for inst in (ia, ib):
             if inst in multi_names:
                 raise UnsupportedConstructError(
-                    f"connection references part {inst!r}, which is a "
+                    f"interface references part {inst!r}, which is a "
                     "multi-exhibit part; connecting to a multi-exhibit part "
                     "is not supported yet"
                 )
@@ -296,7 +296,7 @@ def _peer_accepts(
     ports actually connected, not global name matching.
     """
     acc: dict[str, set[str]] = defaultdict(set)
-    for (ia, pa), (ib, pb) in g.connections:
+    for (ia, pa), (ib, pb) in g.interfaces:
         acc[ia] |= faces[ib].accepted_via.get(pb, frozenset())
         acc[ib] |= faces[ia].accepted_via.get(pa, frozenset())
     return {p.usage_name: frozenset(acc[p.usage_name]) for p in g.parts}

@@ -82,16 +82,16 @@ package EventCoalescing {
     part direct {
         part sender : DoubleSender;
         part sink : Sink;
-        connect sender.tx to sink.rx;
+        interface sender.tx to sink.rx;
     }
     part siblings {
         part sender : SiblingSender;
         part sink : Sink;
-        connect sender.tx to sink.rx;
+        interface sender.tx to sink.rx;
     }
     part separated {
         part sender : SeparatedSender;
         part sink : Sink;
-        connect sender.tx to sink.rx;
+        interface sender.tx to sink.rx;
     }
 }

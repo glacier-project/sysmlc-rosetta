@@ -204,6 +204,31 @@ def test_part01_runs_and_logs(tmp_path: Path) -> None:
     assert "entered Tester.waitPong" in logs
 
 
+def test_part01_generic_connection_does_not_deliver_ping(
+    tmp_path: Path,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    source = (SM_EXAMPLES_DIR / "part01-two-parts" / "part01.sysml").read_text()
+    (model_dir / "part01.sysml").write_text(
+        source.replace(
+            "interface plant.commPort to tb.commPort;",
+            "connect plant.commPort to tb.commPort;",
+        )
+    )
+    logs, rc = run_part(
+        tmp_path, model_dir, "Part01::pingSystem", timeout="6 sec"
+    )
+    assert "entered Plant.idle" in logs
+    assert "entered Plant.pinged" not in logs
+    assert "entered Tester.waitPong" in logs
+    assert "entered Tester.fail" in logs
+    assert "SysML constraint violated:" in logs
+    assert '"reactor":"Tester"' in logs
+    assert '"name":"ok"' in logs
+    assert rc != 0
+
+
 def test_multi_exhibit_part_runs_and_passes_verdict(tmp_path: Path) -> None:
     # PartMulti::sys contains one part `rig : Rig` where Rig exhibits both
     # PlantBehavior and TesterBehavior. The tester sends Ping after 0.1 s,

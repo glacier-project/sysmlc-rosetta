@@ -83,8 +83,8 @@ package TypedDispatch {
         part sender : SenderPart;
         part receiver : ReceiverPart;
         part unrelated : UnrelatedPart;
-        connect sender.p to receiver.p;
-        connect sender.p to unrelated.p;
+        interface sender.p to receiver.p;
+        interface sender.p to unrelated.p;
     }
     item boundValue : Base;
     state def UnsupportedBound {

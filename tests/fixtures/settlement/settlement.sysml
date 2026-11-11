@@ -891,7 +891,7 @@ package Settlement {
     part escapePeers {
         part sender : EscapeSender;
         part waiter : Waiter;
-        connect sender.tx to waiter.rx;
+        interface sender.tx to waiter.rx;
     }
 
     part def Sender { port tx; exhibit state : ExitSender; }
@@ -900,6 +900,6 @@ package Settlement {
     part peers {
         part sender : Sender;
         part waiter : Waiter;
-        connect sender.tx to waiter.rx;
+        interface sender.tx to waiter.rx;
     }
 }

@@ -187,6 +187,6 @@ package RootExit {
     part peers {
         part finisher : Finisher;
         part waiter : Waiter;
-        connect finisher.tx to waiter.rx;
+        interface finisher.tx to waiter.rx;
     }
 }

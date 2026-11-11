@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.parts.graph import part_graph
@@ -106,3 +108,38 @@ def test_legacy_reactor_builder_keeps_catalog_optional() -> None:
     tester = next(reactor for reactor in reactors if reactor.name == "Tester")
     assert "Ping" in plant.inputs and "Pong" in plant.outputs
     assert "Pong" in tester.inputs and "Ping" in tester.outputs
+
+
+def test_generic_connection_cannot_supply_an_lf_wire(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = (FIX / "part01.sysml").read_text()
+    (tmp_path / "model.sysml").write_text(
+        source.replace(
+            "interface plant.commPort to tb.commPort;",
+            "connect plant.commPort to tb.commPort;",
+        )
+    )
+    model = load_model(tmp_path)
+    graph = part_graph(model, "Part01::pingSystem")
+    assert not graph.interfaces
+    program = build_part_program(model, "Part01::pingSystem")
+    assert program.main is not None
+    assert not program.main.connections
+    assert "no connected peer accepts it" in caplog.text
+
+
+def test_structural_link_does_not_restrict_multi_exhibit_parts(
+    tmp_path: Path,
+) -> None:
+    source = (MULTI / "multi.sysml").read_text()
+    source = source.replace("part def Rig {", "part def Rig { port p;")
+    source = source.replace(
+        "part sys { part rig : Rig; }",
+        "part sys { part rig : Rig; part peer : Rig; connect rig.p to peer.p; }",
+    )
+    (tmp_path / "model.sysml").write_text(source)
+    program = build_part_program(load_model(tmp_path), "PartMulti::sys")
+    assert program.main is not None
+    assert {i.name for i in program.main.instantiations} == {"rig", "peer"}
+    assert not program.main.connections
