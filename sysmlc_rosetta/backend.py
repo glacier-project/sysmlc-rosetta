@@ -5,7 +5,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, override
 
 import syside as _syside
-from sysmlc.backends import GeneratedFile, GeneratedOutput
+from sysmlc.backends import BuildOption, GeneratedFile, GeneratedOutput
 from sysmlc.backends.base import Backend, OutputOptions
 from sysmlc.errors import SerializationError, UnsupportedConstructError
 from sysmlc.semantics.statemachine.interface import machine_interface
@@ -17,29 +17,86 @@ from sysmlc_rosetta.codegen import PreambleNeeds
 from sysmlc_rosetta.parts import build_part_program, compose_exhibits
 from sysmlc_rosetta.program import LfProgram
 from sysmlc_rosetta.serialize import to_lf
+from sysmlc_rosetta.targets import TARGETS
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     import syside
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
+    from sysmlc_rosetta.targets.base import LfTarget
+
 logger = logging.getLogger(__name__)
 
 
 class RosettaBackend(Backend):
-    """Lingua Franca backend for generating LF programs from SysML."""
+    """Lingua Franca backend for generating LF programs from SysML.
 
-    def __init__(self) -> None:
+    An unconfigured backend (``target=None``) generates for Python and
+    declares the foreign-artifact languages of every target, so the CLI
+    offers all their flags. :meth:`configured` returns a backend that
+    consumes only its own target's languages.
+
+    Args:
+        target: The LF target language of the generated programs, a key of
+            :data:`~sysmlc_rosetta.targets.TARGETS`, or None.
+
+    Raises:
+        ValueError: If ``target`` is unknown.
+    """
+
+    def __init__(self, target: str | None = None) -> None:
+        if target is not None and target not in TARGETS:
+            raise ValueError(f"unknown LF target {target!r}")
+        languages = (
+            sorted(
+                {lang for t in TARGETS.values() for lang in t.foreign_languages}
+            )
+            if target is None
+            else TARGETS[target].foreign_languages
+        )
         super().__init__(
             name="rosetta",
             description=(
-                "Generate Lingua Franca programs (Python target) from "
+                "Generate Lingua Franca programs (Python or C target) from "
                 "SysML state definitions."
             ),
-            formats=(("lf", "Lingua Franca (Python target) program"),),
-            foreign_artifact_languages=("python",),
+            formats=(("lf", "Lingua Franca program"),),
+            foreign_artifact_languages=languages,
         )
+        self.target = target or "python"
+
+    @override
+    def build_options(self) -> tuple[BuildOption, ...]:
+        """Rosetta's ``--target``: the LF target language."""
+        return (
+            BuildOption(
+                "target",
+                "LF target language of the generated program",
+                choices=tuple(TARGETS),
+                default="python",
+            ),
+        )
+
+    @override
+    def configured(self, options: Mapping[str, str | None]) -> RosettaBackend:
+        """Return a backend generating for the selected ``--target``."""
+        return RosettaBackend(options.get("target") or "python")
+
+    def _new_target(self) -> LfTarget:
+        """A fresh target object; one serves one built program."""
+        return TARGETS[self.target]()
+
+    def _own(
+        self, external: list[ForeignArtifact] | None
+    ) -> list[ForeignArtifact] | None:
+        """The artifacts written in the target's languages."""
+        if external is None:
+            return None
+        languages = TARGETS[self.target].foreign_languages
+        return [a for a in external if a.lang in languages]
 
     @override
     def build(
@@ -50,12 +107,22 @@ class RosettaBackend(Backend):
         strict_extern: bool = False,
     ) -> object:
         """Build the Lingua Franca program for the given state definition."""
-        return build_program(model, element_qn, external=external)
+        return build_program(
+            model,
+            element_qn,
+            external=self._own(external),
+            target=self._new_target(),
+        )
 
     @override
     def consumes_python_support(self) -> bool:
-        """Rosetta emits Python LF reactions backed by ``--python``."""
-        return True
+        """Rosetta's Python target is backed by ``--python`` modules."""
+        return self.target == "python"
+
+    @override
+    def owns_external_delivery(self) -> bool:
+        """The C target ships its artifacts among its generated files."""
+        return self.target != "python"
 
     @override
     def accepts_target_options(self) -> bool:
@@ -108,8 +175,9 @@ class RosettaBackend(Backend):
                     sig,
                 )
         composite_name = element_qn.split("::")[-1]
-        needs = PreambleNeeds(catalog)
+        needs = PreambleNeeds(catalog, target=self._new_target())
         needs.types_module = f"{composite_name}_types"
+        external = self._own(external)
         if external:
             needs.external = external
         children, composite = compose_exhibits(
@@ -120,7 +188,6 @@ class RosettaBackend(Backend):
         )
         program = LfProgram(
             reactors=(*children, composite),
-            preamble=tuple(needs.preamble_lines()),
             constraints=tuple(needs.constraints.values()),
         )
         return finalize(program, needs)
@@ -141,16 +208,17 @@ class RosettaBackend(Backend):
             model: Loaded syside model.
             usage_qn: Qualified name of the top-level part usage.
             target_options: Key/value pairs for the LF target header.
-            external: Optional foreign artifacts that provide Python
-                implementations for external ``calc def`` calls. Each
-                artifact supplies its module path and declared function names.
+            external: Optional foreign artifacts that implement external
+                ``calc def`` calls. Artifacts are chosen based on the specified
+                target language.
             strict_extern: Unused.
         """
         return build_part_program(
             model,
             usage_qn,
             target_options=target_options,
-            external=external,
+            external=self._own(external),
+            target=self._new_target(),
         )
 
     @override
@@ -168,7 +236,8 @@ class RosettaBackend(Backend):
         """Return the files :meth:`write` would write, without writing them.
 
         The program is ``<basename>.lf``, followed by its companion types
-        module ``<types_module_name>.py`` when the program has one.
+        file: the Python module ``<types_module_name>.py`` when the program
+        has one, or the C target's header.
 
         Args:
             artifact: The program returned by :meth:`build`.
@@ -193,14 +262,19 @@ class RosettaBackend(Backend):
         program = GeneratedFile(
             PurePosixPath(f"{basename}.lf"), self.serialize(artifact, "lf")
         )
-        if not artifact.types_module_lines:
-            return GeneratedOutput((program,))
-        assert artifact.types_module_name is not None
-        types_module = GeneratedFile(
-            PurePosixPath(f"{artifact.types_module_name}.py"),
-            "\n".join(artifact.types_module_lines) + "\n",
-        )
-        return GeneratedOutput((program, types_module))
+        companions = [
+            GeneratedFile(PurePosixPath(name), text)
+            for name, text in artifact.support_files
+        ]
+        if artifact.types_module_lines:
+            assert artifact.types_module_name is not None
+            companions.append(
+                GeneratedFile(
+                    PurePosixPath(f"{artifact.types_module_name}.py"),
+                    "\n".join(artifact.types_module_lines) + "\n",
+                )
+            )
+        return GeneratedOutput((program, *companions))
 
     @override
     def write(self, artifact: object, options: OutputOptions) -> list[Path]:

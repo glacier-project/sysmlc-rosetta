@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-import json
+from typing import TYPE_CHECKING
 
 from sysmlc_rosetta.program import Reaction
+from sysmlc_rosetta.statements import If, nest, stored, writes
 
+if TYPE_CHECKING:
+    from sysmlc_rosetta.statements import Body, Node
+    from sysmlc_rosetta.targets.base import LfTarget
+
+OUTPUT_PORT = "current_state"
+COMPLETED_PORT = "completed"
 ENTRY_ORDER_PORT = "_entry_order"
 BUSY_PORT = "_busy"
 SETTLED_PORT = "_settled"
@@ -11,148 +18,144 @@ EXIT_REQUEST_PORT = "_exit"
 EXIT_ACK_PORT = "_exited"
 ACTIVE_VAR = "_active"
 EXIT_PENDING_VAR = "_exit_requested"
-# Eventless continuations sort before arrival tags.
-_ARRIVAL = "(lf.time.logical_elapsed(), lf.tag().microstep)"
-_CONTINUATION = "()"
-_PY_INDENT = "    "
 
 
-def when_due(due: str, body: list[str]) -> list[str]:
+def when_due(target: LfTarget, due: str, body: Body) -> Body:
     """Run a time trigger only for the callback its activation armed.
 
     The LF 0.13 runtime retains old events on active-mode reset, contrary
     to its documented reset semantics. Entry records the current due time;
     the first callback at it consumes the record before guard or retention.
     """
-    return [
-        f"if lf.time.logical_elapsed() == self.{due}:",
-        f"{_PY_INDENT}self.{due} = None",
-        *(f"{_PY_INDENT}{line}" for line in body),
-    ]
-
-
-def report_busy(occurrence: str) -> str:
-    """Report busy, keeping the latest arrival tag reported at this tag."""
-    return (
-        f"{BUSY_PORT}.set(max({BUSY_PORT}.value, {occurrence}) "
-        f"if {BUSY_PORT}.is_present else {occurrence})"
-    )
+    return (nest(target.due_reached(due), (target.clear_due(due), *body)),)
 
 
 def declining(
+    target: LfTarget,
     pending: str | None,
     held: list[tuple[int, str]],
-    body: list[str],
-) -> tuple[list[str], tuple[str, ...]]:
+    body: Body,
+) -> tuple[Body, tuple[str, ...]]:
     """Decline a retained signal if ``body`` ends its source activation.
 
     An earlier parallel region's gate waits for the outcome of a held
-    occurrence; ending the activation without accepting it reports
-    ``False`` on the signal's consumption flag.
+    occurrence; ending the activation without accepting it reports it
+    declined on the signal's consumption flag.
 
     Args:
-        pending: The source state's pending-trigger variable, or None.
+        target: The target language.
+        pending: The source state's pending slot, or None.
         held: Retained signal keys and their consumption flags.
-        body: The lines that may end the source activation.
+        body: The statements that may end the source activation.
 
     Returns:
-        The wrapped lines and the consumption flags they may set.
+        The wrapped statements and the consumption flags they may set.
     """
     if pending is None or not held:
         return body, ()
-    lines = [
-        f"_held = self.{pending}[0] if self.{pending} else None",
+    flags = tuple(
+        nest(target.held_is(key), (target.consume(flag, target.declined()),))
+        for key, flag in held
+    )
+    wrapped = (
+        target.bind_held(pending),
         *body,
-        f"if self.{pending} is None:",
-    ]
-    for key, flag in held:
-        lines += [
-            f"{_PY_INDENT}if _held == {key}:",
-            f"{_PY_INDENT * 2}{flag}.set(False)",
-        ]
-    return lines, tuple(flag for _, flag in held)
+        nest(target.pending_closed(pending), flags),
+    )
+    return wrapped, tuple(flag for _, flag in held)
 
 
-def busy_condition(state: str, insts: tuple[str, ...]) -> str:
-    """The Python condition that a source state's subtree is settling."""
-    return " or ".join(
+def busy_condition(target: LfTarget, state: str, insts: tuple[str, ...]) -> str:
+    """The condition that a source state's subtree is settling."""
+    return target.any_of(
         (
-            f"self._{state}_busy",
-            *(f"{inst}.{BUSY_PORT}.is_present" for inst in insts),
+            target.busy_any(state, insts),
+            *(target.is_present(f"{inst}.{BUSY_PORT}") for inst in insts),
         )
     )
 
 
 def retain(
-    body: list[str],
+    target: LfTarget,
+    body: Body,
     key: int,
     payload: str,
     state: str,
     insts: tuple[str, ...],
     message: str,
     consumed: str | None = None,
-    arrival: str = _ARRIVAL,
-) -> list[str]:
+    arrival: str | None = None,
+    signal: str | None = None,
+) -> Body:
     """Retain a trigger while the source state's subtree is settling.
 
     A child whose busy port is present at this tag selected its
-    transition in the same reaction cycle; ``_<state>_busy`` holds the
+    transition in the same reaction cycle; the busy marks hold the
     children announced busy earlier that have not settled yet. The
     retained entry keeps the trigger key, captured payload and arrival
     tag. At most one occurrence is retained: a second arrival while one
     is held raises a runtime error rather than reorder or drop either.
-    A retained signal marks its consumption flag as held (``None``):
-    enclosing candidates still treat the occurrence as unconsumed, and
-    a later region must not accept it meanwhile.
+    A retained signal marks its consumption flag as held: enclosing
+    candidates still treat the occurrence as unconsumed, and a later
+    region must not accept it meanwhile.
 
     Args:
-        body: The immediate dispatch lines.
+        target: The target language.
+        body: The immediate dispatch statements.
         key: The trigger's identity within its source state.
-        payload: Python expression for the payload to retain.
+        payload: Expression for the payload to retain.
         state: The resolved simple name of the source state.
         insts: The source state's child reactor instances.
         message: The diagnostic for overlapping retained occurrences.
         consumed: The signal's consumption-flag output, or None.
-        arrival: Python expression for the occurrence's arrival tag.
+        arrival: Expression for the occurrence's arrival tag; the current
+            tag when None.
+        signal: The channel whose payload is retained, or None.
     """
-    busy = busy_condition(state, insts)
-    pending = f"self._{state}_pending"
-    return [
-        f"_tag = {arrival}",
-        f"if {busy}:",
-        f"{_PY_INDENT}if {pending}:",
-        f"{_PY_INDENT * 2}raise RuntimeError({json.dumps(message)})",
-        f"{_PY_INDENT}{pending} = ({key}, {payload}, _tag)",
-        *([f"{_PY_INDENT}{consumed}.set(None)"] if consumed else []),
-        "else:",
-        *(f"{_PY_INDENT}{line}" for line in body),
+    pending = f"_{state}_pending"
+    holding: list[Node] = [
+        nest(target.pending_holding(pending), (target.fail(message),)),
+        target.pending_hold(pending, key, payload, signal),
     ]
+    if consumed:
+        holding.append(target.consume(consumed, target.held()))
+    return (
+        target.bind_tag(target.arrival() if arrival is None else arrival),
+        If(
+            ((busy_condition(target, state, insts), tuple(holding)),),
+            orelse=body,
+        ),
+    )
 
 
-def overtaking(state: str, insts: tuple[str, ...], message: str) -> list[str]:
+def overtaking(
+    target: LfTarget, state: str, insts: tuple[str, ...], message: str
+) -> tuple[Body, Body]:
     """Reject a later occurrence accepted below a retaining state.
 
-    The first line binds ``_newest``, the latest arrival tag the
-    children report busy with at this tag; the rest raise a runtime
-    error when it is later than the retained occurrence's arrival.
-
     Args:
+        target: The target language.
         state: The resolved simple name of the source state.
         insts: The source state's child reactor instances.
         message: The diagnostic for a later accepted occurrence.
+
+    Returns:
+        The statements binding the latest arrival tag the children report
+        busy with at this tag, and the check failing when it is later than
+        the retained occurrence's arrival.
     """
-    pending = f"self._{state}_pending"
-    ports = "".join(f"{inst}.{BUSY_PORT}, " for inst in insts)
-    return [
-        f"_newest = max((p.value for p in ({ports}) "
-        "if p.is_present), default=())",
-        f"if {pending} and _newest > {pending}[2]:",
-        f"{_PY_INDENT}raise RuntimeError({json.dumps(message)})",
-    ]
+    pending = f"_{state}_pending"
+    return target.bind_newest(insts), (
+        nest(
+            target.pending_later_than(pending, target.newest()),
+            (target.fail(message),),
+        ),
+    )
 
 
 def exit_handler(
-    exits: list[tuple[str, list[str], tuple[str, ...]]],
+    target: LfTarget,
+    exits: list[tuple[str, Body, tuple[str, ...]]],
     sent: list[str],
     ports: tuple[str, ...],
 ) -> Reaction:
@@ -162,46 +165,51 @@ def exit_handler(
     composite/parallel state forwards the request to its first child
     and finishes in its drain chain. A scope that is already finalized
     (or not yet active) acknowledges without running an exit. The active
-    slot holds a mode name while active, an empty string during selected
-    cleanup, and None once exited. A request arriving during cleanup waits
-    for its continuation to acknowledge rather than restarting its exits.
+    slot holds a mode while active, the cleanup mark during selected
+    cleanup, and nothing once exited. A request arriving during cleanup
+    waits for its continuation to acknowledge rather than restarting its
+    exits.
 
     Args:
-        exits: Per mode, its forced-exit lines and their effects.
+        target: The target language.
+        exits: Per mode, its forced-exit statements and their effects.
         sent: Signals sent in this scope.
         ports: Peer-accepted signals sent in this scope.
     """
-    body = [f"self.{EXIT_PENDING_VAR} = True"]
     effects: dict[str, None] = {}
-    for index, (mode, lines, mode_effects) in enumerate(exits):
-        keyword = "if" if index == 0 else "elif"
-        body.append(f'{keyword} self.{ACTIVE_VAR} == "{mode}":')
-        body += [f"{_PY_INDENT}{line}" for line in lines]
+    branches: list[tuple[str, Body]] = []
+    for mode, lines, mode_effects in exits:
+        branches.append((target.active_is(mode), lines))
         effects.update(dict.fromkeys(mode_effects))
-    keyword = "elif" if exits else "if"
-    body += [
-        f"{keyword} self.{ACTIVE_VAR} is None:",
-        f"{_PY_INDENT}{EXIT_ACK_PORT}.set(True)",
-        f"{_PY_INDENT}self.{EXIT_PENDING_VAR} = False",
-    ]
+    branches.append(
+        (
+            target.active_is_none(),
+            (
+                target.set_port(EXIT_ACK_PORT, target.boolean(True)),
+                target.set_flag(EXIT_PENDING_VAR, False),
+            ),
+        )
+    )
     effects[EXIT_ACK_PORT] = None
+    body = (target.set_flag(EXIT_PENDING_VAR, True), If(tuple(branches)))
     return make_reaction(
         (EXIT_REQUEST_PORT,),
         tuple(effects),
-        tuple(body),
+        body,
         sent,
         ports,
     )
 
 
 def lifecycle_reaction(
+    target: LfTarget,
     state: str,
     insts: tuple[str, ...],
-    retained: list[tuple[int, list[str], tuple[str, ...]]],
+    retained: list[tuple[int, Body, tuple[str, ...]]],
     consumed: list[tuple[int, tuple[str, ...]]],
     sent: list[str],
     held: list[tuple[int, str]],
-    overtaking: list[str],
+    overtaking: tuple[Body, Body],
     *,
     report_upward: bool,
     ports: tuple[str, ...],
@@ -211,8 +219,8 @@ def lifecycle_reaction(
     A child reports busy when it selects a transition and settled once
     its target entry, nested entries, eventless closure and natural
     region finalization are complete. Busy carries the arrival tag of
-    the occurrence that selected the transition, or ``()`` for an
-    eventless continuation. When no child is busy, the retained trigger
+    the occurrence that selected the transition, or the continuation for
+    an eventless one. When no child is busy, the retained trigger
     dispatches with its captured payload and arrival tag; an all-false
     trigger is retired, not retried. A retained signal that a
     descendant consumed under the same arrival tag is dropped, because
@@ -222,64 +230,100 @@ def lifecycle_reaction(
     with the latest arrival tag, and settled upward.
 
     Args:
+        target: The target language.
         state: The resolved simple name of the source state.
         insts: The source state's child reactor instances.
-        retained: Per trigger, its key, payload-aware dispatch lines and
-            their effects.
+        retained: Per trigger, its key, payload-aware dispatch statements
+            and their effects.
         consumed: Per signal trigger, its key and the descendant
             consumption ports it yields to.
         sent: Signals sent in this scope.
         held: Retained signal keys and their consumption flags; a
             retained signal whose guards are all false is declined.
-        overtaking: Lines binding the latest arrival and rejecting overtaking.
+        overtaking: The statements binding the latest arrival, and the
+            check rejecting overtaking (see :func:`overtaking`).
         report_upward: Whether this scope reports busy and settled upward.
         ports: Peer-accepted signals sent in this scope.
     """
-    busy = f"self._{state}_busy"
-    pending = f"self._{state}_pending"
-    body: list[str] = []
-    for inst in insts:
-        body += [
-            f"if {inst}.{BUSY_PORT}.is_present:",
-            f'{_PY_INDENT}{busy}.add("{inst}")',
-            f"elif {inst}.{SETTLED_PORT}.is_present:",
-            f'{_PY_INDENT}{busy}.discard("{inst}")',
-        ]
-    body += overtaking if retained else overtaking[:1]
-    for key, sources in consumed:
-        cond = " or ".join(
-            f"({src}.is_present and {src}.value == {pending}[2])"
-            for src in sources
+    pending = f"_{state}_pending"
+    body: list[Node] = [
+        If(
+            (
+                (
+                    target.is_present(f"{inst}.{BUSY_PORT}"),
+                    (target.busy_add(state, inst),),
+                ),
+                (
+                    target.is_present(f"{inst}.{SETTLED_PORT}"),
+                    (target.busy_discard(state, inst),),
+                ),
+            )
         )
-        body += [
-            f"if {pending} and {pending}[0] == {key} and ({cond}):",
-            f"{_PY_INDENT}{pending} = ()",
-        ]
+        for inst in insts
+    ]
+    bind_newest, reject_overtaking = overtaking
+    body += [*bind_newest, *(reject_overtaking if retained else ())]
+    for key, sources in consumed:
+        cond = target.any_of(
+            [
+                target.consumed_at(src, target.pending_tag(pending))
+                for src in sources
+            ]
+        )
+        body.append(
+            nest(
+                target.all_of(
+                    (target.pending_key_is(pending, key), target.grouped(cond))
+                ),
+                (target.pending_open(pending),),
+            )
+        )
     effects: dict[str, None] = {}
     if retained:
-        body += [
-            f"if not {busy} and {pending}:",
-            f"{_PY_INDENT}_key, _value, _tag = {pending}",
-            f"{_PY_INDENT}{pending} = ()",
-        ]
         flags = dict(held)
-        for index, (key, lines, targets) in enumerate(retained):
-            keyword = "if" if index == 0 else "elif"
-            body.append(f"{_PY_INDENT}{keyword} _key == {key}:")
-            body += [f"{_PY_INDENT * 2}{line}" for line in lines]
-            effects.update(dict.fromkeys(targets))
+        branches: list[tuple[str, Body]] = []
+        for key, lines, targets in retained:
+            branch = lines
             if key in flags:
-                body += [
-                    f"{_PY_INDENT * 2}if {pending} is not None:",
-                    f"{_PY_INDENT * 3}{flags[key]}.set(False)",
-                ]
+                branch = (
+                    *branch,
+                    nest(
+                        target.pending_not_closed(pending),
+                        (target.consume(flags[key], target.declined()),),
+                    ),
+                )
+            branches.append((target.taken_key_is(key), branch))
+            effects.update(dict.fromkeys(targets))
+        body.append(
+            nest(
+                target.all_of(
+                    (
+                        target.busy_none(state, insts),
+                        target.pending_holding(pending),
+                    )
+                ),
+                (
+                    *target.pending_take(pending),
+                    target.pending_open(pending),
+                    If(tuple(branches)),
+                ),
+            )
+        )
     if report_upward:
-        body += [
-            f"if {busy}:",
-            f"{_PY_INDENT}{report_busy('_newest')}",
-            f"elif {pending} is not None:",
-            f"{_PY_INDENT}{SETTLED_PORT}.set(True)",
-        ]
+        body.append(
+            If(
+                (
+                    (
+                        target.busy_any(state, insts),
+                        (target.report_busy(target.newest()),),
+                    ),
+                    (
+                        target.pending_not_closed(pending),
+                        (target.set_port(SETTLED_PORT, target.boolean(True)),),
+                    ),
+                )
+            )
+        )
         effects.update(dict.fromkeys((BUSY_PORT, SETTLED_PORT)))
     return make_reaction(
         (
@@ -299,7 +343,7 @@ def lifecycle_reaction(
 def make_reaction(
     triggers: tuple[str, ...],
     effects: tuple[str, ...],
-    body: tuple[str, ...],
+    body: Body,
     sent: list[str],
     ports: tuple[str, ...] = (),
     *,
@@ -307,22 +351,13 @@ def make_reaction(
 ) -> Reaction:
     """Build a reaction, declaring scheduled actions and set ports.
 
-    lfc's Python target passes only the names listed in the effects
-    clause into the reaction function, so every reactor-level logical
-    action the body schedules and every output port the body sets must
-    be declared as an effect.
+    LF passes only the names listed in the effects clause into the
+    reaction, so every reactor-level logical action the body schedules and
+    every output port the body sets must be declared as an effect. The
+    statements report what they write.
     """
-    # Substring scan over our own codegen output; a signal name that is
-    # a suffix of another ("Tick"/"RetryTick") may add a spurious effect,
-    # which LF treats as benign (the action is never triggered / the
-    # port is never set).
-    scheduled = (
-        f"{sig}_act"
-        for sig in sent
-        if any(f"{sig}_act.schedule" in line for line in body)
-    )
-    set_ports = (
-        sig for sig in ports if any(f"{sig}.set(" in line for line in body)
-    )
+    written = writes(body)
+    scheduled = (f"{sig}_act" for sig in sent if f"{sig}_act" in written)
+    set_ports = (sig for sig in ports if sig in written)
     all_effects = tuple(dict.fromkeys((*effects, *scheduled, *set_ports)))
-    return Reaction(triggers, all_effects, body, sources)
+    return Reaction(triggers, all_effects, stored(body), sources)
