@@ -43,11 +43,13 @@ class Timer:
 class LogicalAction:
     """A named logical action (reactor- or mode-level).
 
-    ``type`` is the C type of the value it carries, if any.
+    ``type`` is the C type of the value it carries, if any. ``pending`` is
+    how many events it holds at once, for a target with fixed buffers (uC).
     """
 
     name: str
     type: str | None = None
+    pending: int = 1
 
 
 @dataclass(frozen=True)

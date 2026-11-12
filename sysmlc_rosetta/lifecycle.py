@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from sysmlc_rosetta.statements import Body, Node
     from sysmlc_rosetta.targets.base import LfTarget
 
+# The triggers of a mode's entry reaction.
+ENTRY_TRIGGERS = ("reset", "startup")
 OUTPUT_PORT = "current_state"
 COMPLETED_PORT = "completed"
 ENTRY_ORDER_PORT = "_entry_order"
