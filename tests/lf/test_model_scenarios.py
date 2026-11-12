@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -18,9 +19,11 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.lf
 
 
-# The C target's scenarios run once the installed models know the backend.
+# The C targets' scenarios run once the installed models know the backend.
 _TARGETS = [
-    backend for backend in ("rosetta", "rosetta-c") if backend in BACKENDS
+    backend
+    for backend in ("rosetta", "rosetta-c", "rosetta-uc")
+    if backend in BACKENDS
 ]
 
 
@@ -33,6 +36,8 @@ _TARGETS = [
 def test_shared_model_scenario(
     scenario: Scenario, backend: str, tmp_path: Path
 ) -> None:
+    if backend == "rosetta-uc" and "REACTOR_UC_PATH" not in os.environ:
+        pytest.skip("set REACTOR_UC_PATH to a reactor-uc checkout")
     validate_scenario(scenario, backend, tmp_path)
 
 

@@ -164,7 +164,7 @@ def test_backend_selects_its_target() -> None:
 
     assert (option.name, option.choices, option.default) == (
         "target",
-        ("python", "c"),
+        ("python", "c", "uc"),
         "python",
     )
     assert isinstance(python, RosettaBackend)
