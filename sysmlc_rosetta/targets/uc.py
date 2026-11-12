@@ -3,6 +3,7 @@
 Reaction bodies are the C target's, but for a few runtime calls.
 
 The program shape differs from reactor-c's in these ways:
+
 - there is no ``target`` declaration: the main reactor carries the run
   options as attributes (``@platform("native")``, ``@timeout``, ``@fast``)
   and ``@logging("ERROR")``, which keeps the runtime as quiet as reactor-c;
