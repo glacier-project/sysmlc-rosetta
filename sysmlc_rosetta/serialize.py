@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from sysmlc_rosetta.program import (
         LfProgram,
         LogicalAction,
-        MainReactor,
         Mode,
         Reaction,
         Reactor,
@@ -41,59 +40,41 @@ def to_lf(program: LfProgram) -> str:
 
     Child reactor classes render before the machine reactor (lfc requires
     definition before use); the trivial ``main`` instantiates the machine
-    (the last reactor).
+    (the last reactor). The program's target shapes the header, the main
+    reactor's opening and each reactor (:meth:`LfTarget.adapt
+    <sysmlc_rosetta.targets.base.LfTarget.adapt>`).
     """
-    lines: list[str] = [
-        *_target_lines(TARGETS[program.target].lf_name, program.target_options),
-        "",
-    ]
+    target = TARGETS[program.target]()
+    header = target.header(program.target_options)
+    lines: list[str] = [*header, ""] if header else []
     if program.preamble:
         lines.append("preamble {=")
         lines.extend(f"{_INDENT}{line}" for line in program.preamble)
         lines.extend(("=}", ""))
     for reactor in program.reactors:
-        lines.extend(_reactor_lines(reactor))
+        lines.extend(_reactor_lines(target.adapt(reactor)))
         lines.append("")
+    lines.extend(target.main_opening(program))
     lines.extend(_main_lines(program))
+    lines.append("}")
     return "\n".join(lines) + "\n"
 
 
-def _target_lines(
-    target: str, options: tuple[tuple[str, str], ...]
-) -> list[str]:
-    # No options -> bare ``target <Name>`` (byte-identical legacy output).
-    if not options:
-        return [f"target {target}"]
-    lines = [f"target {target} {{"]
-    lines.extend(f"{_INDENT}{key}: {value}," for key, value in options)
-    lines.append("}")
-    return lines
-
-
 def _main_lines(program: LfProgram) -> list[str]:
+    """The main reactor's body, after its opening line."""
     main = program.main
     if main is None:
         # Trivial main instantiates the last reactor (legacy fallback).
-        return [
-            "main reactor {",
-            f"{_INDENT}m = new {program.reactor.name}()",
-            "}",
-        ]
-    return _main_reactor_lines(main)
-
-
-def _main_reactor_lines(main: MainReactor) -> list[str]:
-    lines = ["main reactor {"]
-    lines.extend(
+        return [f"{_INDENT}m = new {program.reactor.name}()"]
+    lines = [
         f"{_INDENT}{inst.name} = new {inst.reactor}()"
         for inst in main.instantiations
-    )
+    ]
     lines.extend(
         f"{_INDENT}{conn.source} -> {conn.target}" for conn in main.connections
     )
     for reaction in main.reactions:
         lines.extend(_reaction_lines(reaction, depth=1))
-    lines.append("}")
     return lines
 
 
@@ -125,7 +106,8 @@ def _reactor_lines(reactor: Reactor) -> list[str]:
         f"state {var.name}{_typed(var.type)} = {{= {var.init} =}}"
         for var in reactor.state_vars
     )
-    lines.extend(_action_line(_INDENT, action) for action in reactor.actions)
+    for action in reactor.actions:
+        lines.extend(_action_lines(_INDENT, action))
     lines.extend(
         f"{_INDENT}{inst.name} = new {inst.reactor}()"
         for inst in reactor.instantiations
@@ -151,7 +133,8 @@ def _mode_lines(mode: Mode) -> list[str]:
         f"{_INDENT * 2}timer {timer.name}({timer.offset})"
         for timer in mode.timers
     )
-    lines.extend(_action_line(_INDENT * 2, action) for action in mode.actions)
+    for action in mode.actions:
+        lines.extend(_action_lines(_INDENT * 2, action))
     lines.extend(
         f"{_INDENT * 2}{inst.name} = new {inst.reactor}()"
         for inst in mode.instantiations
@@ -189,5 +172,9 @@ def _typed(ctype: str | None) -> str:
     return f": {ctype}" if ctype.isidentifier() else f": {{= {ctype} =}}"
 
 
-def _action_line(pad: str, action: LogicalAction) -> str:
-    return f"{pad}logical action {action.name}{_typed(action.type)}"
+def _action_lines(pad: str, action: LogicalAction) -> list[str]:
+    """A logical action's declaration, after any bound on its events."""
+    declaration = f"{pad}logical action {action.name}{_typed(action.type)}"
+    if action.pending == 1:
+        return [declaration]
+    return [f"{pad}@max_pending_events({action.pending})", declaration]

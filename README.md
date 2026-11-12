@@ -2,7 +2,7 @@
 
 The **rosetta** backend for [sysmlc](https://github.com/glacier-project/sysmlc-core):
 it translates SysML v2 state machines into [Lingua Franca](https://www.lf-lang.org/)
-modal-reactor programs targeting Python or C (reactor-c).
+modal-reactor programs targeting Python, C (reactor-c) or reactor-uc.
 
 **Status:** in progress.
 
@@ -68,11 +68,15 @@ uv run sysmlc rosetta build showcase/thermostat \
   --values values.yaml -o out/
 ```
 
-`--target` selects the LF target language: `python` (the default) or `c`,
-whose programs run on reactor-c and never allocate memory themselves:
+`--target` selects the LF target language: `python` (the default), `c`,
+whose programs run on reactor-c and never allocate memory themselves, or
+`uc`, whose `.ulf` programs run on reactor-uc's micromode branch:
 
 ```bash
 uv run sysmlc rosetta build showcase/microwave --target c -o out/
+uv run sysmlc rosetta build showcase/microwave --target uc -o out/
+REACTOR_UC_PATH=~/reactor-uc ~/reactor-uc/ulf/build/install/lf-cli/bin/lfc \
+  out/microwaveSystem.ulf
 ```
 
 Two flags shape the generated program's `target` header, and apply to
@@ -84,7 +88,7 @@ top-level part usages only:
 | `--fast`    | enable fast mode in the generated program             |
 
 External `calc def` calls can be backed by a Python file passed with
-`--python`, or for the C target by a C file and header passed with `--c` and
+`--python`, or for the C targets by a C file and header passed with `--c` and
 `--c_h`. Functions are matched to SysML functions by simple name.
 
 `examples/run_all_rosetta.py` builds, compiles and runs every showcase model
@@ -98,7 +102,7 @@ sysmlc_rosetta/
 ├── builder.py       # neutral facts -> modal reactor
 ├── lifecycle.py     # the run-to-completion protocol between reactors
 ├── statements.py    # reaction bodies as a statement tree
-├── targets/         # LfTarget and its Python and C spellings
+├── targets/         # LfTarget and its Python, C and uC spellings
 ├── codegen.py       # expressions -> Python source for reactions
 ├── c_codegen.py     # expressions -> C source for reactions
 ├── c_types.py       # C types and the generated <base>_types.h

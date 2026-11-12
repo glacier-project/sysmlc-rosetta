@@ -208,8 +208,7 @@ class CTarget(LfTarget):
     def support_files(
         self, needs: PreambleNeeds
     ) -> tuple[tuple[str, str], ...]:
-        header = self.types.header_lines(f"{needs.types_module}_H".upper())
-        files = [(f"{needs.types_module}.h", "\n".join(header) + "\n")]
+        files = [self.types_header(needs)]
         sources = [a.path.name for a in needs.external if a.lang == "c"]
         if sources:
             files.append(
@@ -222,6 +221,11 @@ class CTarget(LfTarget):
             )
         files += [(a.path.name, a.path.read_text()) for a in needs.external]
         return tuple(files)
+
+    def types_header(self, needs: PreambleNeeds) -> tuple[str, str]:
+        """The types header every program ships: ``(name, text)``."""
+        header = self.types.header_lines(f"{needs.types_module}_H".upper())
+        return f"{needs.types_module}.h", "\n".join(header) + "\n"
 
     # -- declarations --
 
@@ -273,7 +277,7 @@ class CTarget(LfTarget):
     def observe_entry(self, path: str) -> Stmt:
         return Stmt(
             'printf("__SYSMLC_ENTRY__ %lld %s\\n", '
-            "(long long)(lf_time_logical_elapsed() / MSEC(1)), "
+            f"(long long)({self.elapsed()} / MSEC(1)), "
             f"{c_string(path)});"
         )
 
@@ -346,7 +350,7 @@ class CTarget(LfTarget):
 
     @override
     def value_or(self, port: str, fallback: str) -> str:
-        return f"({port}->is_present ? {port}->value : {fallback})"
+        return f"({self.is_present(port)} ? {port}->value : {fallback})"
 
     @override
     def no_payload(self) -> str:
@@ -438,6 +442,10 @@ class CTarget(LfTarget):
     def arrival(self) -> str:
         return "lf_tag()"
 
+    def elapsed(self) -> str:
+        """The logical time elapsed since the program started."""
+        return "lf_time_logical_elapsed()"
+
     @override
     def continuation(self) -> str:
         return "NEVER_TAG"
@@ -455,23 +463,23 @@ class CTarget(LfTarget):
         return _local(
             "interval_t",
             "_at_delta",
-            f"{instant_ns} - lf_time_logical_elapsed()",
+            f"{instant_ns} - {self.elapsed()}",
         )
 
     @override
     def arm_due(self, due: str, delay_ns: str) -> Stmt:
-        return Stmt(f"self->{due} = lf_time_logical_elapsed() + {delay_ns};")
+        return Stmt(f"self->{due} = {self.elapsed()} + {delay_ns};")
 
     @override
     def arm_at_due(self, due: str) -> Stmt:
         return Stmt(
             f"self->{due} = _at_delta >= 0 ? "
-            "lf_time_logical_elapsed() + _at_delta : NEVER;"
+            f"{self.elapsed()} + _at_delta : NEVER;"
         )
 
     @override
     def due_reached(self, due: str) -> str:
-        return f"lf_time_logical_elapsed() == self->{due}"
+        return f"{self.elapsed()} == self->{due}"
 
     @override
     def clear_due(self, due: str) -> Stmt:
@@ -479,7 +487,7 @@ class CTarget(LfTarget):
 
     @override
     def mark_since(self, since: str) -> Stmt:
-        return Stmt(f"self->{since} = lf_tag();")
+        return Stmt(f"self->{since} = {self.arrival()};")
 
     @override
     def arrived_since(self, occurrence: str, since: str) -> str:
@@ -517,7 +525,7 @@ class CTarget(LfTarget):
     def report_busy(self, occurrence: str) -> Stmt:
         return self.set_port(
             BUSY_PORT,
-            f"{BUSY_PORT}->is_present && "
+            f"{self.is_present(BUSY_PORT)} && "
             f"lf_tag_compare({BUSY_PORT}->value, {occurrence}) > 0 "
             f"? {BUSY_PORT}->value : {occurrence}",
         )
@@ -535,13 +543,14 @@ class CTarget(LfTarget):
     @override
     def bind_newest(self, insts: Sequence[str]) -> Body:
         newest = self.newest()
+        ports = (f"{inst}.{BUSY_PORT}" for inst in insts)
         keep = tuple(
             nest(
-                f"{inst}.{BUSY_PORT}->is_present && "
-                f"lf_tag_compare({inst}.{BUSY_PORT}->value, {newest}) > 0",
-                (Stmt(f"{newest} = {inst}.{BUSY_PORT}->value;"),),
+                f"{self.is_present(port)} && "
+                f"lf_tag_compare({port}->value, {newest}) > 0",
+                (Stmt(f"{newest} = {port}->value;"),),
             )
-            for inst in insts
+            for port in ports
         )
         return (_local("tag_t", newest, "NEVER_TAG"), *keep)
 
@@ -720,13 +729,16 @@ class CTarget(LfTarget):
     @override
     def consumed_at(self, flag: str, occurrence: str) -> str:
         return (
-            f"({flag}->is_present && {flag}->value.outcome == {_ACCEPTED} && "
+            f"({self.is_present(flag)} && "
+            f"{flag}->value.outcome == {_ACCEPTED} && "
             f"lf_tag_compare({flag}->value.tag, {occurrence}) == 0)"
         )
 
     @override
     def consumption_decided(self, flag: str) -> str:
-        return f"({flag}->is_present && {flag}->value.outcome == {_ACCEPTED})"
+        return (
+            f"({self.is_present(flag)} && {flag}->value.outcome == {_ACCEPTED})"
+        )
 
     @override
     def forward_consumption(

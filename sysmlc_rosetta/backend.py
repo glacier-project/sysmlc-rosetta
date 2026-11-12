@@ -60,7 +60,7 @@ class RosettaBackend(Backend):
         super().__init__(
             name="rosetta",
             description=(
-                "Generate Lingua Franca programs (Python or C target) from "
+                "Generate Lingua Franca programs (Python, C or uC target) from "
                 "SysML state definitions."
             ),
             formats=(("lf", "Lingua Franca program"),),
@@ -235,9 +235,10 @@ class RosettaBackend(Backend):
     ) -> GeneratedOutput:
         """Return the files :meth:`write` would write, without writing them.
 
-        The program is ``<basename>.lf``, followed by its companion types
-        file: the Python module ``<types_module_name>.py`` when the program
-        has one, or the C target's header.
+        The program is ``<basename>.lf`` (``.ulf`` on uC target), followed
+        by its companion types file: the Python module
+        ``<types_module_name>.py`` when the program has one, or the C
+        targets' header.
 
         Args:
             artifact: The program returned by :meth:`build`.
@@ -259,8 +260,10 @@ class RosettaBackend(Backend):
             if fmt != "lf":
                 raise SerializationError(f"unsupported format: {fmt!r}")
         basename = options.basename or artifact.reactor.name
+        extension = TARGETS[artifact.target].extension
         program = GeneratedFile(
-            PurePosixPath(f"{basename}.lf"), self.serialize(artifact, "lf")
+            PurePosixPath(f"{basename}.{extension}"),
+            self.serialize(artifact, "lf"),
         )
         companions = [
             GeneratedFile(PurePosixPath(name), text)

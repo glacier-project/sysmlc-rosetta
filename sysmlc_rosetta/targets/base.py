@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.codegen import PreambleNeeds
-    from sysmlc_rosetta.program import Reactor, StateVar
+    from sysmlc_rosetta.program import LfProgram, Reactor, StateVar
     from sysmlc_rosetta.statements import Body, Node, Stmt
 
 #: What a protocol state variable declared by :meth:`LfTarget.state_vars`
@@ -83,11 +83,16 @@ class LfTarget(ABC):
         lf_name: The LF ``target`` keyword.
         foreign_languages: The foreign-artifact languages the target
             calls into.
+        extension: The extension of the program's source file.
+        mode_local_children: Whether only a mode's own reactions may refer
+            to the reactors the mode contains.
     """
 
     name: ClassVar[str]
     lf_name: ClassVar[str]
     foreign_languages: ClassVar[tuple[str, ...]]
+    extension: ClassVar[str] = "lf"
+    mode_local_children: ClassVar[bool] = False
 
     # -- program --
 
@@ -135,6 +140,32 @@ class LfTarget(ABC):
         self, needs: PreambleNeeds
     ) -> tuple[tuple[str, str], ...]:
         """Files the program ships beside its ``.lf``: ``(name, text)``."""
+
+    # -- program text --
+
+    def header(self, options: tuple[tuple[str, str], ...]) -> list[str]:
+        """The program's ``target`` declaration, carrying ``options``.
+
+        Without options, it is a bare ``target <Name>`` line.
+        """
+        if not options:
+            return [f"target {self.lf_name}"]
+        return [
+            f"target {self.lf_name} {{",
+            *(f"  {key}: {value}," for key, value in options),
+            "}",
+        ]
+
+    def main_opening(self, program: LfProgram) -> list[str]:
+        """The lines opening ``program``'s main reactor, before its body."""
+        return ["main reactor {"]
+
+    def adapt(self, reactor: Reactor) -> Reactor:
+        """A finished reactor in the shape the target's compiler accepts.
+
+        Serialization applies it last, after any caller edited the program.
+        """
+        return reactor
 
     # -- declarations --
 

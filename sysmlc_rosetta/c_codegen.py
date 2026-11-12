@@ -1,17 +1,21 @@
-"""C code generator for Lingua Franca reaction bodies (reactor-c)."""
+"""C code generators for Lingua Franca reaction bodies (reactor-c, reactor-uc)."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, ClassVar, override
 
 import syside
-from sysmlc.codegen.c import CCodeGen
+from sysmlc.codegen.c import LIBRARY_FUNCTIONS, CCodeGen
+from sysmlc.errors import UnsupportedConstructError
 
 from sysmlc_rosetta.c_types import type_name
 from sysmlc_rosetta.codegen import LfActions, PreambleNeeds
 from sysmlc_rosetta.targets.c import CTarget
+from sysmlc_rosetta.targets.uc import MATH_HELPERS
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sysmlc_rosetta.c_types import CTypes
 
 
@@ -106,3 +110,32 @@ class LfCCodeGen(LfActions, CCodeGen):
             self._emit(argument, 0) for argument in expr.arguments.collect()
         )
         return f"{name}({arguments})"
+
+
+class LfUcCodeGen(LfCCodeGen):
+    """C code generator for reaction bodies of the uC target.
+
+    uC's native build links no math library: ``abs``, ``max`` and
+    ``min`` call the target's :data:`~sysmlc_rosetta.targets.uc.MATH_HELPERS`,
+    and the other library functions are rejected.
+    """
+
+    _library_functions: ClassVar[Mapping[str, str]] = {
+        function: callee for function, (callee, _) in MATH_HELPERS.items()
+    }
+
+    @override
+    def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
+        """Emit a call, rejecting the library functions of ``<math.h>``.
+
+        Raises:
+            UnsupportedConstructError: If the call needs the math library.
+        """
+        function = expr.function
+        name = None if function is None else str(function.qualified_name)
+        if name in LIBRARY_FUNCTIONS and name not in self._library_functions:
+            raise UnsupportedConstructError(
+                f"{name} needs the C math library, which reactor-uc's native "
+                "build does not link"
+            )
+        return super()._emit_invocation(expr)

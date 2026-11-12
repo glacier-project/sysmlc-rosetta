@@ -28,7 +28,7 @@ from sysmlc.semantics.statemachine.facts import (
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
 
-from sysmlc_rosetta.c_codegen import LfCCodeGen
+from sysmlc_rosetta.c_codegen import LfCCodeGen, LfUcCodeGen
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
@@ -38,6 +38,7 @@ from sysmlc_rosetta.lifecycle import (
     BUSY_PORT,
     COMPLETED_PORT,
     ENTRY_ORDER_PORT,
+    ENTRY_TRIGGERS,
     EXIT_ACK_PORT,
     EXIT_PENDING_VAR,
     EXIT_REQUEST_PORT,
@@ -90,6 +91,7 @@ type LfCodeGen = LfPythonCodeGen | LfCCodeGen
 _CODEGENS: dict[str, type[LfCodeGen]] = {
     "python": LfPythonCodeGen,
     "c": LfCCodeGen,
+    "uc": LfUcCodeGen,
 }
 
 
@@ -916,7 +918,7 @@ class RosettaBuilder:
         ]
         extra_state: list[StateVar] = []
         exits: list[tuple[str, Body, tuple[str, ...]]] = []
-        tail = _Trailing()
+        tails = [_Trailing() for _ in kids]
         modes = [
             self._child_mode(
                 kid,
@@ -928,11 +930,11 @@ class RosettaBuilder:
                 exits,
                 tail,
             )
-            for kid in kids
+            for kid, tail in zip(kids, tails, strict=True)
         ]
-        handler: list[Reaction] = []
         if scope in self._needs_done:
             modes.append(self._done_mode(scope, sent))
+            tails.append(_Trailing())
         self._check_state_names(scope, kids, sent, extra_state)
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
@@ -942,11 +944,7 @@ class RosettaBuilder:
                 *self._target.state_vars(ACTIVE_VAR, "active", reset=True),
                 *self._target.state_vars(EXIT_PENDING_VAR, "flag", reset=True),
             ]
-            handler.append(
-                exit_handler(
-                    self._target, exits, sent, self._scope_ports(scope)
-                )
-            )
+        modes, trailing = self._place_trailing(scope, modes, tails, exits, sent)
         ported = tuple(self._exported.get(scope, {}))
         consumed = tuple(
             f"{sig}_consumed" for sig in self._consumed.get(scope, {})
@@ -1011,13 +1009,89 @@ class RosettaBuilder:
             actions=tuple(action_list),
             reactions=tuple(reactions),
             modes=tuple(modes),
-            trailing_reactions=(
-                *handler,
+            trailing_reactions=trailing,
+        )
+
+    def _place_trailing(
+        self,
+        scope: str,
+        modes: list[Mode],
+        tails: list[_Trailing],
+        exits: list[tuple[str, Body, tuple[str, ...]]],
+        sent: list[str],
+    ) -> tuple[list[Mode], tuple[Reaction, ...]]:
+        """Place a scope's exit handler and its modes' trailing reactions.
+
+        They follow every mode reaction, at reactor level. A target whose
+        modes keep their children to themselves
+        (:attr:`~sysmlc_rosetta.targets.base.LfTarget.mode_local_children`)
+        needs those that refer to a mode's children inside that mode: at
+        its end, after the mode's own copy of the exit handler, and with
+        the mode moved after its siblings, so they still follow every other
+        mode's reactions. The reactor-level handler keeps the other modes'
+        exits. Both copies acknowledge a request that finds the scope
+        finalized; the second acknowledgement at a tag changes nothing.
+
+        Args:
+            scope: The scope's state path.
+            modes: The scope's modes, in declaration order.
+            tails: Each mode's trailing reactions.
+            exits: Per mode, its forced-exit statements and their effects.
+            sent: Signals sent in this scope.
+
+        Returns:
+            The modes and the reactor-level trailing reactions.
+
+        Raises:
+            UnsupportedConstructError: If, on such a target, the trailing
+                reactions refer to the children of several modes.
+        """
+        ports = self._scope_ports(scope)
+        reports = self._reports(scope)
+
+        def handler(
+            handled: list[tuple[str, Body, tuple[str, ...]]],
+        ) -> tuple[Reaction, ...]:
+            if not reports:
+                return ()
+            return (exit_handler(self._target, handled, sent, ports),)
+
+        holders = [
+            index
+            for index, (mode, tail) in enumerate(zip(modes, tails, strict=True))
+            if tail.chains
+            or tail.late
+            or tail.forwarding
+            or (reports and mode.instantiations)
+        ]
+        if not self._target.mode_local_children or not holders:
+            return modes, (
+                *handler(exits),
+                *(r for tail in tails for r in tail.chains),
+                *(r for tail in tails for r in tail.late),
+                *(r for tail in tails for r in tail.forwarding),
+            )
+        if len(holders) > 1:
+            names = [modes[index].name for index in holders]
+            raise UnsupportedConstructError(
+                f"states {names!r} of {scope or self._name!r} each contain "
+                f"states that exit with their parent; the {self._target.name}"
+                " target supports one such state per scope"
+            )
+        (index,) = holders
+        mode, tail = modes[index], tails[index]
+        last = replace(
+            mode,
+            reactions=(
+                *mode.reactions,
+                *handler([e for e in exits if e[0] == mode.name]),
                 *tail.chains,
                 *tail.late,
                 *tail.forwarding,
             ),
         )
+        others = [e for e in exits if e[0] != mode.name]
+        return [*modes[:index], *modes[index + 1 :], last], handler(others)
 
     def _parallel_root_reactor(self, root: StateFact) -> Reactor:
         """Assemble a parallel ROOT machine: regions wired at reactor scope.
@@ -2099,7 +2173,7 @@ class RosettaBuilder:
             reactions += resolutions
 
         entry = make_reaction(
-            ("reset", "startup"),
+            ENTRY_TRIGGERS,
             tuple(entry_effects),
             tuple(entry_body),
             sent,
@@ -2687,7 +2761,7 @@ class RosettaBuilder:
             ]
             effects += [BUSY_PORT, SETTLED_PORT]
         entry = make_reaction(
-            ("reset", "startup"),
+            ENTRY_TRIGGERS,
             tuple(effects),
             tuple(body),
             sent,

@@ -32,6 +32,7 @@ API reference to render. -->
 .. automodule:: sysmlc_rosetta.targets.base
 .. automodule:: sysmlc_rosetta.targets.python
 .. automodule:: sysmlc_rosetta.targets.c
+.. automodule:: sysmlc_rosetta.targets.uc
 .. automodule:: sysmlc_rosetta.c_codegen
 .. automodule:: sysmlc_rosetta.c_types
 ```
