@@ -2,9 +2,9 @@
 
 How the **rosetta** backend translates SysML v2 state definitions into
 Lingua Franca (LF) programs targeting the Python runtime, the C runtime
-(reactor-c) with `--target c`, or the uC runtime (reactor-uc with micromode 
-modal reactors) with `--target uc`. 
-Sections 1–13 describe the mapping in Python spelling, Section 14 lists how the 
+(reactor-c) with `--target c`, or the uC runtime (reactor-uc with micromode
+modal reactors) with `--target uc`.
+Sections 1–13 describe the mapping in Python spelling, Section 14 lists how the
 C target spells it, and section 15 how reactor-uc differs from it. This document
 describes supported constructs, their LF counterparts and known limitations.
 Bundled model scenarios and focused tests marked `lf` compile and execute
@@ -1171,15 +1171,15 @@ code.
 
 **Program shape.**
 
-| C target (reactor-c)                          | reactor-uc target                                      |
-| --------------------------------------------- | ------------------------------------------------------ |
-| `<base>.lf`, `target C { ... }`               | `<base>.ulf`, no `target` declaration                  |
-| `--timeout`, `--fast` in the target header    | `@timeout(...)`, `@fast(...)` on the main reactor      |
-| default platform and logging                  | `@platform("native")` and `@logging("ERROR")` on main  |
-| `files:` and `cmake-include` ship the files   | the files sit beside the program, on the include path; a C source is included by the main reactor's `preamble` |
-| `output current_state: string`                | `output current_state: {= const char* =}`              |
+| C target (reactor-c)                          | reactor-uc target                                                                                               |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `<base>.lf`, `target C { ... }`               | `<base>.ulf`, no `target` declaration                                                                           |
+| `--timeout`, `--fast` in the target header    | `@timeout(...)`, `@fast(...)` on the main reactor                                                               |
+| default platform and logging                  | `@platform("native")` and `@logging("ERROR")` on main                                                           |
+| `files:` and `cmake-include` ship the files   | the files sit beside the program, on the include path; a C source is included by the main reactor's `preamble`  |
+| `output current_state: string`                | `output current_state: {= const char* =}`                                                                       |
 | one entry `reaction(reset, startup)` per mode | `reaction(reset)`; an initial mode also gets `reaction(startup)`, both guarded by `reset state _entered: tag_t` |
-| `logical action a`                            | `@max_pending_events(n)` when more than one statement schedules `a` |
+| `logical action a`                            | `@max_pending_events(n)` when more than one statement schedules `a`                                             |
 
 micromode rejects a reaction triggered by both `startup` and `reset`. A mode
 is entered with `reset`; an initial mode is also entered with `startup` when
@@ -1189,16 +1189,16 @@ entry, so the entry runs once per tag.
 
 **Reaction bodies.**
 
-| C target (reactor-c)                          | reactor-uc target                                      |
-| --------------------------------------------- | ------------------------------------------------------ |
-| `p->is_present`                               | `lf_is_present(p)`                                     |
-| `lf_tag()`                                    | `env->scheduler->current_tag(env->scheduler)`          |
-| `lf_time_logical_elapsed()`                   | `env->get_elapsed_logical_time(env)`                   |
-| `lf_schedule_copy(S_act, 0, &(v), 1);`        | `lf_schedule(S_act, 0, (v));`                          |
-| `lf_request_stop();`                          | `env->request_shutdown(env, 0);`                       |
-| `lf_print_error_and_exit("%s", ...);`         | `throw(...);`                                          |
-| `LF_PRINT_DEBUG("%s", ...);`                  | `LF_DEBUG(ENV, "%s", ...);`                            |
-| `fabs`, `fmax`, `fmin` from `<math.h>`        | `sysmlc_abs`, `sysmlc_max`, `sysmlc_min`, `static inline` in the preamble |
+| C target (reactor-c)                   | reactor-uc target                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `p->is_present`                        | `lf_is_present(p)`                                                        |
+| `lf_tag()`                             | `env->scheduler->current_tag(env->scheduler)`                             |
+| `lf_time_logical_elapsed()`            | `env->get_elapsed_logical_time(env)`                                      |
+| `lf_schedule_copy(S_act, 0, &(v), 1);` | `lf_schedule(S_act, 0, (v));`                                             |
+| `lf_request_stop();`                   | `env->request_shutdown(env, 0);`                                          |
+| `lf_print_error_and_exit("%s", ...);`  | `throw(...);`                                                             |
+| `LF_PRINT_DEBUG("%s", ...);`           | `LF_DEBUG(ENV, "%s", ...);`                                               |
+| `fabs`, `fmax`, `fmin` from `<math.h>` | `sysmlc_abs`, `sysmlc_max`, `sysmlc_min`, `static inline` in the preamble |
 
 **Children of a mode.** micromode lets only a mode's own reactions refer to
 the reactors the mode contains. The reactions that drain a composite state's

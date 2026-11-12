@@ -1,6 +1,6 @@
 """LF's reactor-uc runtime with micromode modal reactors (``.ulf`` sources).
 
-Reaction bodies are the C target's, but for a few runtime calls. 
+Reaction bodies are the C target's, but for a few runtime calls.
 
 The program shape differs from reactor-c's in these ways:
 - there is no ``target`` declaration: the main reactor carries the run
