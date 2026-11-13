@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import syside
 
     from sysmlc_rosetta.codegen import PreambleNeeds
+    from sysmlc_rosetta.program import Parameter
     from sysmlc_rosetta.statements import Body
 
 _INDENT: Final = "    "
@@ -75,6 +76,24 @@ class PythonTarget(LfTarget):
     ) -> tuple[tuple[str, str], ...]:
         """The types module travels as the program's ``types_module_*``."""
         return ()
+
+    @override
+    def register_context(
+        self, name: str, attributes: Sequence[Parameter | StateVar]
+    ) -> str | None:
+        return None
+
+    @override
+    def context_value(self, ctype: str | None, names: Sequence[str]) -> str:
+        return "self"
+
+    @override
+    def context_reference(self, name: str) -> str:
+        return f"self._data.{name}"
+
+    @override
+    def context_binding(self, port: str) -> Stmt:
+        return Stmt(f"self._data = {port}.value")
 
     # -- declarations --
 

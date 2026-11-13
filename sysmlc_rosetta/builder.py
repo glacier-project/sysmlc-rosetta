@@ -33,6 +33,7 @@ from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
 )
+from sysmlc_rosetta.data import share_machine_data
 from sysmlc_rosetta.lifecycle import (
     ACTIVE_VAR,
     BUSY_PORT,
@@ -268,6 +269,7 @@ class RosettaBuilder:
         self._deferred: set[tuple[str, str]] = set()
         self._needs_done: set[str] = set()
         self._reactors: list[Reactor] = []
+        self._data_scopes: set[str] = set()
 
     # -- TargetBuilder protocol --
 
@@ -284,8 +286,8 @@ class RosettaBuilder:
     def bind_constraint(self, fact: ConstraintFact) -> None:
         """Buffer a root-scope asserted constraint (scoped ones rejected).
 
-        Substate reactors cannot see the machine's attributes, so a
-        constraint scoped to a state has nothing meaningful to check there.
+        State-local assertions require activation-scoped observation rules
+        beyond the root assertion checks generated here.
         """
         if fact.scope:
             raise UnsupportedConstructError(
@@ -374,6 +376,28 @@ class RosettaBuilder:
                 self._with_change_notifications(machine)
             )
         )
+        if self._data_scopes:
+            parameters, state_vars = self._attribute_split()
+            ctype = self._target.register_context(
+                self._name, (*parameters, *state_vars)
+            )
+            by_name = {
+                self._reactor_name(scope): scope for scope in self._data_scopes
+            }
+            self._reactors = [
+                self._with_constraint_checks(reactor, by_name[reactor.name])
+                if reactor.name in by_name
+                else reactor
+                for reactor in self._reactors
+            ]
+            self._reactors = share_machine_data(
+                self._reactors,
+                self._target,
+                ctype,
+                tuple(a.name for a in (*parameters, *state_vars)),
+                frozenset(by_name),
+                has_when=self._has_when,
+            )
         program = LfProgram(
             reactors=tuple(
                 render_reactor(self._target.declare(reactor), self._target)
@@ -389,7 +413,9 @@ class RosettaBuilder:
             program = finalize(program, self._needs)
         return program
 
-    def _with_constraint_checks(self, machine: Reactor) -> Reactor:
+    def _with_constraint_checks(
+        self, machine: Reactor, scope: str = ""
+    ) -> Reactor:
         """Weave asserted-constraint checks into the machine reactor.
 
         Each root-scope ``assert constraint`` renders as the target's check
@@ -399,6 +425,7 @@ class RosettaBuilder:
         ``assert not constraint`` checks the negated expression.
         """
         checks: list[Node] = []
+        gen = self._scope_codegen(scope)
         for index, fact in enumerate(self._constraints):
             constraint = LfConstraint(
                 self._name, index, fact.scope, fact.name, self._source_qn
@@ -407,7 +434,7 @@ class RosettaBuilder:
             message = "SysML constraint violated: " + json.dumps(
                 asdict(constraint), separators=(",", ":")
             )
-            rendered = self._codegen.render_expression(fact.expression)
+            rendered = gen.render_expression(fact.expression)
             if fact.is_negated:
                 rendered = self._target.negate(rendered)
             checks.append(self._target.check(rendered, message))
@@ -420,7 +447,8 @@ class RosettaBuilder:
             return replace(reaction, body=stored((*reaction.body, *checks)))
 
         reactions = tuple(patched(r) for r in machine.reactions)
-        reactions += (Reaction(("startup",), (), stored(tuple(checks))),)
+        if not scope:
+            reactions += (Reaction(("startup",), (), stored(tuple(checks))),)
         modes = tuple(
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
@@ -869,6 +897,8 @@ class RosettaBuilder:
         attribute_names: frozenset[str],
         local_names: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
+        *,
+        scope: str = "",
     ) -> LfCodeGen:
         """Build a peer-aware code generator sharing the preamble registry."""
         return self._codegen_type(
@@ -877,21 +907,38 @@ class RosettaBuilder:
             port_signals=self._port_sigs,
             local_names=local_names,
             payload_bindings=payload_bindings,
+            attribute_reference=(
+                lambda name: self._outer_attribute(scope, name)
+            )
+            if scope
+            else None,
         )
 
-    def _scope_codegen(self, scope: str) -> LfCodeGen:
-        """The expression codegen for a scope's reaction bodies.
+    def _outer_attribute(self, scope: str, name: str) -> str:
+        """Resolve a nested access to the authoritative machine storage."""
+        for level in _enclosing(scope):
+            fact = self._root if not level else self._facts[level]
+            assert fact is not None
+            if fact.kind is StateKind.PARALLEL:
+                raise UnsupportedConstructError(
+                    f"nested access to machine attribute {name!r} under "
+                    "a parallel state is not supported; shared accesses "
+                    "between independent regions have no established order."
+                )
+        if "." in name and (self._has_when or self._constraints):
+            raise UnsupportedConstructError(
+                "nested structured-field assignments with root change "
+                "triggers or assertions are not supported; their writes "
+                "are not tracked by root observations."
+            )
+        self._data_scopes.update(level for level in _enclosing(scope) if level)
+        return self._target.context_reference(name)
 
-        Child scopes see NO attribute names: substate guards/actions
-        referencing root-scope attributes fail loudly in codegen (the
-        documented slice-6 scope limit).
-        """
+    def _scope_codegen(self, scope: str) -> LfCodeGen:
+        """The expression codegen for a scope's reaction bodies."""
         if scope == "":
             return self._codegen
-        return self._make_codegen(frozenset())
-
-    def _scope_attribute_names(self, scope: str) -> frozenset[str]:
-        return self._attribute_names if scope == "" else frozenset()
+        return self._make_codegen(self._attribute_names, scope=scope)
 
     def _composite_reactor(
         self, scope: str, container: StateFact, *, is_root: bool
@@ -1671,6 +1718,12 @@ class RosettaBuilder:
             )
 
         if whens:
+            if scope:
+                raise UnsupportedConstructError(
+                    "change triggers inside nested state reactors are not "
+                    "supported; only root-scope change observations are "
+                    "generated."
+                )
             entry_body.append(lang.schedule(CHANGE_ACT))
             entry_effects.append(CHANGE_ACT)
         for index, transition in enumerate(whens):
@@ -1790,8 +1843,9 @@ class RosettaBuilder:
             bindings = dict.fromkeys(features, value)
             if bindings:
                 group_gen = self._make_codegen(
-                    self._scope_attribute_names(scope),
+                    self._attribute_names,
                     payload_bindings=bindings,
+                    scope=scope,
                 )
             group_exit: Body = (
                 *exit_log,
@@ -2436,8 +2490,9 @@ class RosettaBuilder:
                 else []
             )
             gen = self._make_codegen(
-                self._scope_attribute_names(scope),
+                self._attribute_names,
                 payload_bindings=dict.fromkeys(features, "_value"),
+                scope=scope,
             )
             exit_log = (
                 [self._observe_log("exited", simple)] if self._observe else []

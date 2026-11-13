@@ -230,6 +230,7 @@ class LfActions(ExpressionCodeGen):
         local_names: frozenset[str],
         port_signals: frozenset[str],
         payload_bindings: dict[syside.Feature, str] | None,
+        attribute_reference: Callable[[str], str] | None,
     ) -> None:
         """Record the generator's scope; see the subclasses' arguments."""
         self._needs = needs
@@ -239,6 +240,7 @@ class LfActions(ExpressionCodeGen):
         self._local_names = local_names
         self._port_signals = port_signals
         self._payload_bindings = payload_bindings or {}
+        self._attribute_reference = attribute_reference or needs.target.var
 
     @override
     def _emit_feature_reference(
@@ -267,7 +269,7 @@ class LfActions(ExpressionCodeGen):
         if name in self._local_names or not self._self_prefix:
             return name
         self._require_attribute(name, expr)
-        return self._needs.target.var(name)
+        return self._attribute_reference(name)
 
     @override
     def render_assignment_target(
@@ -286,7 +288,7 @@ class LfActions(ExpressionCodeGen):
         """
         path = super().render_assignment_target(assign)
         self._require_attribute(path.split(".")[0], assign)
-        return self._needs.target.var(path)
+        return self._attribute_reference(path)
 
     def render_statements(self, action: syside.ActionUsage) -> Body:
         """Translate an assignment or send to statements.
@@ -483,6 +485,8 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
         local_names: Names explicitly in scope as plain locals.
             Payload bindings use source feature identity instead.
         payload_bindings: Source payload features mapped to delivered values.
+        attribute_reference: Renderer for a bound attribute reference;
+            defaults to a local reactor variable.
         port_signals: Signals a connected peer accepts, so a ``via`` send of
             one sets the LF output port; a ``via`` send of any other signal
             is dropped and recorded in ``needs.undeliverable_sends``.
@@ -498,6 +502,7 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
+        attribute_reference: Callable[[str], str] | None = None,
     ) -> None:
         needs = needs if needs is not None else PreambleNeeds()
         super().__init__(
@@ -519,6 +524,7 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
             local_names=local_names,
             port_signals=port_signals,
             payload_bindings=payload_bindings,
+            attribute_reference=attribute_reference,
         )
 
     @override

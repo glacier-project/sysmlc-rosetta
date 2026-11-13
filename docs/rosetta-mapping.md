@@ -103,7 +103,9 @@ entry; §3 covers reentry of a mode that stays active.
 The composite state's own `entry`/`exit`/`do` actions run in the **parent**
 reactor (mode entry reaction and transition dispatches), so they may use
 the machine's attributes. Actions on substates run inside the child
-reactor, which deliberately sees **no** attributes (§5).
+reactor. Sequential composite scopes can access the same root attributes
+through the context described in §5; nested-reactor access across a parallel
+boundary remains rejected.
 
 A state's entry finishes before its substates' entries begin, as required
 by entry-before-middle. SysMLC also finishes supported finite inline `do`
@@ -117,9 +119,11 @@ reaction(reset, startup) _entry_order -> current_state {= … =}
 ```
 
 LF's precedence graph then runs the parent entry reaction first at the same
-tag. The port is never set and never triggers a reaction, so the ordering
-adds no signal, token, reaction activation or microstep. It does add a
-static input and dependency per child reactor. The root's own `entry`/`do`
+tag. Scopes without nested root-data access leave the port unwritten.
+Context-bearing scopes set it to references to the root storage (§5); it
+remains a non-triggering dependency, so carrying that context adds no
+reaction activation or microstep. Each child reactor has the static input
+and dependency. The root's own `entry`/`do`
 is a `reaction(startup)` declared before the modes, so it runs before the
 initial mode's entry in the same reactor. A state named `_entry_order` is
 rejected.
@@ -413,9 +417,13 @@ child reactor, and the parent's mode forwards them down
   the instant `t`, measured as logical time since startup; an instant that
   has already passed at entry schedules nothing.
 - **`accept when cond`** → a change check: entry schedules `_change_act`,
-  and every reaction assigning a root attribute reschedules it one
-  microstep later. The first true observation in an activation sets a
-  per-state latch (reset on entry) and evaluates the transition once.
+  and every reaction directly assigning a root attribute reschedules it one
+  microstep later. A nested assignment reports through `_data_changed` ports
+  up the containment chain; the root schedules the same observation action.
+  Notification relays follow the scope's lifecycle cleanup handlers, so
+  writes during deep child exits are observed without a dependency cycle.
+  The first true observation in an activation sets a per-state latch (reset
+  on entry) and evaluates the transition once.
   This lowering supports source states in the root reactor and conditions
   over root attributes; change triggers in nested reactors are not supported.
   Checks observe values when they run, so a transient true value overwritten
@@ -448,12 +456,30 @@ not currently supported; scope-local support is planned, §11):
 | composite attribute (`pt : Point`)                        | `Point(x=…)` dataclass initializer (the `Point` dataclass lives in the companion module, §9); usage-local `:>>` redefinitions win over the type's defaults |
 | quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`)                                                                                                                                         |
 
-References render as `self.<name>` inside reaction bodies. Initializers
-and parameter defaults always render inside `{= … =}` (lfc parses bare
-non-literals as LF syntax). **Substate scopes see no attributes**: a guard
-or action referencing a machine attribute from inside a composite state
-fails loudly — author models within this limit (per-scope attributes are
-planned, §11).
+Root references render as `self.<name>` inside Python reaction bodies.
+Initializers and parameter defaults always render inside `{= … =}` (lfc
+parses bare non-literals as LF syntax).
+
+**Nested access to root attributes.** Sequential composite scopes can read
+and assign the root machine's attributes in supported guards and finite
+entry/do/exit/effect bodies. Storage stays in the root reactor: nested
+reactors receive references on the existing `_entry_order` dependency when
+activated. Python retains the owning reactor object; C and uC retain a typed
+struct of pointers to its fields, with no dynamic allocation or value copies.
+Intermediate scopes forward the same references. A child reset refreshes its
+context while retaining the root values; separate machine instances have
+separate storage. Existing entry, completion and busy/settled dependencies
+order the relevant parent/child accesses.
+
+Nested-reactor access across a parallel boundary is rejected: independent-region
+shared reads/writes have no established ordering in this mapping. Attributes declared
+inside states remain unsupported. Change triggers themselves still require a
+source in the root reactor (§4); nested scalar writes can notify those root
+observations. Constraint checks and change notifications recognize direct
+root-attribute assignments. Nested structured-field writes are rejected when
+the machine has root change triggers or assertions, because the existing
+observation pass does not track those writes. This does not claim complete
+mutation tracking.
 
 Bound values (`=`) pass shared admission checks before rendering. Supported
 forms are Boolean, Integer, Rational and String literals, unary numeric signs,
@@ -498,12 +524,14 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 1. in a dedicated `reaction(startup)` — so invalid initial **or
    overridden** values abort the program immediately (exit code 1, the
    constraint name in the traceback), and
-1. at the end of every reaction body that assigns to a machine attribute.
+1. at the end of every reaction body that directly assigns to a machine
+   attribute, including supported nested composite reactions. Nested checks
+   read the same root storage through the retained context.
 
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are not currently
-supported (their scope has no attributes to check; planned with scope-local
-attributes — §11). The thermostat and vending-machine examples carry
+supported: state-local assertions need separate activation-scoped observation
+rules (§11). The thermostat and vending-machine examples carry
 asserted invariants; a negative run test proves a violating `--values`
 override aborts at startup.
 
@@ -729,7 +757,7 @@ design.
 | leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                 |
 | transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, the parallel-state-sourced interruption sequence of §3 applies (regions drain in declaration order, then the parallel state's exit, the effect and the switch), so the two spellings are equivalent |
 | payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                      |
-| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility remains future work                                            |
+| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints. Root-attribute access from sequential composite scopes is supported (§5); local declarations and their visibility remain separate work           |
 | deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order preserved                                                                                                                                                       |
 
 ### Stays rejected
