@@ -276,6 +276,7 @@ class RosettaBuilder:
         self._rendering_slot: tuple[StateFact, str] | None = None
         self._checking_constraints = False
         self._entry_data_boundaries: set[str] = set()
+        self._parent_only_accesses: dict[str, UnsupportedConstructError] = {}
 
     # -- TargetBuilder protocol --
 
@@ -382,6 +383,11 @@ class RosettaBuilder:
             raise UnsupportedConstructError(
                 "the state definition declares no substates."
             )
+        for boundary, error in self._parent_only_accesses.items():
+            if boundary in self._data_scopes or (
+                not boundary and self._data_scopes
+            ):
+                raise error
         self._reactors.append(
             self._with_constraint_checks(
                 self._with_change_notifications(machine)
@@ -959,12 +965,16 @@ class RosettaBuilder:
                     if scope and (scope == level or _is_ancestor(level, scope)):
                         self._entry_data_boundaries.add(level)
                     continue
-                raise UnsupportedConstructError(
+                error = UnsupportedConstructError(
                     f"access to machine attribute {name!r} under a parallel "
                     "state requires ordered parent cleanup or initial entry; "
                     "independent regional transitions, target entries and "
                     "exits are not supported."
                 )
+                if scope == _scope_of(level):
+                    self._parent_only_accesses.setdefault(level, error)
+                    continue
+                raise error
         if not scope:
             return self._target.var(name)
         if "." in name and (self._has_when or self._constraints):
@@ -978,6 +988,9 @@ class RosettaBuilder:
 
     def _ordinary_parallel_exit(self, owner: StateFact, boundary: str) -> bool:
         """Whether regional work can execute an exit outside parent cleanup."""
+        parent_name = _scope_of(owner.name)
+        parent = self._facts[parent_name] if parent_name else self._root
+        is_region = parent is not None and parent.kind is StateKind.PARALLEL
         for transition in self._transitions:
             source = transition.source
             if not _is_ancestor(boundary, source):
@@ -992,10 +1005,7 @@ class RosettaBuilder:
             if isinstance(target, str):
                 if not _is_ancestor(owner.name, target):
                     return True
-            elif (
-                _scope_of(owner.name) == boundary
-                and _scope_of(source) == owner.name
-            ):
+            elif is_region and _scope_of(source) == owner.name:
                 return True
         return False
 

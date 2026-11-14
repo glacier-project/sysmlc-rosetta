@@ -489,6 +489,18 @@ transition does not prevent an otherwise protected exit. The existing
 `_exit`/`_exited` chain orders admitted accesses; no additional scheduling is
 introduced.
 
+Region actions hoisted into the parent reactor retain same-reactor admission
+when no descendant reactor accesses root storage across that parallel
+boundary. Their LF reaction order already serializes the accesses, including
+natural regional exits. The compiler checks this condition after assembling
+all regions, so a later-declared region cannot hide a nested read or write.
+Payload fields with the same name as a root attribute do not count as root
+storage accesses. When a descendant does access root storage, the initial-entry
+and parent-cleanup bounds apply to hoisted actions as well. A naturally
+finalizing region is classified by its owning parallel state at every enclosing
+boundary: hoisting its exit into an inner parent does not protect that access
+against another outer region.
+
 Initial entry and finite inline do bodies can also read and write shared root
 storage. Each accessing state must lie on the initial configuration at every
 enclosing parallel boundary, and no transition sourced inside that boundary

@@ -120,10 +120,6 @@ def test_parallel_entries_generate_uc(machine: str) -> None:
         "state active; state other; transition first active "
         "accept after 0.001 [s] "
         "do assign sequence := sequence + 1 then other;",
-        "exit assign sequence := sequence + 1; state active; "
-        "transition first active accept after 0.001 [s] then done;",
-        "exit assign sequence := sequence + 1; state active; "
-        "transition first active then done;",
         "state active; state other { entry assign sequence := sequence + 1; } "
         "transition first active accept after 0.001 [s] then other;",
         "state active { entry assign sequence := sequence + 1; } "
@@ -149,6 +145,54 @@ def test_independent_regional_access_is_diagnosed(
                         {regional_work}
                     }}
                 }}
+                state finishedState;
+                transition first working accept after 0.002 [s]
+                    then finishedState;
+            }}
+        }}
+    """)
+    with pytest.raises(
+        UnsupportedConstructError, match="requires ordered parent cleanup"
+    ):
+        build_program(load_model(tmp_path), "ParallelData::Machine")
+
+
+@pytest.mark.parametrize("nested_first", [False, True])
+@pytest.mark.parametrize("trigger", ["", "accept after 0.001 [s]"])
+@pytest.mark.parametrize("inner_parallel", [False, True])
+def test_hoisted_natural_exit_with_nested_storage_is_diagnosed(
+    tmp_path: Path, nested_first: bool, trigger: str, inner_parallel: bool
+) -> None:
+    natural = f"""
+        state naturalRegion {{
+            entry; then active;
+            exit assign sequence := sequence + 1;
+            state active;
+            transition first active {trigger} then done;
+        }}
+    """
+    if inner_parallel:
+        natural = f"""
+            state firstRegion {{
+                entry; then inner;
+                state inner parallel {{ {natural} }}
+            }}
+        """
+    nested = """
+        state nestedRegion {
+            entry; then active;
+            state active { entry assign sequence := sequence + 2; }
+        }
+    """
+    regions = nested + natural if nested_first else natural + nested
+    (tmp_path / "model.sysml").write_text(f"""
+        package ParallelData {{
+            private import ScalarValues::*;
+            private import SI::*;
+            state def Machine {{
+                attribute sequence : Integer := 0;
+                entry; then working;
+                state working parallel {{ {regions} }}
                 state finishedState;
                 transition first working accept after 0.002 [s]
                     then finishedState;
