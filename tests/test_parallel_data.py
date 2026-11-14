@@ -25,7 +25,7 @@ FIXTURE = FIXTURES_DIR / "parallel-data"
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 def test_parent_cleanup_shares_root_storage(
     tmp_path: Path, target_type: type[LfTarget]
 ) -> None:
@@ -46,7 +46,7 @@ def test_parent_cleanup_generates_uc() -> None:
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 def test_recursive_sibling_entry_order_and_reentry(
     tmp_path: Path, target_type: type[LfTarget]
 ) -> None:
@@ -62,7 +62,7 @@ def test_recursive_sibling_entry_order_and_reentry(
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 def test_parallel_root_without_entry_transports_isolated_storage(
     tmp_path: Path, target_type: type[LfTarget]
 ) -> None:

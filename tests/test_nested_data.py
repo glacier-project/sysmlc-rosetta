@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,11 +17,10 @@ from sysmlc_rosetta.program import Instantiation, MainReactor
 from sysmlc_rosetta.serialize import to_lf
 from sysmlc_rosetta.targets.c import CTarget
 from sysmlc_rosetta.targets.python import PythonTarget
+from sysmlc_rosetta.targets.uc import UcTarget
 from tests.conftest import FIXTURES_DIR
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from sysmlc_rosetta.program import LfProgram
     from sysmlc_rosetta.targets.base import LfTarget
 
@@ -29,6 +30,14 @@ FIXTURE = FIXTURES_DIR / "nested-data"
 def _execute(
     tmp_path: Path, program: LfProgram, target: LfTarget
 ) -> subprocess.CompletedProcess[str]:
+    uc = target.name == "uc"
+    compiler = "lfc"
+    if uc:
+        runtime = os.environ.get("REACTOR_UC_PATH")
+        if runtime is None:
+            pytest.skip("set REACTOR_UC_PATH to a built reactor-uc checkout")
+        compiler = str(Path(runtime) / "ulf/build/install/lf-cli/bin/lfc")
+        assert Path(compiler).is_file(), f"build the uC compiler: {compiler}"
     types = {
         v.name: v.type
         for v in (*program.reactor.parameters, *program.reactor.state_vars)
@@ -76,7 +85,7 @@ def _execute(
             *program.target_options,
             ("fast", "true"),
             ("timeout", "10 msec"),
-            ("workers", "4"),
+            *(() if uc else (("workers", "4"),)),
         ),
     )
     src = tmp_path / "src"
@@ -87,17 +96,20 @@ def _execute(
         (src / f"{program.types_module_name}.py").write_text(
             "\n".join(program.types_module_lines) + "\n"
         )
-    source = src / "Nested.lf"
+    source = src / ("Nested.ulf" if uc else "Nested.lf")
     source.write_text(to_lf(program))
     compiled = subprocess.run(
-        ["lfc", str(source)], capture_output=True, text=True, timeout=120
+        [compiler, str(source)],
+        capture_output=True,
+        text=True,
+        timeout=600 if uc else 120,
     )
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
     return subprocess.run(
         [str(tmp_path / "bin" / "Nested")],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120 if uc else 30,
     )
 
 
@@ -111,7 +123,7 @@ def _values(output: str, name: str) -> list[int | float | bool]:
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 @pytest.mark.parametrize("digit", [1, 5])
 def test_nested_data_order_reentry_and_instance_isolation(
     tmp_path: Path, target_type: type[LfTarget], digit: int
@@ -150,7 +162,7 @@ def test_nested_data_order_reentry_and_instance_isolation(
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 @pytest.mark.parametrize(
     ("machine", "expected"), [("ParentChange", 1234), ("TimedParent", 123456)]
 )
@@ -167,7 +179,7 @@ def test_child_write_reaches_parent_selection(
 
 
 @pytest.mark.lf
-@pytest.mark.parametrize("target_type", [PythonTarget, CTarget])
+@pytest.mark.parametrize("target_type", [PythonTarget, CTarget, UcTarget])
 def test_child_write_checks_root_constraint(
     tmp_path: Path, target_type: type[LfTarget]
 ) -> None:

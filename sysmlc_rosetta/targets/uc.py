@@ -81,6 +81,16 @@ class UcTarget(CTarget):
     extension = "ulf"
     mode_local_children = True
 
+    @override
+    def context_state(self, ctype: str | None) -> StateVar:
+        """Use a compound literal for context assignment in uC constructors."""
+        state = super().context_state(ctype)
+        return (
+            replace(state, init=f"({ctype}){{0}}")
+            if ctype is not None
+            else state
+        )
+
     # -- program --
 
     @override

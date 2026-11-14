@@ -1275,6 +1275,11 @@ entry, so the entry runs once per tag.
 | `LF_PRINT_DEBUG("%s", ...);`           | `LF_DEBUG(ENV, "%s", ...);`                                               |
 | `fabs`, `fmax`, `fmin` from `<math.h>` | `sysmlc_abs`, `sysmlc_max`, `sysmlc_min`, `static inline` in the preamble |
 
+Shared root-data contexts use a typed C compound literal for zero initialization.
+reactor-uc assigns state defaults in generated constructors, where a bare
+aggregate initializer is not an expression. The context still holds the root
+storage references described in section 5.
+
 **Children of a mode.** micromode lets only a mode's own reactions refer to
 the reactors the mode contains. The reactions that drain a composite state's
 children on departure, and its branch of the scope's exit handler, are
