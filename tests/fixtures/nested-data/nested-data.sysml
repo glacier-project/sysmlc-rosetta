@@ -108,7 +108,10 @@ package NestedData {
         state enclosing parallel {
             state region {
                 entry; then child;
-                state child { entry assign level := 1; }
+                state child;
+                state other;
+                transition first child accept after 0.001 [s]
+                    do assign level := 1 then other;
             }
         }
     }

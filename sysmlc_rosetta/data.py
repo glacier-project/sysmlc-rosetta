@@ -149,6 +149,26 @@ def _share_reactor(
                     ),
                 )
             )
+        if root:
+            missing = tuple(
+                f"{name}.{ENTRY_ORDER_PORT}"
+                for name in receiving
+                if not any(
+                    f"{name}.{ENTRY_ORDER_PORT}" in reaction.effects
+                    for reaction in reactions
+                )
+            )
+            if missing:
+                output.insert(
+                    0,
+                    Reaction(
+                        ("startup",),
+                        missing,
+                        stored(
+                            tuple(target.set_port(p, value) for p in missing)
+                        ),
+                    ),
+                )
         for inst in instances:
             if inst.reactor not in changed:
                 continue

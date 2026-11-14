@@ -104,8 +104,8 @@ The composite state's own `entry`/`exit`/`do` actions run in the **parent**
 reactor (mode entry reaction and transition dispatches), so they may use
 the machine's attributes. Actions on substates run inside the child
 reactor. Sequential composite scopes can access the same root attributes
-through the context described in §5; nested-reactor access across a parallel
-boundary remains rejected.
+through the context described in §5; access across a parallel boundary has
+the initial-entry and parent-cleanup bounds described there.
 
 A state's entry finishes before its substates' entries begin, as required
 by entry-before-middle. SysMLC also finishes supported finite inline `do`
@@ -142,8 +142,16 @@ descendant-owned escape crossing the parallel boundary uses the same
 cleanup protocol, including the origin region's exit. For a parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that
-region reports local readiness (§7). Sibling regions' substates enter in no specified
-relative order.
+region reports local readiness (§7). When admitted initial child entries access
+shared root data (§5), their immediate recursive entry/do work follows region
+declaration order. Earlier regions' existing `current_state` outputs feed a
+non-triggering `_previous_current_state` input of the next region's initial
+entry reaction. Status forwarding covers recursive initial entry; no extra
+reaction, action, state variable, or logical delay is introduced. This does
+not wait for a region's lifetime or serialize later automatic transitions.
+Region-own entry/do actions retain their existing parent placement: all run
+before the descendant entries. Other parallel activations gain no sibling
+ordering dependencies.
 
 ## 3. Transitions
 
@@ -479,10 +487,21 @@ the accessed exit independently, regional natural finalization, and descendant
 escapes leaving the boundary prevent admission. An unrelated regional
 transition does not prevent an otherwise protected exit. The existing
 `_exit`/`_exited` chain orders admitted accesses; no additional scheduling is
-introduced. Independent regional guards, entries, effects and exits remain
-unsupported for shared root reads as well as writes.
+introduced.
 
-Attributes declared inside states remain unsupported. Change triggers themselves still require a
+Initial entry and finite inline do bodies can also read and write shared root
+storage. Each accessing state must lie on the initial configuration at every
+enclosing parallel boundary, and no transition sourced inside that boundary
+may reactivate the state or an ancestor. Parent re-entry remains supported and
+retains root values. Native LF dependencies order the recursive initial child
+entries in region declaration order (§2). A parallel root without user
+entry/do statements receives a startup context writer when its children need
+root storage. Independent regional guards, effects, later target entries and
+exits remain unsupported for shared root reads as well as writes. In
+particular, an automatic transition or natural completion does not gain data
+admission merely because it occurs during startup.
+
+Attributes declared inside states remain unsupported. Change triggers require a
 source in the root reactor (§4); nested scalar writes can notify those root
 observations. Constraint checks and change notifications recognize direct
 root-attribute assignments. Nested structured-field writes are rejected when

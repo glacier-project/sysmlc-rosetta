@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field, replace
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import syside
@@ -88,6 +89,7 @@ logger = logging.getLogger(__name__)
 
 DONE_MODE = "done"
 CHANGE_ACT = "_change_act"
+PREVIOUS_ENTRY_PORT = "_previous_current_state"
 type LfCodeGen = LfPythonCodeGen | LfCCodeGen
 _CODEGENS: dict[str, type[LfCodeGen]] = {
     "python": LfPythonCodeGen,
@@ -273,6 +275,7 @@ class RosettaBuilder:
         self._action_slots: dict[syside.ActionUsage, tuple[StateFact, str]] = {}
         self._rendering_slot: tuple[StateFact, str] | None = None
         self._checking_constraints = False
+        self._entry_data_boundaries: set[str] = set()
 
     # -- TargetBuilder protocol --
 
@@ -948,10 +951,19 @@ class RosettaBuilder:
                     and not self._ordinary_parallel_exit(owner[0], level)
                 ):
                     continue
+                if (
+                    owner is not None
+                    and owner[1] in {"entry", "do"}
+                    and self._initial_parallel_entry(owner[0], level)
+                ):
+                    if scope and (scope == level or _is_ancestor(level, scope)):
+                        self._entry_data_boundaries.add(level)
+                    continue
                 raise UnsupportedConstructError(
                     f"access to machine attribute {name!r} under a parallel "
-                    "state requires ordered parent cleanup; independent "
-                    "regional entries, transitions and exits are not supported."
+                    "state requires ordered parent cleanup or initial entry; "
+                    "independent regional transitions, target entries and "
+                    "exits are not supported."
                 )
         if not scope:
             return self._target.var(name)
@@ -986,6 +998,71 @@ class RosettaBuilder:
             ):
                 return True
         return False
+
+    def _initial_parallel_entry(self, owner: StateFact, boundary: str) -> bool:
+        """Whether an entry runs only in the boundary's initial configuration."""
+        current = owner
+        while current.name != boundary and current.parent is not None:
+            parent_name = _scope_of(current.name)
+            parent = self._facts[parent_name] if parent_name else self._root
+            assert parent is not None
+            if (
+                parent.kind is StateKind.COMPOSITE
+                and parent.initial_substate != current.name
+            ):
+                return False
+            current = parent
+        return not any(
+            _is_ancestor(boundary, transition.source)
+            and isinstance(transition.target, str)
+            and (
+                transition.target == owner.name
+                or _is_ancestor(transition.target, owner.name)
+            )
+            for transition in self._transitions
+        )
+
+    def _order_parallel_entries(
+        self, boundary: str, regions: list[StateFact]
+    ) -> list[Connection]:
+        """Order recursive initial regional entries through status dependencies."""
+        if boundary not in self._entry_data_boundaries:
+            return []
+        receivers = {self._reactor_name(region.name) for region in regions[1:]}
+        self._reactors = [
+            replace(
+                reactor,
+                inputs=(*reactor.inputs, PREVIOUS_ENTRY_PORT),
+                modes=tuple(
+                    replace(
+                        mode,
+                        reactions=(
+                            replace(
+                                mode.reactions[0],
+                                sources=(
+                                    *mode.reactions[0].sources,
+                                    PREVIOUS_ENTRY_PORT,
+                                ),
+                            ),
+                            *mode.reactions[1:],
+                        ),
+                    )
+                    if mode.initial
+                    else mode
+                    for mode in reactor.modes
+                ),
+            )
+            if reactor.name in receivers
+            else reactor
+            for reactor in self._reactors
+        ]
+        return [
+            Connection(
+                f"c_{_simple(previous.name)}.{OUTPUT_PORT}",
+                f"c_{_simple(current.name)}.{PREVIOUS_ENTRY_PORT}",
+            )
+            for previous, current in pairwise(regions)
+        ]
 
     def _scope_codegen(self, scope: str) -> LfCodeGen:
         """The expression codegen for a scope's reaction bodies."""
@@ -1239,6 +1316,7 @@ class RosettaBuilder:
             ]
             flags.append(f"{r_simple}_done")
         # Gates precede consumption readers to avoid LF causality cycles.
+        connections += self._order_parallel_entries("", regions)
         reactions[:0] = root_gates
         lang = self._target
         join_body: list[Node] = []
@@ -1412,6 +1490,7 @@ class RosettaBuilder:
             OUTPUT_PORT,
             COMPLETED_PORT,
             ENTRY_ORDER_PORT,
+            PREVIOUS_ENTRY_PORT,
             "_sysmlc_types",
             *(f"{sig}_act" for sig in sent),
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
@@ -1430,6 +1509,7 @@ class RosettaBuilder:
             OUTPUT_PORT,
             COMPLETED_PORT,
             ENTRY_ORDER_PORT,
+            PREVIOUS_ENTRY_PORT,
             *inputs,
             *self._exported.get(scope, {}),
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
@@ -2181,6 +2261,7 @@ class RosettaBuilder:
                 # Render even without a completion path, to validate it.
                 region_exits.append(self._statements(region.exit_action, gen))
             # Gates precede consumption readers to avoid LF causality cycles.
+            connections += self._order_parallel_entries(fact.name, regions)
             reactions[:0] = region_gates
             completing_regions = [
                 region for region in regions if region.name in self._needs_done
