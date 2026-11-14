@@ -270,6 +270,9 @@ class RosettaBuilder:
         self._needs_done: set[str] = set()
         self._reactors: list[Reactor] = []
         self._data_scopes: set[str] = set()
+        self._action_slots: dict[syside.ActionUsage, tuple[StateFact, str]] = {}
+        self._rendering_slot: tuple[StateFact, str] | None = None
+        self._checking_constraints = False
 
     # -- TargetBuilder protocol --
 
@@ -323,6 +326,11 @@ class RosettaBuilder:
         )
         for fact in self._facts.values():
             self._children.setdefault(_scope_of(fact.name), []).append(fact)
+        for fact in (root, *self._facts.values()):
+            for slot in ("entry", "do", "exit"):
+                action = getattr(fact, f"{slot}_action")
+                if action is not None:
+                    self._action_slots[action] = (fact, slot)
         self._classify_transitions()
         self._tracked = {
             t.source
@@ -434,7 +442,11 @@ class RosettaBuilder:
             message = "SysML constraint violated: " + json.dumps(
                 asdict(constraint), separators=(",", ":")
             )
-            rendered = gen.render_expression(fact.expression)
+            self._checking_constraints = True
+            try:
+                rendered = gen.render_expression(fact.expression)
+            finally:
+                self._checking_constraints = False
             if fact.is_negated:
                 rendered = self._target.negate(rendered)
             checks.append(self._target.check(rendered, message))
@@ -907,24 +919,42 @@ class RosettaBuilder:
             port_signals=self._port_sigs,
             local_names=local_names,
             payload_bindings=payload_bindings,
-            attribute_reference=(
-                lambda name: self._outer_attribute(scope, name)
-            )
-            if scope
-            else None,
+            attribute_reference=lambda name: self._outer_attribute(scope, name),
         )
 
     def _outer_attribute(self, scope: str, name: str) -> str:
         """Resolve a nested access to the authoritative machine storage."""
-        for level in _enclosing(scope):
+        owner = self._rendering_slot
+        semantic_scope = (
+            _scope_of(owner[0].name)
+            if owner is not None and owner[0].parent is not None
+            else scope
+        )
+        levels = (
+            _enclosing(semantic_scope)
+            if scope or (owner is not None and owner[0].parent is not None)
+            else ()
+        )
+        for level in levels:
             fact = self._root if not level else self._facts[level]
             assert fact is not None
-            if fact.kind is StateKind.PARALLEL:
+            if (
+                fact.kind is StateKind.PARALLEL
+                and not self._checking_constraints
+            ):
+                if (
+                    owner is not None
+                    and owner[1] == "exit"
+                    and not self._ordinary_parallel_exit(owner[0], level)
+                ):
+                    continue
                 raise UnsupportedConstructError(
-                    f"nested access to machine attribute {name!r} under "
-                    "a parallel state is not supported; shared accesses "
-                    "between independent regions have no established order."
+                    f"access to machine attribute {name!r} under a parallel "
+                    "state requires ordered parent cleanup; independent "
+                    "regional entries, transitions and exits are not supported."
                 )
+        if not scope:
+            return self._target.var(name)
         if "." in name and (self._has_when or self._constraints):
             raise UnsupportedConstructError(
                 "nested structured-field assignments with root change "
@@ -933,6 +963,29 @@ class RosettaBuilder:
             )
         self._data_scopes.update(level for level in _enclosing(scope) if level)
         return self._target.context_reference(name)
+
+    def _ordinary_parallel_exit(self, owner: StateFact, boundary: str) -> bool:
+        """Whether regional work can execute an exit outside parent cleanup."""
+        for transition in self._transitions:
+            source = transition.source
+            if not _is_ancestor(boundary, source):
+                continue
+            target = transition.target
+            if isinstance(target, str) and not _is_ancestor(boundary, target):
+                return True
+            if source == owner.name or _is_ancestor(source, owner.name):
+                return True
+            if not _is_ancestor(owner.name, source):
+                continue
+            if isinstance(target, str):
+                if not _is_ancestor(owner.name, target):
+                    return True
+            elif (
+                _scope_of(owner.name) == boundary
+                and _scope_of(source) == owner.name
+            ):
+                return True
+        return False
 
     def _scope_codegen(self, scope: str) -> LfCodeGen:
         """The expression codegen for a scope's reaction bodies."""
@@ -2856,11 +2909,18 @@ class RosettaBuilder:
         action: syside.ActionUsage | None,
         codegen: LfCodeGen,
     ) -> Body:
-        return tuple(
-            node
-            for candidate in actions.inline_actions(action)
-            for node in codegen.render_statements(candidate)
+        previous = self._rendering_slot
+        self._rendering_slot = (
+            self._action_slots.get(action) if action else None
         )
+        try:
+            return tuple(
+                node
+                for candidate in actions.inline_actions(action)
+                for node in codegen.render_statements(candidate)
+            )
+        finally:
+            self._rendering_slot = previous
 
 
 def render_reactor(reactor: Reactor, target: LfTarget) -> Reactor:

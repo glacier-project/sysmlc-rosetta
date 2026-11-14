@@ -471,9 +471,18 @@ context while retaining the root values; separate machine instances have
 separate storage. Existing entry, completion and busy/settled dependencies
 order the relevant parent/child accesses.
 
-Nested-reactor access across a parallel boundary is rejected: independent-region
-shared reads/writes have no established ordering in this mapping. Attributes declared
-inside states remain unsupported. Change triggers themselves still require a
+Across a parallel boundary, exit bodies can access root storage when they can
+run only through ordered parent cleanup. Admission checks every enclosing
+parallel boundary and the semantic owner of each action, including region
+actions executed in the parent reactor. Regional transitions that can execute
+the accessed exit independently, regional natural finalization, and descendant
+escapes leaving the boundary prevent admission. An unrelated regional
+transition does not prevent an otherwise protected exit. The existing
+`_exit`/`_exited` chain orders admitted accesses; no additional scheduling is
+introduced. Independent regional guards, entries, effects and exits remain
+unsupported for shared root reads as well as writes.
+
+Attributes declared inside states remain unsupported. Change triggers themselves still require a
 source in the root reactor (§4); nested scalar writes can notify those root
 observations. Constraint checks and change notifications recognize direct
 root-attribute assignments. Nested structured-field writes are rejected when
