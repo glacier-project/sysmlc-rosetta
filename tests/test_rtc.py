@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 from sismic.interpreter import Interpreter
 from sismic.io import import_from_yaml
-from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 from sysmlc_quake.builder import build_statechart
 from sysmlc_quake.serialize import to_yaml as quake_to_yaml
@@ -47,9 +46,10 @@ def test_single_trigger_has_no_fired_flag() -> None:
     assert "_fired" not in lf
 
 
-def test_fired_name_collision_is_rejected() -> None:
-    with pytest.raises(UnsupportedConstructError, match="collides"):
-        build_program(load_model(MODEL_DIR), "Rtc::NameClashFired")
+def test_mode_and_fired_variable_use_separate_namespaces() -> None:
+    program = build_program(load_model(MODEL_DIR), "Rtc::NameClashFired")
+    assert "idle_fired" in {mode.name for mode in program.reactor.modes}
+    assert "idle_fired" in {var.name for var in program.reactor.state_vars}
 
 
 # ---------------------------------------------------------------------------

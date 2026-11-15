@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from sismic.interpreter import Interpreter
 from sismic.io import import_from_yaml
-from sysmlc.errors import UnsupportedConstructError
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.sysml.loading import load_model
 from sysmlc_quake.builder import build_statechart
@@ -158,9 +157,11 @@ def test_par_deep_inner_first_matches_quake(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_consumed_name_collision_is_rejected() -> None:
-    with pytest.raises(UnsupportedConstructError, match="collides"):
-        build_program(load_model(MODEL_DIR), "InnerFirst::MNameClash")
+def test_consumed_name_collision_is_disambiguated() -> None:
+    program = build_program(load_model(MODEL_DIR), "InnerFirst::MNameClash")
+    assert "Ev_consumed_01" in {
+        mode.name for reactor in program.reactors for mode in reactor.modes
+    }
 
 
 # ---------------------------------------------------------------------------

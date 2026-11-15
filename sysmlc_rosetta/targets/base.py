@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal
 from sysmlc_rosetta.statements import nest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     import syside
     from sysmlc.semantics.statemachine.facts import AttributeBinding
@@ -86,6 +86,12 @@ class LfTarget(ABC):
         extension: The extension of the program's source file.
         mode_local_children: Whether only a mode's own reactions may refer
             to the reactors the mode contains.
+        shared_state_namespace: Whether state variables share a target
+            namespace with timers, actions, ports and child instances.
+        unqualified_port_references: Whether the target compiler counts
+            port references by spelling across parent and child scopes.
+        per_child_busy_flags: Whether busy children need individual flags
+            instead of one collection shared by all children.
     """
 
     name: ClassVar[str]
@@ -93,6 +99,9 @@ class LfTarget(ABC):
     foreign_languages: ClassVar[tuple[str, ...]]
     extension: ClassVar[str] = "lf"
     mode_local_children: ClassVar[bool] = False
+    shared_state_namespace: ClassVar[bool] = False
+    unqualified_port_references: ClassVar[bool] = False
+    per_child_busy_flags: ClassVar[bool] = True
 
     # -- program --
 
@@ -176,16 +185,13 @@ class LfTarget(ABC):
         kind: StateKind,
         *,
         reset: bool,
-        insts: Sequence[str] = (),
     ) -> tuple[StateVar, ...]:
         """Declare a protocol state variable.
 
         Args:
-            name: The variable; for ``busy``, the source state's simple name.
+            name: The assigned variable identifier.
             kind: What the variable holds.
             reset: Whether it is a ``reset state``.
-            insts: For ``busy``, the state's child instances; for ``wait``,
-                the earlier regions' instances.
         """
 
     # -- harness observation --
@@ -368,24 +374,24 @@ class LfTarget(ABC):
     # -- children busy tracking --
 
     @abstractmethod
-    def busy_init(self, state: str, insts: Sequence[str]) -> Body:
-        """Mark every child of ``state`` busy (they are entering)."""
+    def busy_init(self, busy: Mapping[str, str]) -> Body:
+        """Mark entering children busy using their assigned fields."""
 
     @abstractmethod
-    def busy_add(self, state: str, inst: str) -> Stmt:
+    def busy_add(self, name: str, inst: str) -> Stmt:
         """Mark a child busy."""
 
     @abstractmethod
-    def busy_discard(self, state: str, inst: str) -> Stmt:
+    def busy_discard(self, name: str, inst: str) -> Stmt:
         """Mark a child settled."""
 
     @abstractmethod
-    def busy_any(self, state: str, insts: Sequence[str]) -> str:
-        """Whether some child of ``state`` is still marked busy."""
+    def busy_any(self, names: Sequence[str]) -> str:
+        """Whether some assigned child field is still marked busy."""
 
     @abstractmethod
-    def busy_none(self, state: str, insts: Sequence[str]) -> str:
-        """Whether no child of ``state`` is marked busy."""
+    def busy_none(self, names: Sequence[str]) -> str:
+        """Whether no assigned child field is marked busy."""
 
     @abstractmethod
     def report_busy(self, occurrence: str) -> Stmt:
@@ -572,6 +578,7 @@ class LfTarget(ABC):
         wait: str,
         inst: str,
         earlier: Sequence[str],
+        flags: Mapping[str, str],
         arrival: str,
         message: str,
     ) -> Body:

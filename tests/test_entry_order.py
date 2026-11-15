@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import syside
-from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 from sysmlc.sysml.loading import load_model
 
@@ -127,11 +126,13 @@ def test_entry_order_is_a_source_never_a_trigger(
     assert f"c_outer.{ENTRY_ORDER_PORT}" in outer_entry.effects
 
 
-def test_reserved_entry_order_state_name_is_rejected(
+def test_reserved_entry_order_state_name_is_disambiguated(
     entry_model: syside.Model,
 ) -> None:
-    with pytest.raises(UnsupportedConstructError, match="_entry_order"):
-        build_program(entry_model, "EntryOrder::ReservedState")
+    program = build_program(entry_model, "EntryOrder::ReservedState")
+    assert "_entry_order_01" in {
+        mode.name for reactor in program.reactors for mode in reactor.modes
+    }
 
 
 @pytest.mark.lf

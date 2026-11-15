@@ -100,6 +100,7 @@ def compose_exhibits(
                 union |= face2.accepted
         peer_accepts_map.append(frozenset(union))
 
+    needs.reserve_reactors(composite_name, *(_simple(qn) for _, qn, _ in faces))
     # Build each machine in declaration order, collecting all child reactors.
     driver = StateMachineDriver(model)
     child_reactors: list[Reactor] = []
@@ -118,14 +119,15 @@ def compose_exhibits(
         machine_reactors.append(result.reactor)
 
     # Reactor name collision check (all child reactors + composite name).
+    needs.reserve_reactors(composite_name)
     all_names = [r.name for r in child_reactors]
     all_names.append(composite_name)
-    counts = Counter(all_names)
+    counts = Counter(name.casefold() for name in all_names)
     duplicates = {name for name, n in counts.items() if n > 1}
     if duplicates:
         raise UnsupportedConstructError(
             f"reactor name(s) {sorted(duplicates)!r} collide across the "
-            "rig; rename a machine, state, or the rig"
+            "rig; rename a state definition or the part definition"
         )
 
     # Cross-wire all ordered pairs (source_i → target_j for i ≠ j).
@@ -346,6 +348,10 @@ def _build_reactors(
     needs.types_module = module_name
     if external:
         needs.external = external
+    needs.reserve_reactors(
+        *(node.definition_name for node in (*single_nodes, *multi_nodes)),
+        *(_simple(qn) for node in multi_nodes for _, qn in node.behaviors),
+    )
     seen: set[str] = set()
     reactors: list[Reactor] = []
 
@@ -370,12 +376,12 @@ def _build_reactors(
         )
         assert isinstance(result, LfProgram)
         for reactor in result.reactors:
-            if reactor.name in seen:
+            if reactor.name.casefold() in seen:
                 raise UnsupportedConstructError(
                     f"reactor name {reactor.name!r} collides across parts; "
-                    "rename a part def, state, or machine"
+                    "rename a part definition or state definition"
                 )
-            seen.add(reactor.name)
+            seen.add(reactor.name.casefold())
             reactors.append(reactor)
 
     # --- Multi-exhibit nodes: build via compose_exhibits (once per def) ---
@@ -388,12 +394,12 @@ def _build_reactors(
             model, node.definition_name, node.behaviors, needs
         )
         for reactor in (*children, composite):
-            if reactor.name in seen:
+            if reactor.name.casefold() in seen:
                 raise UnsupportedConstructError(
                     f"reactor name {reactor.name!r} collides across parts; "
-                    "rename a part def, state, or machine"
+                    "rename a part definition or state definition"
                 )
-            seen.add(reactor.name)
+            seen.add(reactor.name.casefold())
             reactors.append(reactor)
 
     return tuple(reactors), needs
