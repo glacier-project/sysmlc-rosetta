@@ -6,6 +6,10 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import syside
+from sysmlc.codegen.c import LIBRARY_FUNCTIONS as C_LIBRARY_FUNCTIONS
+from sysmlc.codegen.python import (
+    LIBRARY_FUNCTIONS as PYTHON_LIBRARY_FUNCTIONS,
+)
 from sysmlc.codegen.python import payload_signature
 from sysmlc.codegen.structured import constructed_payload_definition
 from sysmlc.errors import UnsupportedConstructError
@@ -53,6 +57,7 @@ from sysmlc_rosetta.lifecycle import (
     retain,
     when_due,
 )
+from sysmlc_rosetta.names import safe
 from sysmlc_rosetta.program import (
     Connection,
     Instantiation,
@@ -155,11 +160,6 @@ class _Drain:
     sel: str
     request: str
     keys: dict[int, int]
-
-
-def _simple(path: str) -> str:
-    """The last segment of a state path: the state's simple name."""
-    return path.rpartition("::")[2]
 
 
 def _is_ancestor(outer: str, inner: str) -> bool:
@@ -294,6 +294,8 @@ class RosettaBuilder:
         self._deferred: set[tuple[str, str]] = set()
         self._needs_done: set[str] = set()
         self._reactors: list[Reactor] = []
+        self._names = self._needs.names
+        self._needs.reserve_reactors(name)
 
     # -- TargetBuilder protocol --
 
@@ -383,6 +385,7 @@ class RosettaBuilder:
         self._collect_consumed()
         self._collect_shared()
         self._collect_sends()
+        self._prepare_names()
         # The port/self signal sets must exist (populated by _collect_sends)
         # before any peer-aware code generator is created.
         self._codegen = self._make_codegen(self._attribute_names)
@@ -682,7 +685,7 @@ class RosettaBuilder:
 
     def _region_feed(
         self, key: str, region: StateFact, inst: str
-    ) -> tuple[list[Connection], list[Reaction], list[StateVar]]:
+    ) -> tuple[list[Connection], list[Reaction], list[StateVar], list[str]]:
         """Deliver a parallel state's signals to one region.
 
         A signal shared with earlier accepting regions passes through a
@@ -702,6 +705,7 @@ class RosettaBuilder:
         connections: list[Connection] = []
         reactions: list[Reaction] = []
         state: list[StateVar] = []
+        waits: list[str] = []
         scope = self._slot_scope(region)
         for sig in self._accepted.get(region.name, {}):
             if sig in self._omitted_inputs:
@@ -714,32 +718,51 @@ class RosettaBuilder:
                     connections.append(Connection(origin, f"{inst}.{origin}"))
                 continue
             earlier = names[: names.index(region.name)]
-            wait = (
-                f"_{_simple(key) or 'root'}_{_simple(region.name)}_{sig}_wait"
+            wait = self._variable(
+                region.name,
+                f"wait:{key}:{sig}",
+                f"_{self._state_symbol(key) or 'root'}_{self._state_symbol(region.name)}_{sig}_wait",
             )
+            waits.append(wait)
             state += self._target.state_vars(
                 wait,
                 "wait",
                 reset=scope != "",
-                insts=[f"c_{_simple(name)}" for name in earlier],
             )
+            flags: dict[str, str] = (
+                {
+                    self._instance(name): self._variable(
+                        region.name,
+                        f"wait:{key}:{sig}:{name}",
+                        f"{wait}_{self._instance(name)}",
+                    )
+                    for name in earlier
+                }
+                if self._target.per_child_busy_flags
+                else {}
+            )
+            for flag in flags.values():
+                state += self._target.state_vars(
+                    flag, "flag", reset=scope != ""
+                )
             message = (
                 f"{self._source_qn}: signal {sig} arrived while an earlier "
                 f"occurrence waits for region "
-                f"{region.name.replace('::', '.')}; overlapping retained "
+                f"{self._display(region)}; overlapping retained "
                 "events are not supported"
             )
             body = self._target.region_gate(
                 sig=sig,
                 wait=wait,
                 inst=inst,
-                earlier=[f"c_{_simple(name)}" for name in earlier],
+                earlier=[self._instance(name) for name in earlier],
+                flags=flags,
                 arrival=self._arrival(scope, sig),
                 message=message,
             )
             triggers = (
                 sig,
-                *(f"c_{_simple(name)}.{sig}_consumed" for name in earlier),
+                *(f"{self._instance(name)}.{sig}_consumed" for name in earlier),
             )
             sources = (f"{sig}_origin",) if (scope, sig) in self._origin else ()
             reactions.append(
@@ -750,7 +773,7 @@ class RosettaBuilder:
                     sources,
                 )
             )
-        return connections, reactions, state
+        return connections, reactions, state, waits
 
     def _arrival(self, scope: str, sig: str) -> str:
         """The arrival tag of an occurrence of ``sig`` handled in ``scope``.
@@ -899,8 +922,196 @@ class RosettaBuilder:
 
     # -- scope assembly --
 
+    def _source_name(self, path: str) -> str:
+        """Return a source name, or a legacy manually supplied name."""
+        fact = self._facts[path]
+        if fact.source_name is not None:
+            return fact.source_name
+        name = path.rpartition("::")[2]
+        return (
+            name[1:-1] if name.startswith("'") and name.endswith("'") else name
+        )
+
+    def _display_path(self, path: str) -> str:
+        """Join source names without interpreting their textual escapes."""
+        return ".".join(
+            self._source_name(parent)
+            for parent in reversed(_enclosing(path)[:-1])
+        )
+
+    def _collision_namespace(self, kind: str) -> str:
+        if kind == "variable" and not self._target.shared_state_namespace:
+            return "variable"
+        return "declaration"
+
+    def _symbol(
+        self, scope: str, kind: str, subject: str, preferred: str
+    ) -> str:
+        return self._names.assign(
+            f"{self._source_qn}|{self._name}::{scope}",
+            self._collision_namespace(kind),
+            f"{kind}:{subject}",
+            preferred,
+        )
+
+    def _state_symbol(self, path: str) -> str:
+        if not path:
+            return ""
+        return self._symbol(
+            _scope_of(path), "mode", path, self._source_name(path)
+        )
+
+    def _instance(self, path: str) -> str:
+        fact = self._facts[path]
+        return self._symbol(
+            self._slot_scope(fact),
+            "instance",
+            path,
+            f"c_{self._state_symbol(path)}",
+        )
+
+    def _variable(self, path: str, role: str, preferred: str) -> str:
+        scope = self._slot_scope(self._facts[path]) if path else ""
+        return self._symbol(scope, "variable", f"{path}:{role}", preferred)
+
+    def _pending(self, path: str) -> str:
+        return self._variable(
+            path, "pending", f"_{self._state_symbol(path)}_pending"
+        )
+
+    def _selection(self, path: str) -> str:
+        return self._variable(
+            path, "selection", f"_{self._state_symbol(path)}_sel"
+        )
+
+    def _busy(self, path: str, insts: tuple[str, ...]) -> dict[str, str]:
+        state_symbol = self._state_symbol(path)
+        return {
+            inst: self._variable(
+                path,
+                "busy"
+                if not self._target.per_child_busy_flags
+                else f"busy:{inst}",
+                f"_{state_symbol}_busy"
+                if not self._target.per_child_busy_flags
+                else f"_{state_symbol}_{inst}_busy",
+            )
+            for inst in insts
+        }
+
     def _reactor_name(self, scope: str) -> str:
-        return f"{self._name}_{scope.replace('::', '_')}"
+        parts: list[str] = []
+        for path in reversed(_enclosing(scope)[:-1]):
+            parts.append(self._state_symbol(path))
+        return self._names.assign(
+            "",
+            "reactor",
+            f"{self._source_qn}|{self._name}::{scope}",
+            f"{self._name}_{'_'.join(parts)}",
+        )
+
+    def _prepare_names(self) -> None:
+        fixed = (
+            DONE_MODE,
+            OUTPUT_PORT,
+            COMPLETED_PORT,
+            ENTRY_ORDER_PORT,
+            BUSY_PORT,
+            SETTLED_PORT,
+            EXIT_REQUEST_PORT,
+            EXIT_ACK_PORT,
+            ACTIVE_VAR,
+            EXIT_PENDING_VAR,
+            CHANGE_ACT,
+            "_entered",
+            "_sysmlc_types",
+            "lf",
+            "logging",
+            "math",
+            "request_stop",
+            "RuntimeError",
+            "json",
+            "print",
+            "set",
+            *(name.split(".")[0] for name in PYTHON_LIBRARY_FUNCTIONS.values()),
+            *C_LIBRARY_FUNCTIONS.values(),
+            "_after_ns",
+            "_at_delta",
+            "_value",
+            "_tag",
+            "_newest",
+            "_key",
+            "_payload",
+            "_held",
+            "_consumption",
+            "_holders",
+            "_name",
+            "_port",
+        )
+        external_by_scope: dict[str, tuple[str, ...]] = {}
+        for scope in {"", *self._children}:
+            signals = {
+                *self._accepted.get(scope, {}),
+                *self._exported.get(scope, {}),
+                *self._sent_by_scope.get(scope, {}),
+            }
+            external_by_scope[scope] = (
+                *signals,
+                *(
+                    f"{sig}_act"
+                    for sig in self._self_sched_by_scope.get(scope, ())
+                ),
+                *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
+                *(
+                    f"{sig}_origin"
+                    for sig in self._accepted.get(scope, {})
+                    if (scope, sig) in self._origin
+                ),
+            )
+        shared_external = {
+            name for names in external_by_scope.values() for name in names
+        }
+        for scope, external in external_by_scope.items():
+            reserved = (
+                shared_external
+                if self._target.unqualified_port_references
+                else external
+            )
+            for namespace in ("declaration", "variable"):
+                self._names.reserve(
+                    f"{self._source_qn}|{self._name}::{scope}",
+                    namespace,
+                    *fixed,
+                    *reserved,
+                )
+            if not scope:
+                self._names.reserve(
+                    f"{self._source_qn}|{self._name}::",
+                    self._collision_namespace("variable"),
+                    *self._attribute_names,
+                )
+        facts = sorted(
+            self._facts.values(),
+            key=lambda fact: (
+                not safe(self._source_name(fact.name)),
+                fact.name,
+            ),
+        )
+        deferred: list[StateFact] = []
+        for fact in facts:
+            scope = f"{self._source_qn}|{self._name}::{_scope_of(fact.name)}"
+            if self._names.available(
+                scope, "declaration", self._source_name(fact.name)
+            ):
+                self._state_symbol(fact.name)
+            else:
+                deferred.append(fact)
+        for fact in deferred:
+            self._state_symbol(fact.name)
+        for fact in facts:
+            if fact.kind is StateKind.COMPOSITE:
+                self._instance(fact.name)
+                self._reactor_name(fact.name)
 
     def _make_codegen(
         self,
@@ -948,7 +1159,7 @@ class RosettaBuilder:
             if sig not in self._omitted_inputs
         ]
         gen = self._scope_codegen(scope)
-        self._check_names(scope, kids, inputs, sent)
+        self._check_names(scope, inputs, sent)
         inputs += [
             f"{sig}_origin"
             for sig in self._accepted.get(scope, {})
@@ -973,7 +1184,6 @@ class RosettaBuilder:
         if scope in self._needs_done:
             modes.append(self._done_mode(scope, sent))
             tails.append(_Trailing())
-        self._check_state_names(scope, kids, sent, extra_state)
         if not is_root:
             inputs.append(ENTRY_ORDER_PORT)
         if self._reports(scope):
@@ -1006,18 +1216,6 @@ class RosettaBuilder:
                 for name in (port, self._late_port(scope, target))
                 if name is not None
             )
-            clashes = set(exit_ports) & {
-                *inputs,
-                *ported,
-                *consumed,
-                *sent,
-                *(_simple(kid.name) for kid in kids),
-            }
-            if clashes:
-                raise UnsupportedConstructError(
-                    f"signal or state names {sorted(clashes)!r} collide "
-                    "with Rosetta generated exit ports; rename them."
-                )
             lifecycle = (
                 (BUSY_PORT, SETTLED_PORT, EXIT_ACK_PORT)
                 if self._reports(scope)
@@ -1035,7 +1233,9 @@ class RosettaBuilder:
             name = self._reactor_name(scope)
         sched = self._self_sched_by_scope.get(scope, set())
         sent_self = [sig for sig in sent if sig in sched]
-        action_list = [LogicalAction(f"{sig}_act") for sig in sent_self]
+        action_list = [
+            LogicalAction(f"{sig}_act", signal=sig) for sig in sent_self
+        ]
         if is_root and self._has_when:
             action_list.append(LogicalAction(CHANGE_ACT))
         return Reactor(
@@ -1048,6 +1248,7 @@ class RosettaBuilder:
             reactions=tuple(reactions),
             modes=tuple(modes),
             trailing_reactions=trailing,
+            boolean_ports=() if is_root else exit_ports,
         )
 
     def _place_trailing(
@@ -1145,7 +1346,7 @@ class RosettaBuilder:
             for sig in self._accepted.get("", {})
             if sig not in self._omitted_inputs
         ]
-        self._check_names("", regions, inputs, sent)
+        self._check_names("", inputs, sent)
         instantiations: list[Instantiation] = []
         connections: list[Connection] = []
         reactions: list[Reaction] = list(
@@ -1155,8 +1356,8 @@ class RosettaBuilder:
         root_gate_state: list[StateVar] = []
         root_gates: list[Reaction] = []
         for region in regions:
-            r_simple = _simple(region.name)
-            inst = f"c_{r_simple}"
+            region_symbol = self._state_symbol(region.name)
+            inst = self._instance(region.name)
             child = self._composite_reactor(region.name, region, is_root=False)
             self._reactors.append(child)
             if self._exit_ports.get(region.name):
@@ -1166,16 +1367,20 @@ class RosettaBuilder:
                     "receive it."
                 )
             instantiations.append(Instantiation(inst, child.name))
-            feed, gates, gate_state = self._region_feed("", region, inst)
+            feed, gates, gate_state, _ = self._region_feed("", region, inst)
             connections += feed
             root_gate_state += gate_state
             root_gates += gates
-            reactions.append(self._reemit(inst, r_simple, prefix=""))
+            reactions.append(
+                self._reemit(inst, self._source_name(region.name), prefix="")
+            )
             reactions += [
                 self._port_reemit(inst, sig)
                 for sig in self._exported.get(region.name, {})
             ]
-            flags.append(f"{r_simple}_done")
+            flags.append(
+                self._variable(region.name, "done", f"{region_symbol}_done")
+            )
         # Gates precede consumption readers to avoid LF causality cycles.
         reactions[:0] = root_gates
         lang = self._target
@@ -1188,7 +1393,7 @@ class RosettaBuilder:
             region_exit = self._statements(region.exit_action, self._codegen)
             if region.name not in self._needs_done:
                 continue
-            inst = f"c_{_simple(region.name)}"
+            inst = self._instance(region.name)
             join_body.append(
                 nest(
                     lang.is_present(f"{inst}.{COMPLETED_PORT}"),
@@ -1207,7 +1412,7 @@ class RosettaBuilder:
             reactions.append(
                 make_reaction(
                     tuple(
-                        f"c_{_simple(r.name)}.{COMPLETED_PORT}"
+                        f"{self._instance(r.name)}.{COMPLETED_PORT}"
                         for r in completing_regions
                     ),
                     (),
@@ -1223,7 +1428,6 @@ class RosettaBuilder:
             for var in self._target.state_vars(flag, "flag", reset=True)
         ]
         state_vars += root_gate_state
-        self._check_state_names("", regions, sent, root_gate_state)
         ported = tuple(self._exported.get("", {}))
         sched = self._self_sched_by_scope.get("", set())
         sent_self = [sig for sig in sent if sig in sched]
@@ -1233,7 +1437,9 @@ class RosettaBuilder:
             inputs=tuple(inputs),
             outputs=(OUTPUT_PORT, *ported),
             state_vars=tuple(state_vars),
-            actions=tuple(LogicalAction(f"{sig}_act") for sig in sent_self),
+            actions=tuple(
+                LogicalAction(f"{sig}_act", signal=sig) for sig in sent_self
+            ),
             instantiations=tuple(instantiations),
             connections=tuple(connections),
             reactions=tuple(reactions),
@@ -1282,146 +1488,53 @@ class RosettaBuilder:
                     )
         return regions
 
-    def _multi_trigger_states(self, scope: str) -> set[str]:
-        """Simple names of states with >=2 distinct trigger groups in scope."""
-        signals: dict[str, set[str | None]] = {}
-        afters: dict[str, int] = {}
-        for t in self._scope_transitions.get(scope, []):
-            trigger = t.trigger
-            if trigger is None:
-                continue
-            if isinstance(trigger, SignalTrigger):
-                signals.setdefault(t.source, set()).update(
-                    self._channels(trigger)
-                )
-            elif isinstance(trigger, (AfterTrigger, AtTrigger, WhenTrigger)):
-                afters[t.source] = afters.get(t.source, 0) + 1
-        out: set[str] = set()
-        for source in set(signals) | set(afters):
-            if len(signals.get(source, set())) + afters.get(source, 0) >= 2:
-                out.add(_simple(source))
-        return out
-
     def _check_names(
         self,
         scope: str,
-        kids: list[StateFact],
         inputs: list[str],
         sent: list[str],
     ) -> None:
         channels = set(inputs) | set(self._exported.get(scope, {})) | set(sent)
-        lifecycle = {
-            name
-            for kid in kids
-            if kid.kind is not StateKind.LEAF and self._reports(kid.name)
-            for name in (
-                f"_{_simple(kid.name)}_busy",
-                f"_{_simple(kid.name)}_pending",
-                f"_{_simple(kid.name)}_sel",
-            )
-        }
-        if self._reports(scope):
-            lifecycle |= {
-                BUSY_PORT,
-                SETTLED_PORT,
-                EXIT_REQUEST_PORT,
-                EXIT_ACK_PORT,
-                ACTIVE_VAR,
-                EXIT_PENDING_VAR,
-            }
-        parallels = [kid.name for kid in kids if kid.kind is StateKind.PARALLEL]
-        root = self._root
-        if scope == "" and root is not None and root.kind is StateKind.PARALLEL:
-            parallels.append("")
-        lifecycle |= {
-            f"{sig}_origin"
-            for sig in self._accepted.get(scope, {})
-            if (scope, sig) in self._origin
-        }
-        lifecycle |= {
-            f"_{_simple(key) or 'root'}_{_simple(region)}_{sig}_wait"
-            for key in parallels
-            for sig, names in self._shared.get(key, {}).items()
-            for region in names[1:]
-        }
-        generated = {
-            *lifecycle,
+        fixed = {
             DONE_MODE,
             OUTPUT_PORT,
             COMPLETED_PORT,
             ENTRY_ORDER_PORT,
+            *(
+                (
+                    BUSY_PORT,
+                    SETTLED_PORT,
+                    EXIT_REQUEST_PORT,
+                    EXIT_ACK_PORT,
+                    ACTIVE_VAR,
+                    EXIT_PENDING_VAR,
+                )
+                if self._reports(scope)
+                else ()
+            ),
             "_sysmlc_types",
+            *((CHANGE_ACT,) if self._has_when else ()),
             *(f"{sig}_act" for sig in sent),
             *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
-            *(f"{name}_fired" for name in self._multi_trigger_states(scope)),
-            *((CHANGE_ACT,) if self._has_when else ()),
+            *(
+                f"{sig}_origin"
+                for sig in self._accepted.get(scope, {})
+                if (scope, sig) in self._origin
+            ),
         }
-        conflicts = channels & generated
+        conflicts = channels & fixed
         if conflicts:
             raise UnsupportedConstructError(
                 f"signal channels {sorted(conflicts)!r} collide with "
                 "Rosetta generated identifiers"
             )
-        reserved = {
-            *lifecycle,
-            DONE_MODE,
-            OUTPUT_PORT,
-            COMPLETED_PORT,
-            ENTRY_ORDER_PORT,
-            *inputs,
-            *self._exported.get(scope, {}),
-            *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
-            *(f"{sig}_act" for sig in sent),
-            *(f"c_{_simple(kid.name)}" for kid in kids),
-            *(f"{name}_fired" for name in self._multi_trigger_states(scope)),
-            *((CHANGE_ACT,) if self._has_when else ()),
-        }
-        for fact in kids:
-            if _simple(fact.name) in reserved:
-                raise UnsupportedConstructError(
-                    f"state name {_simple(fact.name)!r} collides with a name "
-                    "rosetta generates (done, current_state, completed, "
-                    "_entry_order, a signal port/action, or a <state>_fired "
-                    "single-fire flag); rename the state."
-                )
-
-    def _check_state_names(
-        self,
-        scope: str,
-        kids: list[StateFact],
-        sent: list[str],
-        generated: list[StateVar],
-    ) -> None:
-        """Reject model names that reuse a generated state variable.
-
-        Checks the state variables this scope's reactor actually emits
-        against its states, its signals and, at the root, the attributes
-        sharing the reactor's state namespace.
-
-        Raises:
-            UnsupportedConstructError: A model name equals a generated
-                state variable.
-        """
-        model = {
-            *(_simple(kid.name) for kid in kids),
-            *self._accepted.get(scope, {}),
-            *self._exported.get(scope, {}),
-            *sent,
-            *(self._attribute_names if scope == "" else ()),
-        }
-        clashes = model & {var.name for var in generated}
-        if clashes:
-            raise UnsupportedConstructError(
-                f"names {sorted(clashes)!r} collide with Rosetta generated "
-                "state variables; rename them."
-            )
 
     # -- mode assembly --
 
-    def _observe_log(self, verb: str, simple: str) -> Node:
+    def _observe_log(self, verb: str, source_name: str) -> Node:
         """An entry/exit DEBUG log line; flags the preamble for ``logging``."""
         self._needs.uses_logging = True
-        return self._target.log(f"{verb} {self._name}.{simple}")
+        return self._target.log(f"{verb} {self._name}.{source_name}")
 
     def _child_mode(
         self,
@@ -1443,7 +1556,7 @@ class RosettaBuilder:
         resolutions of deferred exit ports and its cleanup-dependent
         output forwarding.
         """
-        simple = _simple(fact.name)
+        mode_symbol = self._state_symbol(fact.name)
         outgoing = [
             t
             for t in self._scope_transitions.get(scope, [])
@@ -1493,7 +1606,7 @@ class RosettaBuilder:
         ):
             eventless.sort(key=lambda t: t.declaration_order or 0)
         lifecycle = fact.kind is not StateKind.LEAF and self._reports(fact.name)
-        pending = f"_{simple}_pending" if lifecycle else None
+        pending = self._pending(fact.name) if lifecycle else None
         insts: tuple[str, ...] = ()
         if lifecycle:
             children = (
@@ -1501,14 +1614,14 @@ class RosettaBuilder:
                 if fact.kind is StateKind.COMPOSITE
                 else self._regions(fact)
             )
-            insts = tuple(f"c_{_simple(child.name)}" for child in children)
+            insts = tuple(self._instance(child.name) for child in children)
         busy_sources = tuple(f"{inst}.{BUSY_PORT}" for inst in insts)
-        sel = f"_{simple}_sel" if lifecycle else None
+        sel = self._selection(fact.name) if lifecycle else None
         drain = (
             None
             if fact.name not in self._tracked
             else _Drain(
-                f"_{simple}_sel",
+                self._selection(fact.name),
                 f"{insts[0]}.{EXIT_REQUEST_PORT}",
                 {id(t): i for i, t in enumerate(outgoing)},
             )
@@ -1525,29 +1638,35 @@ class RosettaBuilder:
         # transitions). It lands in every outgoing transition's reaction, but
         # only the firing transition runs, so each departure logs exactly once.
         exit_log = (
-            [self._observe_log("exited", simple)] if self._observe else []
+            [self._observe_log("exited", self._source_name(fact.name))]
+            if self._observe
+            else []
         )
         exit_stmts: Body = (*exit_log, *self._statements(fact.exit_action, gen))
         timers: list[Timer] = []
         mode_actions: list[LogicalAction] = []
         reactions: list[Reaction] = []
         entry_body: list[Node] = [
-            lang.announce(simple, scope.replace("::", "."))
+            lang.announce(
+                self._source_name(fact.name), self._display_path(scope)
+            )
         ]
         entry_effects = [OUTPUT_PORT]
         if self._observe:
-            entry_body.insert(0, self._observe_log("entered", simple))
+            entry_body.insert(
+                0, self._observe_log("entered", self._source_name(fact.name))
+            )
         if self._reports(scope):
-            entry_body.append(lang.set_active(simple))
+            entry_body.append(lang.set_active(mode_symbol))
             if fact.kind is StateKind.LEAF:
                 forced = (*exit_stmts, *self._exit_ack(scope))
-                exits.append((simple, forced, (EXIT_ACK_PORT,)))
+                exits.append((mode_symbol, forced, (EXIT_ACK_PORT,)))
             else:
                 request = f"{insts[0]}.{EXIT_REQUEST_PORT}"
                 assert sel is not None
                 exits.append(
                     (
-                        simple,
+                        mode_symbol,
                         (
                             lang.sel_ancestor(sel),
                             lang.set_active(CLEANUP),
@@ -1571,7 +1690,11 @@ class RosettaBuilder:
             + bool(eventless and fact.kind is StateKind.LEAF)
             >= 2
         )
-        fired_flag = f"{simple}_fired" if multi else None
+        fired_flag = (
+            self._variable(fact.name, "fired", f"{mode_symbol}_fired")
+            if multi
+            else None
+        )
         if fired_flag is not None:
             # Child-scope reactors are instantiated inside a parent `reset`
             # mode; lfc 0.11 requires their state vars be `reset state` (the
@@ -1611,16 +1734,24 @@ class RosettaBuilder:
                 )
             if isinstance(after, float):
                 trigger_name = (
-                    f"t_{simple}" if len(afters) == 1 else f"t_{simple}_{index}"
+                    f"t_{mode_symbol}"
+                    if len(afters) == 1
+                    else f"t_{mode_symbol}_{index}"
+                )
+                trigger_name = self._symbol(
+                    scope, "timer", f"{fact.name}:after:{index}", trigger_name
                 )
                 timers.append(Timer(trigger_name, render_duration(after)))
                 delay_ns = str(round(after * 1e9))
             else:
                 assert after is not None  # AFTER always carries a duration
                 trigger_name = (
-                    f"after_{simple}_act"
+                    f"after_{mode_symbol}_act"
                     if len(afters) == 1
-                    else f"after_{simple}_{index}_act"
+                    else f"after_{mode_symbol}_{index}_act"
+                )
+                trigger_name = self._symbol(
+                    scope, "action", f"{fact.name}:after:{index}", trigger_name
                 )
                 mode_actions.append(LogicalAction(trigger_name))
                 delay = gen.render_expression(after)
@@ -1629,7 +1760,9 @@ class RosettaBuilder:
                 delay_ns = "_after_ns"
                 entry_effects.append(trigger_name)
             if self._is_reentered(fact):
-                due = f"_{trigger_name}_due"
+                due = self._variable(
+                    fact.name, f"after:{index}:due", f"_{trigger_name}_due"
+                )
                 extra_state += lang.state_vars(due, "due", reset=scope != "")
                 entry_body.append(lang.arm_due(due, delay_ns))
                 body = when_due(lang, due, body)
@@ -1653,9 +1786,12 @@ class RosettaBuilder:
             assert isinstance(transition.trigger, AtTrigger)
             instant = transition.trigger.instant
             action_name = (
-                f"at_{simple}_act"
+                f"at_{mode_symbol}_act"
                 if len(ats) == 1
-                else f"at_{simple}_{index}_act"
+                else f"at_{mode_symbol}_{index}_act"
+            )
+            action_name = self._symbol(
+                scope, "action", f"{fact.name}:at:{index}", action_name
             )
             mode_actions.append(LogicalAction(action_name))
             if isinstance(instant, float):
@@ -1670,7 +1806,13 @@ class RosettaBuilder:
                 )
             )
             entry_effects.append(action_name)
-            due = f"_{action_name}_due" if self._is_reentered(fact) else None
+            due = (
+                self._variable(
+                    fact.name, f"at:{index}:due", f"_{action_name}_due"
+                )
+                if self._is_reentered(fact)
+                else None
+            )
             if due is not None:
                 extra_state += lang.state_vars(due, "due", reset=scope != "")
                 entry_body.append(lang.arm_at_due(due))
@@ -1714,10 +1856,11 @@ class RosettaBuilder:
         for index, transition in enumerate(whens):
             assert isinstance(transition.trigger, WhenTrigger)
             armed = (
-                f"{simple}_w_armed"
+                f"{mode_symbol}_w_armed"
                 if len(whens) == 1
-                else f"{simple}_w{index}_armed"
+                else f"{mode_symbol}_w{index}_armed"
             )
+            armed = self._variable(fact.name, f"when:{index}:armed", armed)
             extra_state += lang.state_vars(armed, "flag", reset=scope != "")
             entry_body.append(lang.set_flag(armed, False))
             cond = gen.render_expression(transition.trigger.condition)
@@ -1894,7 +2037,11 @@ class RosettaBuilder:
                 else:
                     body = (
                         nest(
-                            lang.negate(busy_condition(lang, simple, insts)),
+                            lang.negate(
+                                busy_condition(
+                                    lang, self._busy(fact.name, insts)
+                                )
+                            ),
                             body,
                         ),
                     )
@@ -1920,7 +2067,9 @@ class RosettaBuilder:
                 # so LF schedules this reaction whenever the flag port fires.
                 triggers = (*triggers, *guard_srcs)
             if (scope, signal) in self._origin:
-                since = f"_{simple}_since"
+                since = self._variable(
+                    fact.name, "since", f"_{mode_symbol}_since"
+                )
                 if not any(var.name == since for var in extra_state):
                     extra_state += lang.state_vars(
                         since, "since", reset=scope != ""
@@ -1999,7 +2148,7 @@ class RosettaBuilder:
                 # LF's Python target needs a possible writer even for absent ports.
                 entry_effects += [BUSY_PORT, SETTLED_PORT]
         elif fact.kind is StateKind.COMPOSITE:
-            inst = f"c_{simple}"
+            inst = self._instance(fact.name)
             child = self._composite_reactor(fact.name, fact, is_root=False)
             self._reactors.append(child)
             instantiations.append(Instantiation(inst, child.name))
@@ -2014,7 +2163,13 @@ class RosettaBuilder:
                 for sig in self._accepted.get(fact.name, {})
                 if (fact.name, sig) in self._origin
             ]
-            reactions.append(self._reemit(inst, simple, prefix=f"{simple}."))
+            reactions.append(
+                self._reemit(
+                    inst,
+                    self._source_name(fact.name),
+                    prefix=f"{self._source_name(fact.name)}.",
+                )
+            )
             forwarding += [
                 self._port_reemit(inst, sig)
                 for sig in self._exported.get(fact.name, {})
@@ -2060,28 +2215,27 @@ class RosettaBuilder:
             regions = self._regions(fact)
             region_gates: list[Reaction] = []
             for region in regions:
-                r_simple = _simple(region.name)
-                inst = f"c_{r_simple}"
+                inst = self._instance(region.name)
                 child = self._composite_reactor(
                     region.name, region, is_root=False
                 )
                 self._reactors.append(child)
                 instantiations.append(Instantiation(inst, child.name))
                 entry_effects.append(f"{inst}.{ENTRY_ORDER_PORT}")
-                feed, gates, gate_state = self._region_feed(
+                feed, gates, gate_state, waits = self._region_feed(
                     fact.name, region, inst
                 )
                 connections += feed
                 extra_state += gate_state
                 region_gates += gates
                 # LF does not reset root-scope gate state.
-                entry_body += [
-                    lang.clear_wait(var.name)
-                    for var in gate_state
-                    if var.name.endswith("_wait")
-                ]
+                entry_body += [lang.clear_wait(wait) for wait in waits]
                 reactions.append(
-                    self._reemit(inst, r_simple, prefix=f"{simple}.{r_simple}.")
+                    self._reemit(
+                        inst,
+                        self._source_name(region.name),
+                        prefix=f"{self._source_name(fact.name)}.{self._source_name(region.name)}.",
+                    )
                 )
                 forwarding += [
                     self._port_reemit(inst, sig)
@@ -2117,7 +2271,14 @@ class RosettaBuilder:
                 region for region in regions if region.name in self._needs_done
             ]
             if completing_regions:
-                flags = [f"{simple}_{_simple(r.name)}_done" for r in regions]
+                flags = [
+                    self._variable(
+                        r.name,
+                        "done",
+                        f"{mode_symbol}_{self._state_symbol(r.name)}_done",
+                    )
+                    for r in regions
+                ]
                 region_flags = flags
                 extra_state += [
                     var
@@ -2132,7 +2293,7 @@ class RosettaBuilder:
                 ):
                     if region.name not in self._needs_done:
                         continue
-                    inst = f"c_{_simple(region.name)}"
+                    inst = self._instance(region.name)
                     join_body.append(
                         nest(
                             lang.is_present(f"{inst}.{COMPLETED_PORT}"),
@@ -2156,7 +2317,7 @@ class RosettaBuilder:
                 reactions.append(
                     make_reaction(
                         tuple(
-                            f"c_{_simple(r.name)}.{COMPLETED_PORT}"
+                            f"{self._instance(r.name)}.{COMPLETED_PORT}"
                             for r in completing_regions
                         ),
                         targets,
@@ -2168,8 +2329,12 @@ class RosettaBuilder:
 
         if pending is not None:
             extra_state += [
-                *lang.state_vars(
-                    simple, "busy", reset=scope != "", insts=insts
+                *(
+                    var
+                    for name in dict.fromkeys(
+                        self._busy(fact.name, insts).values()
+                    )
+                    for var in lang.state_vars(name, "busy", reset=scope != "")
                 ),
                 *lang.state_vars(pending, "pending", reset=scope != ""),
             ]
@@ -2179,15 +2344,15 @@ class RosettaBuilder:
                 )
                 entry_body.append(lang.sel_idle(sel))
             entry_body += [
-                *lang.busy_init(simple, insts),
+                *lang.busy_init(self._busy(fact.name, insts)),
                 lang.pending_open(pending),
             ]
             # Finalize regions and automatic departures before pending triggers.
             reactions.append(
                 lifecycle_reaction(
                     lang,
-                    simple,
-                    insts,
+                    pending,
+                    self._busy(fact.name, insts),
                     retained,
                     consumed_sources,
                     sent,
@@ -2219,7 +2384,7 @@ class RosettaBuilder:
             sources=() if scope == "" else (ENTRY_ORDER_PORT,),
         )
         return Mode(
-            name=simple,
+            name=mode_symbol,
             initial=(fact.name == container.initial_substate),
             timers=tuple(timers),
             actions=tuple(mode_actions),
@@ -2333,9 +2498,9 @@ class RosettaBuilder:
             late = self._late_port(exited_scope, target)
             ending: list[Node] = [set_line, *closing]
             if parallel is not None:
-                selected = f"_{_simple(parallel.name)}_sel"
+                selected = self._selection(parallel.name)
                 key = self._escaping[parallel.name][target]
-                request = f"c_{_simple(self._regions(parallel)[0].name)}.{EXIT_REQUEST_PORT}"
+                request = f"{self._instance(self._regions(parallel)[0].name)}.{EXIT_REQUEST_PORT}"
                 message = (
                     f"{self._source_qn}: competing departures of parallel "
                     f"state {self._display(parallel)} at one tag are not supported"
@@ -2453,8 +2618,7 @@ class RosettaBuilder:
             sent: Signals sent in this scope.
         """
         lang = self._target
-        simple = _simple(fact.name)
-        sel = f"_{simple}_sel"
+        sel = self._selection(fact.name)
         branches: list[tuple[str, Body]] = []
         effects: list[str] = []
         for target, key in self._escaping.get(fact.name, {}).items():
@@ -2478,7 +2642,9 @@ class RosettaBuilder:
                 payload_bindings=dict.fromkeys(features, "_value"),
             )
             exit_log = (
-                [self._observe_log("exited", simple)] if self._observe else []
+                [self._observe_log("exited", self._source_name(fact.name))]
+                if self._observe
+                else []
             )
             unpack = (
                 lang.unpack_value(self._channels(transition.trigger))
@@ -2560,8 +2726,8 @@ class RosettaBuilder:
             body,
             key,
             payload,
-            _simple(fact.name),
-            insts,
+            self._pending(fact.name),
+            self._busy(fact.name, insts),
             message,
             consumed,
             arrival,
@@ -2578,11 +2744,17 @@ class RosettaBuilder:
             f"{self._display(fact)}; reordering overlapping events is not "
             "supported"
         )
-        return overtaking(self._target, _simple(fact.name), insts, message)
+        return overtaking(
+            self._target, self._pending(fact.name), insts, message
+        )
 
     def _display(self, fact: StateFact) -> str:
         """A state's dotted path, as model-facing diagnostics name it."""
-        return fact.name.replace("::", ".")
+        if fact.parent is None:
+            return (
+                fact.source_name if fact.source_name is not None else fact.name
+            )
+        return self._display_path(fact.name)
 
     def _resolving_scope(self, scope: str) -> str:
         """The scope whose reactor resolves exit ports raised by ``scope``.
@@ -2604,7 +2776,12 @@ class RosettaBuilder:
             return None
         if (scope, target) not in self._deferred:
             return None
-        return f"{self._exit_ports[scope][target]}_done"
+        return self._symbol(
+            scope,
+            "port",
+            f"exit:{target}:done",
+            f"{self._exit_ports[scope][target]}_done",
+        )
 
     def _resolve_target(
         self, scope: str, target: str | CompletionTarget
@@ -2615,12 +2792,16 @@ class RosettaBuilder:
             self._needs_done.add(scope)
             return f"reset({DONE_MODE})", lang.set_mode(DONE_MODE)
         if _scope_of(target) == scope:
-            mode = _simple(target)
+            mode = self._state_symbol(target)
             return f"reset({mode})", lang.set_mode(mode)
         # The target lives in an enclosing scope: raise a dedicated exit
         # port (one per distinct target) for the parent to resolve.
         ports = self._exit_ports.setdefault(scope, {})
-        port = ports.setdefault(target, f"exit_{len(ports)}")
+        if target not in ports:
+            ports[target] = self._symbol(
+                scope, "port", f"exit:{target}", f"exit_{len(ports)}"
+            )
+        port = ports[target]
         return port, lang.set_port(port, lang.boolean(True))
 
     def _interrupt_guard_sources(
@@ -2636,7 +2817,7 @@ class RosettaBuilder:
         if not boundaries:
             return ()
         return tuple(
-            f"c_{_simple(boundary)}.{signal}_consumed"
+            f"{self._instance(boundary)}.{signal}_consumed"
             for boundary in boundaries
         )
 
@@ -2785,7 +2966,7 @@ class RosettaBuilder:
         """The final mode: the root exits and stops; a child completes."""
         lang = self._target
         is_root = scope == ""
-        body: list[Node] = [lang.announce(DONE_MODE, scope.replace("::", "."))]
+        body: list[Node] = [lang.announce(DONE_MODE, self._display_path(scope))]
         effects = [OUTPUT_PORT]
         if is_root:
             body += [*self._root_exit, lang.request_stop()]
@@ -2826,7 +3007,7 @@ class RosettaBuilder:
         out: list[Reaction] = []
         if body:
             order = tuple(
-                f"c_{_simple(region.name)}.{ENTRY_ORDER_PORT}"
+                f"{self._instance(region.name)}.{ENTRY_ORDER_PORT}"
                 for region in regions or ()
             )
             out.append(

@@ -21,6 +21,7 @@ from sysmlc.semantics.statemachine.interface import (
     send_via_port,
 )
 
+from sysmlc_rosetta.names import ScopedNames
 from sysmlc_rosetta.statements import Stmt
 from sysmlc_rosetta.targets.python import PythonTarget
 from sysmlc_rosetta.width import Evaluation, WidthAnalysis
@@ -91,6 +92,7 @@ class PreambleNeeds:
         *,
         target: LfTarget | None = None,
     ) -> None:
+        self.names = ScopedNames()
         self.catalog = catalog
         self.target: LfTarget = target if target is not None else PythonTarget()
         self.enum_defs: dict[str, syside.EnumerationDefinition] = {}
@@ -107,6 +109,27 @@ class PreambleNeeds:
         # (event_name, via_port) for `via` sends with no connected peer;
         # surfaced as build warnings (see builder.finalize).
         self.undeliverable_sends: set[tuple[str, str]] = set()
+
+    def reserve_reactors(self, *names: str) -> None:
+        """Reserve fixed reactor names and the companion module's filename.
+
+        Args:
+            *names: Reactor names dictated by state or part definitions.
+
+        Raises:
+            UnsupportedConstructError: A fixed reactor shadows the companion
+                module, or a generated reactor already owns a reserved name.
+        """
+        if self.types_module:
+            for name in names:
+                if name.casefold() == self.types_module.casefold():
+                    raise UnsupportedConstructError(
+                        f"reactor name {name!r} collides with the generated "
+                        f"types module {self.types_module!r}; rename the "
+                        "state definition or part definition"
+                    )
+            names = (*names, self.types_module)
+        self.names.reserve("", "reactor", *names)
 
     @property
     def used_external(self) -> dict[ForeignArtifact, set[str]]:
