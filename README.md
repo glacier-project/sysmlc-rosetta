@@ -28,8 +28,9 @@ requires a license key. Create a `.env` file in the project root:
 SYSIDE_LICENSE_KEY=your-key-here
 ```
 
-Compiling and running the generated programs additionally needs `lfc` and
-Java; without them the `lf`-marked tests are skipped.
+Compiling and running the generated programs additionally needs the target's
+`lfc` compiler and Java. The default test run excludes the `lf`-marked native
+tests; run them explicitly with `uv run tox run -e lf`.
 
 ## Installation
 
@@ -79,6 +80,18 @@ REACTOR_UC_PATH=~/reactor-uc ~/reactor-uc/ulf/build/install/lf-cli/bin/lfc \
   out/microwaveSystem.ulf
 ```
 
+The uC naming integration tests use the unmodified reactor-uc `micromode`
+revision `344d5b26a1fd090e85c49fcc224a8fb000dac619`. To build that compiler,
+use Java 21, CMake, Make and a C compiler:
+
+```bash
+git clone https://github.com/lf-lang/reactor-uc.git ~/reactor-uc
+git -C ~/reactor-uc checkout 344d5b26a1fd090e85c49fcc224a8fb000dac619
+git -C ~/reactor-uc submodule update --init --recursive
+~/reactor-uc/ulf/gradlew -p ~/reactor-uc/ulf assemble
+export REACTOR_UC_PATH=~/reactor-uc
+```
+
 Two flags shape the generated program's `target` header, and apply to
 top-level part usages only:
 
@@ -126,6 +139,10 @@ uv run tox run -e formatter      # ruff check --fix and ruff format
 uv run tox run -e docs           # sphinx -W
 uv run pre-commit install        # once after cloning
 ```
+
+The naming integration tests also compile and execute native uC programs when
+`REACTOR_UC_PATH` points to a micromode checkout with its compiler built at
+`ulf/build/install/lf-cli/bin/lfc`. Without it, the uC cases are skipped.
 
 The inner-first and run-to-completion tests compare rosetta's output against
 [quake](https://github.com/glacier-project/sysmlc-quake)'s statecharts, which

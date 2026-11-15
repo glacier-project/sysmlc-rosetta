@@ -80,6 +80,8 @@ class UcTarget(CTarget):
     lf_name = "uC"
     extension = "ulf"
     mode_local_children = True
+    shared_state_namespace = True
+    unqualified_port_references = True
 
     # -- program --
 

@@ -92,41 +92,41 @@ def test_reactor_without_modes_is_not_adapted() -> None:
     assert UcTarget().adapt(reactor) is reactor
 
 
-@pytest.mark.parametrize(
-    ("spell", "expected"),
-    [
-        (lambda uc: uc.is_present("c_a._busy"), "lf_is_present(c_a._busy)"),
-        (
-            lambda uc: uc.arrival(),
-            "env->scheduler->current_tag(env->scheduler)",
+_RUNTIME_CALLS: list[tuple[Callable[[UcTarget], object], object]] = [
+    (lambda uc: uc.is_present("c_a._busy"), "lf_is_present(c_a._busy)"),
+    (
+        lambda uc: uc.arrival(),
+        "env->scheduler->current_tag(env->scheduler)",
+    ),
+    (
+        lambda uc: uc.arm_due("_d", "_after_ns"),
+        Stmt("self->_d = env->get_elapsed_logical_time(env) + _after_ns;"),
+    ),
+    (
+        lambda uc: uc.schedule("Tick_act", "0", "(t_t){ .n = 1 }"),
+        Stmt(
+            "lf_schedule(Tick_act, 0, ((t_t){ .n = 1 }));",
+            writes=frozenset(("Tick_act",)),
         ),
-        (
-            lambda uc: uc.arm_due("_d", "_after_ns"),
-            Stmt("self->_d = env->get_elapsed_logical_time(env) + _after_ns;"),
-        ),
-        (
-            lambda uc: uc.schedule("Tick_act", "0", "(t_t){ .n = 1 }"),
-            Stmt(
-                "lf_schedule(Tick_act, 0, ((t_t){ .n = 1 }));",
-                writes=frozenset(("Tick_act",)),
-            ),
-        ),
-        (
-            lambda uc: uc.schedule("Tick_act"),
-            Stmt("lf_schedule(Tick_act, 0);", writes=frozenset(("Tick_act",))),
-        ),
-        (
-            lambda uc: uc.fail('two "events"'),
-            Stmt('throw("two \\"events\\"");'),
-        ),
-        (lambda uc: uc.request_stop(), Stmt("env->request_shutdown(env, 0);")),
-        (lambda uc: uc.log("entered"), Stmt('LF_DEBUG(ENV, "%s", "entered");')),
-        (
-            lambda uc: uc.value_or("Sig", "0"),
-            "(lf_is_present(Sig) ? Sig->value : 0)",
-        ),
-    ],
-)
+    ),
+    (
+        lambda uc: uc.schedule("Tick_act"),
+        Stmt("lf_schedule(Tick_act, 0);", writes=frozenset(("Tick_act",))),
+    ),
+    (
+        lambda uc: uc.fail('two "events"'),
+        Stmt('throw("two \\"events\\"");'),
+    ),
+    (lambda uc: uc.request_stop(), Stmt("env->request_shutdown(env, 0);")),
+    (lambda uc: uc.log("entered"), Stmt('LF_DEBUG(ENV, "%s", "entered");')),
+    (
+        lambda uc: uc.value_or("Sig", "0"),
+        "(lf_is_present(Sig) ? Sig->value : 0)",
+    ),
+]
+
+
+@pytest.mark.parametrize(("spell", "expected"), _RUNTIME_CALLS)
 def test_runtime_calls_are_reactor_uc_s(
     spell: Callable[[UcTarget], object], expected: object
 ) -> None:

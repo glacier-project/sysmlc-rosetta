@@ -15,7 +15,7 @@ from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 from sysmlc_rosetta.backend import RosettaBackend
 from sysmlc_rosetta.builder import build_program
 from sysmlc_rosetta.c_types import type_name
-from sysmlc_rosetta.program import LfProgram, Reactor
+from sysmlc_rosetta.program import LfProgram, LogicalAction, Reactor
 from sysmlc_rosetta.serialize import to_lf
 from sysmlc_rosetta.statements import If, Pass, Stmt, nest
 from sysmlc_rosetta.targets.c import CTarget
@@ -89,7 +89,10 @@ def test_busy_children_are_one_flag_each() -> None:
     c = CTarget()
     insts = ("c_a", "c_b", "c_c")
 
-    flags = c.state_vars("heating", "busy", reset=True, insts=insts)
+    names = tuple(f"_heating_{inst}_busy" for inst in insts)
+    flags = tuple(
+        var for name in names for var in c.state_vars(name, "busy", reset=True)
+    )
 
     assert [var.name for var in flags] == [
         "_heating_c_a_busy",
@@ -97,7 +100,7 @@ def test_busy_children_are_one_flag_each() -> None:
         "_heating_c_c_busy",
     ]
     assert {var.type for var in flags} == {"bool"}
-    assert c.busy_any("heating", insts) == (
+    assert c.busy_any(names) == (
         "(self->_heating_c_a_busy || self->_heating_c_b_busy || "
         "self->_heating_c_c_busy)"
     )
@@ -277,3 +280,22 @@ def test_nested_structured_initializer_is_one_compound_literal() -> None:
     )
 
     assert "(sm05_box_t){ .inner = { .z = 0.25 } }" in source
+
+
+def test_generated_port_and_action_roles_ignore_colliding_signal_type() -> None:
+    target = CTarget()
+    target.types._signals["exit_0_01"] = "payload_t"
+    target.types._signals["after_idle"] = "payload_t"
+    reactor = Reactor(
+        name="Machine",
+        outputs=("exit_0_01",),
+        boolean_ports=("exit_0_01",),
+        actions=(
+            LogicalAction("after_idle_act"),
+            LogicalAction("renamed", signal="after_idle"),
+        ),
+    )
+    declared = target.declare(reactor)
+    assert dict(declared.port_types)["exit_0_01"] == "bool"
+    assert declared.actions[0].type is None
+    assert declared.actions[1].type == "payload_t"

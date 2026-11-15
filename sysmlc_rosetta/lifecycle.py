@@ -6,6 +6,8 @@ from sysmlc_rosetta.program import Reaction
 from sysmlc_rosetta.statements import If, nest, stored, writes
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sysmlc_rosetta.statements import Body, Node
     from sysmlc_rosetta.targets.base import LfTarget
 
@@ -67,12 +69,12 @@ def declining(
     return wrapped, tuple(flag for _, flag in held)
 
 
-def busy_condition(target: LfTarget, state: str, insts: tuple[str, ...]) -> str:
+def busy_condition(target: LfTarget, busy: Mapping[str, str]) -> str:
     """The condition that a source state's subtree is settling."""
     return target.any_of(
         (
-            target.busy_any(state, insts),
-            *(target.is_present(f"{inst}.{BUSY_PORT}") for inst in insts),
+            target.busy_any(tuple(busy.values())),
+            *(target.is_present(f"{inst}.{BUSY_PORT}") for inst in busy),
         )
     )
 
@@ -82,8 +84,8 @@ def retain(
     body: Body,
     key: int,
     payload: str,
-    state: str,
-    insts: tuple[str, ...],
+    pending: str,
+    busy: Mapping[str, str],
     message: str,
     consumed: str | None = None,
     arrival: str | None = None,
@@ -106,15 +108,14 @@ def retain(
         body: The immediate dispatch statements.
         key: The trigger's identity within its source state.
         payload: Expression for the payload to retain.
-        state: The resolved simple name of the source state.
-        insts: The source state's child reactor instances.
+        pending: The assigned pending variable identifier.
+        busy: Child instance names mapped to their assigned busy fields.
         message: The diagnostic for overlapping retained occurrences.
         consumed: The signal's consumption-flag output, or None.
         arrival: Expression for the occurrence's arrival tag; the current
             tag when None.
         signal: The channel whose payload is retained, or None.
     """
-    pending = f"_{state}_pending"
     holding: list[Node] = [
         nest(target.pending_holding(pending), (target.fail(message),)),
         target.pending_hold(pending, key, payload, signal),
@@ -124,20 +125,20 @@ def retain(
     return (
         target.bind_tag(target.arrival() if arrival is None else arrival),
         If(
-            ((busy_condition(target, state, insts), tuple(holding)),),
+            ((busy_condition(target, busy), tuple(holding)),),
             orelse=body,
         ),
     )
 
 
 def overtaking(
-    target: LfTarget, state: str, insts: tuple[str, ...], message: str
+    target: LfTarget, pending: str, insts: tuple[str, ...], message: str
 ) -> tuple[Body, Body]:
     """Reject a later occurrence accepted below a retaining state.
 
     Args:
         target: The target language.
-        state: The resolved simple name of the source state.
+        pending: The assigned pending variable identifier.
         insts: The source state's child reactor instances.
         message: The diagnostic for a later accepted occurrence.
 
@@ -146,7 +147,6 @@ def overtaking(
         busy with at this tag, and the check failing when it is later than
         the retained occurrence's arrival.
     """
-    pending = f"_{state}_pending"
     return target.bind_newest(insts), (
         nest(
             target.pending_later_than(pending, target.newest()),
@@ -205,8 +205,8 @@ def exit_handler(
 
 def lifecycle_reaction(
     target: LfTarget,
-    state: str,
-    insts: tuple[str, ...],
+    pending: str,
+    busy: Mapping[str, str],
     retained: list[tuple[int, Body, tuple[str, ...]]],
     consumed: list[tuple[int, tuple[str, ...]]],
     sent: list[str],
@@ -233,8 +233,8 @@ def lifecycle_reaction(
 
     Args:
         target: The target language.
-        state: The resolved simple name of the source state.
-        insts: The source state's child reactor instances.
+        pending: The assigned pending variable identifier.
+        busy: Child instance names mapped to their assigned busy fields.
         retained: Per trigger, its key, payload-aware dispatch statements
             and their effects.
         consumed: Per signal trigger, its key and the descendant
@@ -247,21 +247,20 @@ def lifecycle_reaction(
         report_upward: Whether this scope reports busy and settled upward.
         ports: Peer-accepted signals sent in this scope.
     """
-    pending = f"_{state}_pending"
     body: list[Node] = [
         If(
             (
                 (
                     target.is_present(f"{inst}.{BUSY_PORT}"),
-                    (target.busy_add(state, inst),),
+                    (target.busy_add(busy[inst], inst),),
                 ),
                 (
                     target.is_present(f"{inst}.{SETTLED_PORT}"),
-                    (target.busy_discard(state, inst),),
+                    (target.busy_discard(busy[inst], inst),),
                 ),
             )
         )
-        for inst in insts
+        for inst in busy
     ]
     bind_newest, reject_overtaking = overtaking
     body += [*bind_newest, *(reject_overtaking if retained else ())]
@@ -300,7 +299,7 @@ def lifecycle_reaction(
             nest(
                 target.all_of(
                     (
-                        target.busy_none(state, insts),
+                        target.busy_none(tuple(busy.values())),
                         target.pending_holding(pending),
                     )
                 ),
@@ -316,7 +315,7 @@ def lifecycle_reaction(
             If(
                 (
                     (
-                        target.busy_any(state, insts),
+                        target.busy_any(tuple(busy.values())),
                         (target.report_busy(target.newest()),),
                     ),
                     (
@@ -329,8 +328,8 @@ def lifecycle_reaction(
         effects.update(dict.fromkeys((BUSY_PORT, SETTLED_PORT)))
     return make_reaction(
         (
-            *(f"{inst}.{BUSY_PORT}" for inst in insts),
-            *(f"{inst}.{SETTLED_PORT}" for inst in insts),
+            *(f"{inst}.{BUSY_PORT}" for inst in busy),
+            *(f"{inst}.{SETTLED_PORT}" for inst in busy),
         ),
         tuple(effects),
         tuple(body),

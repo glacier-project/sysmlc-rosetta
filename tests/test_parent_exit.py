@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.loading import load_model
 
 from sysmlc_rosetta.builder import build_program
@@ -201,16 +200,26 @@ def test_released_inner_holder_keeps_enclosing_hold(tmp_path: Path) -> None:
         ("DueClash", "_t_idle_due"),
     ],
 )
-def test_shared_signal_name_clash_is_rejected(
+def test_state_generated_name_clash_is_disambiguated(
     name: str, generated: str
 ) -> None:
-    with pytest.raises(UnsupportedConstructError, match=generated):
-        build_program(load_model(FIXTURES), f"Settlement::{name}")
+    program = build_program(load_model(FIXTURES), f"Settlement::{name}")
+    names = {
+        *(mode.name for reactor in program.reactors for mode in reactor.modes),
+        *(
+            var.name
+            for reactor in program.reactors
+            for var in reactor.state_vars
+        ),
+    }
+    assert generated + "_01" in names
 
 
-def test_late_exit_port_name_clash_is_rejected() -> None:
-    with pytest.raises(UnsupportedConstructError, match="exit_0_done"):
-        build_program(load_model(FIXTURES), "Settlement::LatePortClash")
+def test_late_exit_port_name_clash_is_disambiguated() -> None:
+    program = build_program(load_model(FIXTURES), "Settlement::LatePortClash")
+    assert any(
+        "exit_0_done_01" in reactor.outputs for reactor in program.reactors
+    )
 
 
 @pytest.mark.lf
