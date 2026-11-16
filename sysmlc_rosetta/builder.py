@@ -326,7 +326,15 @@ class RosettaBuilder:
         if isinstance(
             feature, (syside.AttributeUsage, syside.ItemUsage)
         ) and not is_scalar_quantity(feature):
-            for field in attributes.nested_attributes(feature):
+            fields = attributes.nested_attributes(feature)
+            if fields:
+                for reference in feature.nested_references.collect():
+                    if reference.owned_redefinitions.collect():
+                        raise UnsupportedConstructError(
+                            "state-local structured field redefinitions require explicit attribute declarations",
+                            node=reference,
+                        )
+            for field in fields:
                 self._require_local_initializer(field)
 
     def bind_constraint(self, fact: ConstraintFact) -> None:

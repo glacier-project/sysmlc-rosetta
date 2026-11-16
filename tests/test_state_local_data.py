@@ -126,6 +126,44 @@ def test_owner_local_shared_by_inner_regions_remains_diagnosed() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("redefinition", "selected"),
+    [
+        (":>> count default 2;", "count"),
+        (":>> inner { :>> count default 2; }", "inner.count"),
+    ],
+)
+def test_scoped_shorthand_field_value_redefinition_is_diagnosed(
+    tmp_path: Path, redefinition: str, selected: str
+) -> None:
+    (tmp_path / "model.sysml").write_text(f"""
+        package LocalFieldValue {{
+            private import ScalarValues::*;
+            attribute def Inner {{ attribute count : Integer default 1; }}
+            attribute def Box {{
+                attribute count : Integer default 1;
+                attribute inner : Inner;
+            }}
+            state def Machine {{
+                attribute observedValue : Integer := 0;
+                entry; then enclosing;
+                state enclosing {{
+                    attribute box : Box {{ {redefinition} }}
+                    entry; then child;
+                    state child {{
+                        entry assign observedValue := box.{selected};
+                    }}
+                }}
+            }}
+        }}
+    """)
+    with pytest.raises(
+        UnsupportedConstructError,
+        match="structured field redefinitions require explicit attribute",
+    ):
+        build_program(load_model(tmp_path), "LocalFieldValue::Machine")
+
+
 @pytest.mark.parametrize("initializer", ["rootValue", "rootDelay"])
 def test_activation_dependent_local_initializer_is_diagnosed(
     tmp_path: Path, initializer: str

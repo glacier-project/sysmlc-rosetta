@@ -530,6 +530,12 @@ uses the existing assignment checks. State-local dynamic expressions, missing
 initial values, input/output-directed declarations and references outside the
 active declaring state or its descendants are diagnosed.
 
+Scoped structured field-value redefinitions must use explicit attribute
+declarations, such as `attribute :>> count default 2;`. Shorthand reference
+redefinitions such as `:>> count default 2;` are diagnosed because the shared
+materializer does not preserve their field override. This restriction does
+not change existing root declarations or scalar quantity initialization.
+
 Region-private locals do not become sibling-shared merely because storage is
 flattened. Independent regional actions can use their own declarations. If an
 owner local is accessed below an inner parallel boundary, the existing shared
