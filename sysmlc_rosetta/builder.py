@@ -34,7 +34,7 @@ from sysmlc.semantics.statemachine.facts import (
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
-from sysmlc.sysml.queries import is_scalar_quantity
+from sysmlc.sysml.queries import is_attribute_feature, is_scalar_quantity
 
 from sysmlc_rosetta.c_codegen import LfCCodeGen, LfUcCodeGen
 from sysmlc_rosetta.codegen import (
@@ -323,18 +323,11 @@ class RosettaBuilder:
                 "state-local initializers require literal constants; activation-dependent expressions are not supported",
                 node=feature,
             )
-        if isinstance(
-            feature, (syside.AttributeUsage, syside.ItemUsage)
+        if (
+            is_attribute_feature(feature)
+            or isinstance(feature, syside.ItemUsage)
         ) and not is_scalar_quantity(feature):
-            fields = attributes.nested_attributes(feature)
-            if fields:
-                for reference in feature.nested_references.collect():
-                    if reference.owned_redefinitions.collect():
-                        raise UnsupportedConstructError(
-                            "state-local structured field redefinitions require explicit attribute declarations",
-                            node=reference,
-                        )
-            for field in fields:
+            for field in attributes.nested_attributes(feature):
                 self._require_local_initializer(field)
 
     def bind_constraint(self, fact: ConstraintFact) -> None:

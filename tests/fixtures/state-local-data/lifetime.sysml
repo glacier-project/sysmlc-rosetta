@@ -9,7 +9,7 @@ package StateLocalData {
         attribute sequence : Integer := 0;
         attribute visits : Integer := 0;
         attribute enabled : Boolean := false;
-        attribute replacement : Box { attribute :>> count default 2; }
+        attribute replacement : Box { :>> count default 2; }
         entry; then enclosing;
         state enclosing {
             attribute temperature : Integer := 41;
