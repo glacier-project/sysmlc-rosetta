@@ -453,8 +453,8 @@ build (§10).
 
 ## 5. Attributes
 
-Declared on the state def (root scope only — state-scoped attributes are
-not currently supported; scope-local support is planned, §11):
+Root declarations map as follows. State-local declarations have the activation
+and visibility rules described below.
 
 | Declaration                                               | LF                                                                                                                                                         |
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -513,10 +513,35 @@ exits remain unsupported for shared root reads as well as writes. In
 particular, an automatic transition or natural completion does not gain data
 admission merely because it occurs during startup.
 
-Attributes declared inside states remain unsupported. Change triggers require a
+**State-local attributes.** An initialized declaration inside a state has its
+own storage slot in the same machine context. Resolved source declaration
+identity selects that slot, so a local can shadow a machine attribute without
+changing the machine value. Internal slot names use the shared Core name
+registry; source names and state names remain unchanged.
+
+The declaring state's activation initializes its slots before its own entry,
+finite do work and child activation, including actions hosted by its parent
+reactor. A child-only transition retains the active owner's values. Owner
+re-entry initializes them again while preserving machine attributes. This
+implements the initial feature value's owning-occurrence startShot lifetime
+(KerML 8.4.4.11). Supported initializers are the admitted literal subset below
+and structures materialized from such field defaults. Whole-value replacement
+uses the existing assignment checks. State-local dynamic expressions, missing
+initial values, input/output-directed declarations and references outside the
+active declaring state or its descendants are diagnosed.
+
+Region-private locals do not become sibling-shared merely because storage is
+flattened. Independent regional actions can use their own declarations. If an
+owner local is accessed below an inner parallel boundary, the existing shared
+entry/cleanup bounds apply at that boundary. This adds no general arbitration
+for independent shared writes or guards.
+
+State-local assertions and nested change triggers remain unsupported.
+Change triggers require a
 source in the root reactor (§4); nested scalar writes can notify those root
 observations. Constraint checks and change notifications recognize direct
-root-attribute assignments. Nested structured-field writes are rejected when
+root-attribute assignments; shadowing local writes do not notify root
+observations. Nested structured-field writes to root storage are rejected when
 the machine has root change triggers or assertions, because the existing
 observation pass does not track those writes. This does not claim complete
 mutation tracking.
@@ -797,7 +822,7 @@ design.
 | leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                 |
 | transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, the parallel-state-sourced interruption sequence of §3 applies (regions drain in declaration order, then the parallel state's exit, the effect and the switch), so the two spellings are equivalent |
 | payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                      |
-| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints. Root-attribute access from sequential composite scopes is supported (§5); local declarations and their visibility remain separate work           |
+| state-scoped constraints                   | activation-scoped observation beyond the root assertion checks; initialized state-local attributes are supported separately (§5)                                                                                                                                                                                     |
 | deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order preserved                                                                                                                                                       |
 
 ### Stays rejected

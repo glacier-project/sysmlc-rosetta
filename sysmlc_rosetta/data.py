@@ -31,6 +31,7 @@ def share_machine_data(
     contexts: frozenset[str],
     *,
     has_when: bool,
+    observed_attributes: frozenset[str] | None = None,
 ) -> list[Reactor]:
     """Carry root storage to nested scopes and report their assignments.
 
@@ -38,9 +39,11 @@ def share_machine_data(
         reactors: Child-first reactor definitions, with the machine last.
         target: The target language used by the reactor bodies.
         ctype: The native context type, or None for Python.
-        attributes: Root attributes whose storage the context references.
+        attributes: Storage slots whose references the context transports.
         contexts: Reactors requiring the root context or forwarding it.
         has_when: Whether descendant writes must notify root observations.
+        observed_attributes: Slots whose writes notify root observations;
+            None observes all transported attributes.
 
     Returns:
         Reactors with context transport and assignment notifications.
@@ -59,6 +62,7 @@ def share_machine_data(
             changed,
             root=reactor is reactors[-1],
             has_when=has_when,
+            observed_attributes=observed_attributes,
         )
         for reactor in reactors
     ]
@@ -74,9 +78,14 @@ def _share_reactor(
     *,
     root: bool,
     has_when: bool,
+    observed_attributes: frozenset[str] | None,
 ) -> Reactor:
     """Wire one scope, placing notifications after its lifecycle cleanup."""
-    names = frozenset(attributes)
+    names = (
+        frozenset(attributes)
+        if observed_attributes is None
+        else observed_attributes
+    )
     child = reactor.name in contexts
     identifiers = {
         *reactor.inputs,

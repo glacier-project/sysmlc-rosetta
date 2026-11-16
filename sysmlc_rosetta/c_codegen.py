@@ -37,6 +37,8 @@ class LfCCodeGen(LfActions, CCodeGen):
         payload_bindings: Source payload features mapped to delivered values.
         attribute_reference: Renderer for a bound attribute reference;
             defaults to a local reactor variable.
+        attribute_slot: Resolve a source declaration to its unique storage
+            slot; None retains simple attribute names.
 
     Raises:
         TypeError: If ``needs`` targets another language.
@@ -52,6 +54,7 @@ class LfCCodeGen(LfActions, CCodeGen):
         port_signals: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
         attribute_reference: Callable[[str], str] | None = None,
+        attribute_slot: Callable[[syside.Feature], str] | None = None,
     ) -> None:
         needs = needs if needs is not None else PreambleNeeds(target=CTarget())
         if not isinstance(needs.target, CTarget):
@@ -66,6 +69,7 @@ class LfCCodeGen(LfActions, CCodeGen):
             port_signals=port_signals,
             payload_bindings=payload_bindings,
             attribute_reference=attribute_reference,
+            attribute_slot=attribute_slot,
         )
 
     @override

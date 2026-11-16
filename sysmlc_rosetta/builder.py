@@ -7,10 +7,16 @@ from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import syside
+from sysmlc.codegen.names import NameRegistry
 from sysmlc.codegen.python import payload_signature
 from sysmlc.codegen.structured import constructed_payload_definition
 from sysmlc.errors import UnsupportedConstructError
-from sysmlc.semantics.statemachine import actions, transitions
+from sysmlc.semantics.statemachine import (
+    actions,
+    attributes,
+    bindings,
+    transitions,
+)
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.facts import (
     AfterTrigger,
@@ -28,6 +34,7 @@ from sysmlc.semantics.statemachine.facts import (
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
+from sysmlc.sysml.queries import is_scalar_quantity
 
 from sysmlc_rosetta.c_codegen import LfCCodeGen, LfUcCodeGen
 from sysmlc_rosetta.codegen import (
@@ -277,18 +284,50 @@ class RosettaBuilder:
         self._checking_constraints = False
         self._entry_data_boundaries: set[str] = set()
         self._parent_only_accesses: dict[str, UnsupportedConstructError] = {}
+        self._attribute_slots: dict[tuple[str, str], str] = {}
+        self._slot_bindings: dict[str, AttributeBinding] = {}
+        self._shared_data_boundaries: set[str] = set()
+        self._local_attributes: dict[
+            str, list[tuple[str, AttributeBinding]]
+        ] = {}
+        self._feature_slots: dict[syside.Feature, str] = {}
 
     # -- TargetBuilder protocol --
 
     def bind_attribute(self, binding: AttributeBinding) -> None:
-        """Buffer a root-scope attribute (state-scoped ones are rejected)."""
-        if binding.scope:
+        """Buffer storage, retaining the declaring state's activation scope."""
+        if binding.scope and binding.direction in {
+            AttributeDirection.IN,
+            AttributeDirection.OUT,
+        }:
             raise UnsupportedConstructError(
-                f"attribute {binding.name!r} is scoped to state "
-                f"{binding.scope!r}; rosetta supports root-scope attributes "
-                "only."
+                f"directed state-local attribute {binding.name!r} is not supported"
             )
+        if binding.scope:
+            if binding.source_feature is None:
+                raise UnsupportedConstructError(
+                    "state-local attributes require source declaration metadata"
+                )
+            self._require_local_initializer(binding.source_feature)
         self._attributes.append(binding)
+
+    def _require_local_initializer(self, feature: syside.Feature) -> None:
+        """Admit literal initialization without capturing another activation."""
+        relationship = bindings.effective_value_relationship(feature)
+        if (
+            relationship is not None
+            and relationship.value is not None
+            and not bindings.is_constant(relationship.value)
+        ):
+            raise UnsupportedConstructError(
+                "state-local initializers require literal constants; activation-dependent expressions are not supported",
+                node=feature,
+            )
+        if isinstance(
+            feature, (syside.AttributeUsage, syside.ItemUsage)
+        ) and not is_scalar_quantity(feature):
+            for field in attributes.nested_attributes(feature):
+                self._require_local_initializer(field)
 
     def bind_constraint(self, fact: ConstraintFact) -> None:
         """Buffer a root-scope asserted constraint (scoped ones rejected).
@@ -323,7 +362,7 @@ class RosettaBuilder:
                 "the state definition pushed no root state"
             )
         self._attribute_names = frozenset(
-            binding.name for binding in self._attributes
+            binding.name for binding in self._attributes if not binding.scope
         )
         self._has_when = any(
             isinstance(t.trigger, WhenTrigger) for t in self._transitions
@@ -369,6 +408,7 @@ class RosettaBuilder:
         self._collect_consumed()
         self._collect_shared()
         self._collect_sends()
+        self._allocate_attribute_slots()
         # The port/self signal sets must exist (populated by _collect_sends)
         # before any peer-aware code generator is created.
         self._codegen = self._make_codegen(self._attribute_names)
@@ -384,9 +424,7 @@ class RosettaBuilder:
                 "the state definition declares no substates."
             )
         for boundary, error in self._parent_only_accesses.items():
-            if boundary in self._data_scopes or (
-                not boundary and self._data_scopes
-            ):
+            if boundary in self._shared_data_boundaries:
                 raise error
         self._reactors.append(
             self._with_constraint_checks(
@@ -414,6 +452,7 @@ class RosettaBuilder:
                 tuple(a.name for a in (*parameters, *state_vars)),
                 frozenset(by_name),
                 has_when=self._has_when,
+                observed_attributes=self._attribute_names,
             )
         program = LfProgram(
             reactors=tuple(
@@ -855,6 +894,66 @@ class RosettaBuilder:
 
     # -- attributes -> parameters and state variables --
 
+    def _allocate_attribute_slots(self) -> None:
+        """Allocate internal storage without renaming source declarations."""
+        if not any(binding.scope for binding in self._attributes):
+            return
+        registry = NameRegistry(
+            lambda preferred, attempt: (
+                preferred if not attempt else f"{preferred}_{attempt}"
+            )
+        )
+        registry.reserve(
+            *self._attribute_names,
+            *(_simple(f.name) for f in self._facts.values()),
+            *self._accepted.get("", {}),
+            *self._sent_by_scope.get("", {}),
+            *self._exported.get("", {}),
+        )
+        for index, binding in enumerate(self._attributes):
+            key = (binding.scope, binding.name)
+            slot = (
+                registry.assign(repr(key), f"_sysmlc_local_{index}")
+                if binding.scope
+                else binding.name
+            )
+            self._attribute_slots[key] = slot
+            self._slot_bindings[slot] = binding
+            if binding.source_feature is not None:
+                self._feature_slots[binding.source_feature] = slot
+            if binding.scope:
+                self._local_attributes.setdefault(binding.scope, []).append(
+                    (slot, binding)
+                )
+
+    def _feature_slot(self, feature: syside.Feature) -> str:
+        """Associate a resolved declaration with its scope's storage slot."""
+        try:
+            return self._feature_slots[feature]
+        except KeyError:
+            raise UnsupportedConstructError(
+                "reference does not name a bound attribute", node=feature
+            ) from None
+
+    def _initialize_attributes(self, fact: StateFact, scope: str) -> Body:
+        """Initialize declarations when their semantic owner activates."""
+        body: list[Node] = []
+        if fact.parent is None:
+            return ()
+        if fact.name not in self._local_attributes:
+            return ()
+        gen = self._make_codegen(
+            self._attribute_names, scope=scope, owner=fact.name
+        )
+        for slot, binding in self._local_attributes.get(fact.name, ()):
+            value = self._render_value(binding.value)
+            if value is None:
+                raise UnsupportedConstructError(
+                    f"state-local attribute {binding.name!r} requires an initial value"
+                )
+            body.append(gen.initialize_attribute(slot, value))
+        return tuple(body)
+
     def _attribute_split(self) -> tuple[list[Parameter], list[StateVar]]:
         """Split bindings into LF parameters (`in`) and state variables.
 
@@ -866,6 +965,11 @@ class RosettaBuilder:
         parameters: list[Parameter] = []
         state_vars: list[StateVar] = []
         for binding in self._attributes:
+            if binding.scope:
+                binding = replace(
+                    binding,
+                    name=self._attribute_slots[(binding.scope, binding.name)],
+                )
             rendered = self._render_value(binding.value)
             declared = self._target.attribute_type(binding)
             ctype = None if declared is None else declared[0]
@@ -920,20 +1024,48 @@ class RosettaBuilder:
         payload_bindings: dict[syside.Feature, str] | None = None,
         *,
         scope: str = "",
+        owner: str | None = None,
     ) -> LfCodeGen:
         """Build a peer-aware code generator sharing the preamble registry."""
         return self._codegen_type(
-            attribute_names,
+            attribute_names | frozenset(self._slot_bindings)
+            if self._local_attributes
+            else attribute_names,
             needs=self._needs,
             port_signals=self._port_sigs,
             local_names=local_names,
             payload_bindings=payload_bindings,
-            attribute_reference=lambda name: self._outer_attribute(scope, name),
+            attribute_reference=lambda name: self._outer_attribute(
+                scope, name, active_owner=owner
+            ),
+            attribute_slot=self._feature_slot
+            if self._local_attributes
+            else None,
         )
 
-    def _outer_attribute(self, scope: str, name: str) -> str:
+    def _outer_attribute(
+        self, scope: str, name: str, *, active_owner: str | None = None
+    ) -> str:
         """Resolve a nested access to the authoritative machine storage."""
-        owner = self._rendering_slot
+        declaration = self._slot_bindings.get(name.split(".")[0])
+        slot_owner = self._rendering_slot
+        active = (
+            slot_owner[0].name
+            if slot_owner is not None
+            else active_owner or scope
+        )
+        if (
+            declaration is not None
+            and declaration.scope
+            and not (
+                active == declaration.scope
+                or _is_ancestor(declaration.scope, active)
+            )
+        ):
+            raise UnsupportedConstructError(
+                "state-local attribute access outside its active owner is not supported"
+            )
+        owner = slot_owner
         semantic_scope = (
             _scope_of(owner[0].name)
             if owner is not None and owner[0].parent is not None
@@ -951,6 +1083,14 @@ class RosettaBuilder:
                 fact.kind is StateKind.PARALLEL
                 and not self._checking_constraints
             ):
+                if (
+                    declaration is not None
+                    and declaration.scope
+                    and _is_ancestor(level, declaration.scope)
+                ):
+                    continue
+                if scope and (scope == level or _is_ancestor(level, scope)):
+                    self._shared_data_boundaries.add(level)
                 if (
                     owner is not None
                     and owner[1] == "exit"
@@ -977,7 +1117,11 @@ class RosettaBuilder:
                 raise error
         if not scope:
             return self._target.var(name)
-        if "." in name and (self._has_when or self._constraints):
+        if (
+            "." in name
+            and (declaration is None or not declaration.scope)
+            and (self._has_when or self._constraints)
+        ):
             raise UnsupportedConstructError(
                 "nested structured-field assignments with root change "
                 "triggers or assertions are not supported; their writes "
@@ -1596,6 +1740,10 @@ class RosettaBuilder:
         output forwarding.
         """
         simple = _simple(fact.name)
+        if self._local_attributes:
+            gen = self._make_codegen(
+                self._attribute_names, scope=scope, owner=fact.name
+            )
         outgoing = [
             t
             for t in self._scope_transitions.get(scope, [])
@@ -1710,6 +1858,7 @@ class RosettaBuilder:
                 )
         if self._reports(scope):
             entry_body.append(lang.set_flag(EXIT_PENDING_VAR, False))
+        entry_body += self._initialize_attributes(fact, scope)
         entry_body += self._statements(fact.entry_action, gen)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
@@ -1989,6 +2138,7 @@ class RosettaBuilder:
                     self._attribute_names,
                     payload_bindings=bindings,
                     scope=scope,
+                    owner=fact.name,
                 )
             group_exit: Body = (
                 *exit_log,
@@ -2264,6 +2414,7 @@ class RosettaBuilder:
                 )
                 # The region's own entry/do run on parallel-state entry; its
                 # exit runs in the completion join when the region is ready.
+                entry_body += self._initialize_attributes(region, scope)
                 entry_body += self._statements(region.entry_action, gen)
                 if region.do_action is not None:
                     actions.require_inline_one_shot(region.do_action)
@@ -2637,6 +2788,7 @@ class RosettaBuilder:
                 self._attribute_names,
                 payload_bindings=dict.fromkeys(features, "_value"),
                 scope=scope,
+                owner=fact.name,
             )
             exit_log = (
                 [self._observe_log("exited", simple)] if self._observe else []
@@ -2980,6 +3132,7 @@ class RosettaBuilder:
         gen = self._codegen
         body: list[Node] = []
         for fact in (root, *(regions or ())):
+            body += self._initialize_attributes(fact, "")
             body += self._statements(fact.entry_action, gen)
             if fact.do_action is not None:
                 actions.require_inline_one_shot(fact.do_action)
