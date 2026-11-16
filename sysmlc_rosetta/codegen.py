@@ -230,6 +230,8 @@ class LfActions(ExpressionCodeGen):
         local_names: frozenset[str],
         port_signals: frozenset[str],
         payload_bindings: dict[syside.Feature, str] | None,
+        attribute_reference: Callable[[str], str] | None,
+        attribute_slot: Callable[[syside.Feature], str] | None,
     ) -> None:
         """Record the generator's scope; see the subclasses' arguments."""
         self._needs = needs
@@ -239,6 +241,25 @@ class LfActions(ExpressionCodeGen):
         self._local_names = local_names
         self._port_signals = port_signals
         self._payload_bindings = payload_bindings or {}
+        self._attribute_reference = attribute_reference or needs.target.var
+        self._attribute_slot = attribute_slot
+
+    def _slot(self, feature: syside.Feature) -> str:
+        """Select storage before discarding a resolved declaration's identity."""
+        if self._attribute_slot is not None:
+            return self._attribute_slot(feature)
+        if feature.name is None:
+            raise ValueError("attribute reference has no name")
+        return feature.name
+
+    def initialize_attribute(self, slot: str, value: str) -> Stmt:
+        """Assign an activation's initial value to its resolved storage slot."""
+        return Stmt(
+            self._render_assignment_statement(
+                self._attribute_reference(slot), value
+            ),
+            assigns=frozenset((slot,)),
+        )
 
     @override
     def _emit_feature_reference(
@@ -266,8 +287,9 @@ class LfActions(ExpressionCodeGen):
         name = ref.name
         if name in self._local_names or not self._self_prefix:
             return name
-        self._require_attribute(name, expr)
-        return self._needs.target.var(name)
+        slot = self._slot(ref)
+        self._require_attribute(slot, expr)
+        return self._attribute_reference(slot)
 
     @override
     def render_assignment_target(
@@ -286,7 +308,12 @@ class LfActions(ExpressionCodeGen):
         """
         path = super().render_assignment_target(assign)
         self._require_attribute(path.split(".")[0], assign)
-        return self._needs.target.var(path)
+        return self._attribute_reference(path)
+
+    @override
+    def _assignment_base_name(self, feature: syside.Feature) -> str:
+        """Use the declaration's storage slot as the assignment root."""
+        return self._slot(feature)
 
     def render_statements(self, action: syside.ActionUsage) -> Body:
         """Translate an assignment or send to statements.
@@ -312,7 +339,7 @@ class LfActions(ExpressionCodeGen):
             )
         referent = action.referent
         attribute = (
-            referent.name
+            self._slot(referent)
             if action.target_argument is None and referent is not None
             else None
         )
@@ -483,6 +510,10 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
         local_names: Names explicitly in scope as plain locals.
             Payload bindings use source feature identity instead.
         payload_bindings: Source payload features mapped to delivered values.
+        attribute_reference: Renderer for a bound attribute reference;
+            defaults to a local reactor variable.
+        attribute_slot: Resolve a source declaration to its unique storage
+            slot; None retains simple attribute names.
         port_signals: Signals a connected peer accepts, so a ``via`` send of
             one sets the LF output port; a ``via`` send of any other signal
             is dropped and recorded in ``needs.undeliverable_sends``.
@@ -498,6 +529,8 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
+        attribute_reference: Callable[[str], str] | None = None,
+        attribute_slot: Callable[[syside.Feature], str] | None = None,
     ) -> None:
         needs = needs if needs is not None else PreambleNeeds()
         super().__init__(
@@ -519,6 +552,8 @@ class LfPythonCodeGen(LfActions, PythonCodeGen):
             local_names=local_names,
             port_signals=port_signals,
             payload_bindings=payload_bindings,
+            attribute_reference=attribute_reference,
+            attribute_slot=attribute_slot,
         )
 
     @override

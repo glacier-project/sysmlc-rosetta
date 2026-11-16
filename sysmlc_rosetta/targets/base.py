@@ -31,6 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
+from sysmlc_rosetta.program import StateVar
 from sysmlc_rosetta.statements import nest
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.codegen import PreambleNeeds
-    from sysmlc_rosetta.program import LfProgram, Reactor, StateVar
+    from sysmlc_rosetta.program import LfProgram, Parameter, Reactor
     from sysmlc_rosetta.statements import Body, Node, Stmt
 
 #: What a protocol state variable declared by :meth:`LfTarget.state_vars`
@@ -140,6 +141,33 @@ class LfTarget(ABC):
         self, needs: PreambleNeeds
     ) -> tuple[tuple[str, str], ...]:
         """Files the program ships beside its ``.lf``: ``(name, text)``."""
+
+    @abstractmethod
+    def register_context(
+        self, name: str, attributes: Sequence[Parameter | StateVar]
+    ) -> str | None:
+        """Register references to root storage; return the context type."""
+
+    @abstractmethod
+    def context_value(self, ctype: str | None, names: Sequence[str]) -> str:
+        """The root context value sent to a contained reactor."""
+
+    @abstractmethod
+    def context_reference(self, name: str) -> str:
+        """An attribute reached through the received root context."""
+
+    @abstractmethod
+    def context_binding(self, port: str) -> Stmt:
+        """Retain a context received on the entry-order input."""
+
+    def context_state(self, ctype: str | None) -> StateVar:
+        """Retain references to root storage across internal mode changes."""
+        return StateVar(
+            "_data",
+            "None" if ctype is None else "{0}",
+            reset=True,
+            type=ctype,
+        )
 
     # -- program text --
 

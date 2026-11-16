@@ -103,7 +103,9 @@ entry; §3 covers reentry of a mode that stays active.
 The composite state's own `entry`/`exit`/`do` actions run in the **parent**
 reactor (mode entry reaction and transition dispatches), so they may use
 the machine's attributes. Actions on substates run inside the child
-reactor, which deliberately sees **no** attributes (§5).
+reactor. Sequential composite scopes can access the same root attributes
+through the context described in §5; access across a parallel boundary has
+the initial-entry and parent-cleanup bounds described there.
 
 A state's entry finishes before its substates' entries begin, as required
 by entry-before-middle. SysMLC also finishes supported finite inline `do`
@@ -117,9 +119,11 @@ reaction(reset, startup) _entry_order -> current_state {= … =}
 ```
 
 LF's precedence graph then runs the parent entry reaction first at the same
-tag. The port is never set and never triggers a reaction, so the ordering
-adds no signal, token, reaction activation or microstep. It does add a
-static input and dependency per child reactor. The root's own `entry`/`do`
+tag. Scopes without nested root-data access leave the port unwritten.
+Context-bearing scopes set it to references to the root storage (§5); it
+remains a non-triggering dependency, so carrying that context adds no
+reaction activation or microstep. Each child reactor has the static input
+and dependency. The root's own `entry`/`do`
 is a `reaction(startup)` declared before the modes, so it runs before the
 initial mode's entry in the same reactor. A state named `_entry_order` is
 rejected.
@@ -138,8 +142,16 @@ descendant-owned escape crossing the parallel boundary uses the same
 cleanup protocol, including the origin region's exit. For a parallel root,
 the root's `entry`/`do` and then each region's, in declaration order, run
 in the root's `reaction(startup)`; each region's `exit` runs when that
-region reports local readiness (§7). Sibling regions' substates enter in no specified
-relative order.
+region reports local readiness (§7). When admitted initial child entries access
+shared root data (§5), their immediate recursive entry/do work follows region
+declaration order. Earlier regions' existing `current_state` outputs feed a
+non-triggering `_previous_current_state` input of the next region's initial
+entry reaction. Status forwarding covers recursive initial entry; no extra
+reaction, action, state variable, or logical delay is introduced. This does
+not wait for a region's lifetime or serialize later automatic transitions.
+Region-own entry/do actions retain their existing parent placement: all run
+before the descendant entries. Other parallel activations gain no sibling
+ordering dependencies.
 
 ## 3. Transitions
 
@@ -413,9 +425,13 @@ child reactor, and the parent's mode forwards them down
   the instant `t`, measured as logical time since startup; an instant that
   has already passed at entry schedules nothing.
 - **`accept when cond`** → a change check: entry schedules `_change_act`,
-  and every reaction assigning a root attribute reschedules it one
-  microstep later. The first true observation in an activation sets a
-  per-state latch (reset on entry) and evaluates the transition once.
+  and every reaction directly assigning a root attribute reschedules it one
+  microstep later. A nested assignment reports through `_data_changed` ports
+  up the containment chain; the root schedules the same observation action.
+  Notification relays follow the scope's lifecycle cleanup handlers, so
+  writes during deep child exits are observed without a dependency cycle.
+  The first true observation in an activation sets a per-state latch (reset
+  on entry) and evaluates the transition once.
   This lowering supports source states in the root reactor and conditions
   over root attributes; change triggers in nested reactors are not supported.
   Checks observe values when they run, so a transient true value overwritten
@@ -437,8 +453,8 @@ build (§10).
 
 ## 5. Attributes
 
-Declared on the state def (root scope only — state-scoped attributes are
-not currently supported; scope-local support is planned, §11):
+Root declarations map as follows. State-local declarations have the activation
+and visibility rules described below.
 
 | Declaration                                               | LF                                                                                                                                                         |
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -448,12 +464,94 @@ not currently supported; scope-local support is planned, §11):
 | composite attribute (`pt : Point`)                        | `Point(x=…)` dataclass initializer (the `Point` dataclass lives in the companion module, §9); usage-local `:>>` redefinitions win over the type's defaults |
 | quantity (`pickDuration : DurationValue default 2 [min]`) | SI float (`120.0`)                                                                                                                                         |
 
-References render as `self.<name>` inside reaction bodies. Initializers
-and parameter defaults always render inside `{= … =}` (lfc parses bare
-non-literals as LF syntax). **Substate scopes see no attributes**: a guard
-or action referencing a machine attribute from inside a composite state
-fails loudly — author models within this limit (per-scope attributes are
-planned, §11).
+Root references render as `self.<name>` inside Python reaction bodies.
+Initializers and parameter defaults always render inside `{= … =}` (lfc
+parses bare non-literals as LF syntax).
+
+**Nested access to root attributes.** Sequential composite scopes can read
+and assign the root machine's attributes in supported guards and finite
+entry/do/exit/effect bodies. Storage stays in the root reactor: nested
+reactors receive references on the existing `_entry_order` dependency when
+activated. Python retains the owning reactor object; C and uC retain a typed
+struct of pointers to its fields, with no dynamic allocation or value copies.
+Intermediate scopes forward the same references. A child reset refreshes its
+context while retaining the root values; separate machine instances have
+separate storage. Existing entry, completion and busy/settled dependencies
+order the relevant parent/child accesses.
+
+Across a parallel boundary, exit bodies can access root storage when they can
+run only through ordered parent cleanup. Admission checks every enclosing
+parallel boundary and the semantic owner of each action, including region
+actions executed in the parent reactor. Regional transitions that can execute
+the accessed exit independently, regional natural finalization, and descendant
+escapes leaving the boundary prevent admission. An unrelated regional
+transition does not prevent an otherwise protected exit. The existing
+`_exit`/`_exited` chain orders admitted accesses; no additional scheduling is
+introduced.
+
+Region actions hoisted into the parent reactor retain same-reactor admission
+when no descendant reactor accesses root storage across that parallel
+boundary. Their LF reaction order already serializes the accesses, including
+natural regional exits. The compiler checks this condition after assembling
+all regions, so a later-declared region cannot hide a nested read or write.
+Payload fields with the same name as a root attribute do not count as root
+storage accesses. When a descendant does access root storage, the initial-entry
+and parent-cleanup bounds apply to hoisted actions as well. A naturally
+finalizing region is classified by its owning parallel state at every enclosing
+boundary: hoisting its exit into an inner parent does not protect that access
+against another outer region.
+
+Initial entry and finite inline do bodies can also read and write shared root
+storage. Each accessing state must lie on the initial configuration at every
+enclosing parallel boundary, and no transition sourced inside that boundary
+may reactivate the state or an ancestor. Parent re-entry remains supported and
+retains root values. Native LF dependencies order the recursive initial child
+entries in region declaration order (§2). A parallel root without user
+entry/do statements receives a startup context writer when its children need
+root storage. Independent regional guards, effects, later target entries and
+exits remain unsupported for shared root reads as well as writes. In
+particular, an automatic transition or natural completion does not gain data
+admission merely because it occurs during startup.
+
+**State-local attributes.** An initialized declaration inside a state has its
+own storage slot in the same machine context. Resolved source declaration
+identity selects that slot, so a local can shadow a machine attribute without
+changing the machine value. Internal slot names use the shared Core name
+registry; source names and state names remain unchanged.
+
+The declaring state's activation initializes its slots before its own entry,
+finite do work and child activation, including actions hosted by its parent
+reactor. A child-only transition retains the active owner's values. Owner
+re-entry initializes them again while preserving machine attributes. This
+implements the initial feature value's owning-occurrence startShot lifetime
+(KerML 8.4.4.11). Supported initializers are the admitted literal subset below
+and structures materialized from such field defaults. Whole-value replacement
+uses the existing assignment checks. Undirected and `inout` locals use this
+activation storage; `in` and `out` locals are diagnosed. State-local dynamic
+expressions, missing initial values and references outside the active declaring
+state or its descendants are also diagnosed.
+
+Structured field defaults support both explicit attribute redefinitions,
+such as `attribute :>> count default 2;`, and shorthand redefinitions such as
+`:>> count default 2;`, including nested fields. Core resolves the overridden
+field by declaration identity for both machine and state-local attributes.
+Renaming a structured field through redefinition is not supported.
+
+Region-private locals do not become sibling-shared merely because storage is
+flattened. Independent regional actions can use their own declarations. If an
+owner local is accessed below an inner parallel boundary, the existing shared
+entry/cleanup bounds apply at that boundary. This adds no general arbitration
+for independent shared writes or guards.
+
+State-local assertions and nested change triggers remain unsupported.
+Change triggers require a
+source in the root reactor (§4); nested scalar writes can notify those root
+observations. Constraint checks and change notifications recognize direct
+root-attribute assignments; shadowing local writes do not notify root
+observations. Nested structured-field writes to root storage are rejected when
+the machine has root change triggers or assertions, because the existing
+observation pass does not track those writes. This does not claim complete
+mutation tracking.
 
 Bound values (`=`) pass shared admission checks before rendering. Supported
 forms are Boolean, Integer, Rational and String literals, unary numeric signs,
@@ -498,12 +596,14 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 1. in a dedicated `reaction(startup)` — so invalid initial **or
    overridden** values abort the program immediately (exit code 1, the
    constraint name in the traceback), and
-1. at the end of every reaction body that assigns to a machine attribute.
+1. at the end of every reaction body that directly assigns to a machine
+   attribute, including supported nested composite reactions. Nested checks
+   read the same root storage through the retained context.
 
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are not currently
-supported (their scope has no attributes to check; planned with scope-local
-attributes — §11). The thermostat and vending-machine examples carry
+supported: state-local assertions need separate activation-scoped observation
+rules (§11). The thermostat and vending-machine examples carry
 asserted invariants; a negative run test proves a violating `--values`
 override aborts at startup.
 
@@ -729,7 +829,7 @@ design.
 | leaf regions                               | auto-wrapped into a one-mode region reactor (`state beeper;` as a region just works)                                                                                                                                                                                                                                 |
 | transitions sourced at a region            | deterministic interrupt on the parallel scope: declaration order is firing priority across the scope; on firing, the parallel-state-sourced interruption sequence of §3 applies (regions drain in declaration order, then the parallel state's exit, the effect and the switch), so the two spellings are equivalent |
 | payload write-back (`assign r.value := …`) | copy-on-accept: every `accept` binds a fresh copy, so mutations stay local to the receiver and mutate-and-resend works; LF determinism preserved once cross-machine ports exist                                                                                                                                      |
-| state-scoped attributes / constraints      | scope-LOCAL only: an attribute declared inside a composite becomes a state variable of that child reactor, usable in that scope's guards, actions, and constraints (lifts the "data logic at root scope only" authoring rule). Cross-scope visibility remains future work                                            |
+| state-scoped constraints                   | activation-scoped observation beyond the root assertion checks; initialized state-local attributes are supported separately (§5)                                                                                                                                                                                     |
 | deep entry into a substate from outside    | a synthesized `enter_at` dispatch per scope, mirroring deep exit's `exit_k` ports, recursive for arbitrary depth; UML's outer-then-inner entry order preserved                                                                                                                                                       |
 
 ### Stays rejected
@@ -1206,6 +1306,11 @@ entry, so the entry runs once per tag.
 | `lf_print_error_and_exit("%s", ...);`  | `throw(...);`                                                             |
 | `LF_PRINT_DEBUG("%s", ...);`           | `LF_DEBUG(ENV, "%s", ...);`                                               |
 | `fabs`, `fmax`, `fmin` from `<math.h>` | `sysmlc_abs`, `sysmlc_max`, `sysmlc_min`, `static inline` in the preamble |
+
+Shared root-data contexts use a typed C compound literal for zero initialization.
+reactor-uc assigns state defaults in generated constructors, where a bare
+aggregate initializer is not an expression. The context still holds the root
+storage references described in section 5.
 
 **Children of a mode.** micromode lets only a mode's own reactions refer to
 the reactors the mode contains. The reactions that drain a composite state's

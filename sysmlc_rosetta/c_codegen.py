@@ -14,7 +14,7 @@ from sysmlc_rosetta.targets.c import CTarget
 from sysmlc_rosetta.targets.uc import MATH_HELPERS
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from sysmlc_rosetta.c_types import CTypes
 
@@ -35,6 +35,10 @@ class LfCCodeGen(LfActions, CCodeGen):
         local_names: Names in scope as plain locals.
         port_signals: Signals a connected peer accepts.
         payload_bindings: Source payload features mapped to delivered values.
+        attribute_reference: Renderer for a bound attribute reference;
+            defaults to a local reactor variable.
+        attribute_slot: Resolve a source declaration to its unique storage
+            slot; None retains simple attribute names.
 
     Raises:
         TypeError: If ``needs`` targets another language.
@@ -49,6 +53,8 @@ class LfCCodeGen(LfActions, CCodeGen):
         local_names: frozenset[str] = frozenset(),
         port_signals: frozenset[str] = frozenset(),
         payload_bindings: dict[syside.Feature, str] | None = None,
+        attribute_reference: Callable[[str], str] | None = None,
+        attribute_slot: Callable[[syside.Feature], str] | None = None,
     ) -> None:
         needs = needs if needs is not None else PreambleNeeds(target=CTarget())
         if not isinstance(needs.target, CTarget):
@@ -62,6 +68,8 @@ class LfCCodeGen(LfActions, CCodeGen):
             local_names=local_names,
             port_signals=port_signals,
             payload_bindings=payload_bindings,
+            attribute_reference=attribute_reference,
+            attribute_slot=attribute_slot,
         )
 
     @override
