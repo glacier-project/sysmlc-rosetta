@@ -158,7 +158,7 @@ def test_enumerations_are_c_enums_with_names() -> None:
 def test_backend_selects_its_target() -> None:
     backend = RosettaBackend()
 
-    (option,) = backend.build_options()
+    option = backend.build_options()[0]
     python = backend.configured({"target": "python"})
     c = backend.configured({"target": "c"})
 

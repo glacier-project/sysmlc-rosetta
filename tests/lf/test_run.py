@@ -27,6 +27,7 @@ from sysmlc_models.sm_examples import SM_EXAMPLES_DIR
 from sysmlc_rosetta.builder import build_program
 from sysmlc_rosetta.parts import build_part_program
 from sysmlc_rosetta.serialize import to_lf
+from sysmlc_rosetta.targets import PythonTarget
 from tests.conftest import FIXTURES_DIR
 from tests.test_lf_harness import (
     run_machine,
@@ -289,14 +290,22 @@ def test_when_assign_loop_terminates(tmp_path: Path) -> None:
     assert states[-1] == "done"
 
 
-def test_part01_silent_without_debug(tmp_path: Path) -> None:
-    # Without the run enabling DEBUG, the generated program emits no
-    # observation lines (spec 5.5: silent unless the run turns DEBUG on).
+@pytest.mark.parametrize(
+    ("log_level", "traced"), [("debug", True), ("warning", False)]
+)
+def test_part01_trace_follows_log_level(
+    tmp_path: Path, log_level: str, traced: bool
+) -> None:
+    # The program prints its own state trace, with the logical time, unless
+    # --log-level hides it. No sitecustomize or PYTHONPATH is involved.
     model = load_model(SM_EXAMPLES_DIR / "part01-two-parts")
+    target = PythonTarget()
+    target.log_level = log_level
     program = build_part_program(
         model,
         "Part01::pingSystem",
         target_options=(("fast", "true"), ("timeout", "10 sec")),
+        target=target,
     )
     src = tmp_path / "src"
     src.mkdir()
@@ -319,5 +328,5 @@ def test_part01_silent_without_debug(tmp_path: Path) -> None:
         timeout=120,
     )
     assert process.returncode == 0
-    assert "entered" not in process.stderr
-    assert "exited" not in process.stderr
+    assert ("[ 0.00 s] entered Plant.idle" in process.stderr) == traced
+    assert ("[ 0.10 s] exited Plant.idle" in process.stderr) == traced

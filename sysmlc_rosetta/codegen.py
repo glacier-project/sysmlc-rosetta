@@ -23,6 +23,7 @@ from sysmlc.semantics.statemachine.interface import (
 
 from sysmlc_rosetta.statements import Stmt
 from sysmlc_rosetta.targets.python import PythonTarget
+from sysmlc_rosetta.width import Evaluation, WidthAnalysis
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,7 +76,8 @@ class PreambleNeeds:
     :meth:`companion_module_lines`).
 
     Source identities for generated constraint checks are retained for
-    consumers of the assembled program.
+    consumers of the assembled program, and :attr:`width` collects the
+    overflow warnings of every rendered expression.
 
     Args:
         catalog: Concrete signal identities, or None for catalog-free use.
@@ -100,6 +102,7 @@ class PreambleNeeds:
         self.types_module: str | None = None
         self.external: list[ForeignArtifact] = []
         self.constraints: dict[tuple[str, int], LfConstraint] = {}
+        self.width = WidthAnalysis()
         self._used_external: dict[ForeignArtifact, set[str]] = {}
         # (event_name, via_port) for `via` sends with no connected peer;
         # surfaced as build warnings (see builder.finalize).
@@ -217,9 +220,13 @@ class LfActions(ExpressionCodeGen):
     attributes render through the program's target (``self.x``,
     ``self->x``); payload bindings resolve by source feature identity to
     the delivered value; unknown references produce diagnostics.
+
+    While a top-level expression renders, :attr:`_evaluation` is its width
+    evaluation, which the C generator spells its casts from.
     """
 
     render_fields: Callable[..., str]
+    _evaluation: Evaluation = Evaluation()
 
     def _bind(
         self,
@@ -239,6 +246,21 @@ class LfActions(ExpressionCodeGen):
         self._local_names = local_names
         self._port_signals = port_signals
         self._payload_bindings = payload_bindings or {}
+
+    @override
+    def render_expression(self, expr: syside.Expression) -> str:
+        """Translate ``expr``, recording its width warnings first.
+
+        Every top-level expression (assignment value, initial or payload
+        value, guard, condition, constraint) is rendered here, so this is
+        where the width analysis sees them all, the same on every target.
+        """
+        outer = self._evaluation
+        self._evaluation = self._needs.width.check(expr)
+        try:
+            return super().render_expression(expr)
+        finally:
+            self._evaluation = outer
 
     @override
     def _emit_feature_reference(
@@ -292,7 +314,8 @@ class LfActions(ExpressionCodeGen):
         """Translate an assignment or send to statements.
 
         An assignment records its target when it is a bound attribute
-        assigned directly, for the constraint and change-notification
+        assigned directly (and, separately, the head attribute of a chained
+        target such as ``pt.x``), for the constraint and change-notification
         passes.
 
         Args:
@@ -316,10 +339,22 @@ class LfActions(ExpressionCodeGen):
             if action.target_argument is None and referent is not None
             else None
         )
+        text = self.render_assignment(action)  # validates the target first
+        # The head of a chained target: its base's leftmost reference.
+        base = action.target_argument
+        while isinstance(base, syside.FeatureChainExpression):
+            base = base.operands.collect()[0]
+        head = (
+            base.referent.name
+            if isinstance(base, syside.FeatureReferenceExpression)
+            and base.referent is not None
+            else None
+        )
         return (
             Stmt(
-                self.render_assignment(action),
+                text,
                 assigns=frozenset(() if attribute is None else (attribute,)),
+                assigns_through=frozenset(() if head is None else (head,)),
             ),
         )
 

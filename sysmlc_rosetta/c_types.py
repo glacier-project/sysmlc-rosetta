@@ -18,10 +18,14 @@ from sysmlc.codegen.structured import named_fields
 from sysmlc.errors import UnsupportedConstructError
 from sysmlc.sysml.queries import structured_fields
 
+from sysmlc_rosetta.fixed_width import FIXED_WIDTH, fixed_width_of
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sysmlc.semantics.statemachine.facts import AttributeBinding
+
+    from sysmlc_rosetta.fixed_width import FixedWidth
 
 _SCALAR_C: Final[dict[str, str]] = {
     "Boolean": "bool",
@@ -53,7 +57,29 @@ C_RESERVED: Final = frozenset(
 )  # fmt: skip
 # Prefixes of reactor-c's and rosetta's own generated names.
 _RESERVED_PREFIXES: Final = ("lf_", "_lf", "LF_", "sysmlc_", "SYSMLC_")
-_SCALAR_ZERO: Final = frozenset({"bool", "int32_t", "double"})
+_FIXED: Final = frozenset(entry.ctype for entry in FIXED_WIDTH.values())
+_SIGNED: Final = frozenset(
+    entry.ctype for entry in FIXED_WIDTH.values() if entry.is_signed
+)
+# ``int32_t`` and ``double`` (Integer and Real) are among the fixed ones.
+_SCALAR_ZERO: Final = frozenset({"bool", *_FIXED})
+
+
+def scalar_type(definition: syside.Type) -> str | None:
+    """The C type of a ``ScalarValues`` type or a scalar quantity value.
+
+    Returns:
+        The C type, or None for any other type.
+    """
+    if definition.name in _SCALAR_C and definition.matches_qualified_name(
+        ("ScalarValues", definition.name)
+    ):
+        return _SCALAR_C[definition.name]
+    if isinstance(definition, syside.AttributeDefinition) and (
+        definition.specializes(("Quantities", "ScalarQuantityValue"))
+    ):
+        return "double"
+    return None
 
 
 def is_reserved(name: str) -> bool:
@@ -90,7 +116,8 @@ class CTypes:
     Structured definitions become ``typedef struct``s, enumerations
     ``typedef enum``s with a name table (``<type>_names``) for printing.
     A payload type without fields carries no data: its signal is a plain
-    ``bool`` port.
+    ``bool`` port. Integer ``abs``/``min``/``max`` are ``static inline``
+    functions, declared only when called.
     """
 
     def __init__(self) -> None:
@@ -100,6 +127,8 @@ class CTypes:
         self._enums: dict[str, tuple[str, ...]] = {}
         self._signals: dict[str, str | None] = {}
         self._in_progress: set[str] = set()
+        self._fixed_width_used = False
+        self._integer_functions: dict[str, str] = {}
 
     # -- registration --
 
@@ -214,6 +243,9 @@ class CTypes:
         Raises:
             UnsupportedConstructError: If no type has a C mapping.
         """
+        fixed = self._fixed_ctype(feature)
+        if fixed is not None:
+            return fixed
         for definition in feature.types.collect():
             ctype = self.definition_type(definition)
             if ctype is not None:
@@ -256,16 +288,37 @@ class CTypes:
             )
         return name
 
+    def integer_function(self, name: str, kind: FixedWidth) -> str:
+        """Declare an integer ``abs``, ``min`` or ``max``; return its C name.
+
+        It is a function, so each argument is evaluated once, computing in
+        integer ``kind`` (``<math.h>``'s versions round 64-bit values to
+        doubles).
+
+        Args:
+            name: ``abs``, ``min`` or ``max``.
+            kind: The promoted integer kind of the arguments.
+        """
+        function = f"sysmlc_{name}_{kind.name}"
+        if function not in self._integer_functions:
+            ctype = kind.ctype
+            if name == "abs":
+                parameters = f"{ctype} a"
+                body = "a < 0 ? -a : a" if kind.is_signed else "a"
+            else:
+                parameters = f"{ctype} a, {ctype} b"
+                body = f"a {'>' if name == 'max' else '<'} b ? a : b"
+            self._integer_functions[function] = (
+                f"static inline {ctype} {function}({parameters}) "
+                f"{{ return {body}; }}"
+            )
+        return function
+
     def definition_type(self, definition: syside.Type) -> str | None:
         """The C type of a type, or None when it has no C mapping."""
-        if definition.name in _SCALAR_C and definition.matches_qualified_name(
-            ("ScalarValues", definition.name)
-        ):
-            return _SCALAR_C[definition.name]
-        if isinstance(definition, syside.AttributeDefinition) and (
-            definition.specializes(("Quantities", "ScalarQuantityValue"))
-        ):
-            return "double"
+        scalar = scalar_type(definition)
+        if scalar is not None:
+            return scalar
         if isinstance(definition, syside.EnumerationDefinition):
             return self.register_enum(definition)
         if isinstance(definition, syside.Definition) and structured_fields(
@@ -281,6 +334,13 @@ class CTypes:
             UnsupportedConstructError: If the attribute's type has no C
                 mapping.
         """
+        fixed = (
+            None
+            if binding.feature is None
+            else self._fixed_ctype(binding.feature)
+        )
+        if fixed is not None:
+            return fixed
         definition = binding.type_definition
         ctype = None if definition is None else self.definition_type(definition)
         if ctype is None and binding.type_name in _SCALAR_C:
@@ -292,6 +352,14 @@ class CTypes:
                 "structured attribute definitions"
             )
         return ctype
+
+    def _fixed_ctype(self, feature: syside.Feature) -> str | None:
+        """The C type of a fixed-width feature (noting one is used), or None."""
+        fixed = fixed_width_of(feature)
+        if fixed is None:
+            return None
+        self._fixed_width_used = True
+        return fixed.ctype
 
     def zero(self, ctype: str) -> str:
         """The initializer of a value of ``ctype`` given no value."""
@@ -307,6 +375,12 @@ class CTypes:
             return "%ld", lambda value: f"(long)({value})"
         if ctype == "double":
             return "%.17g", lambda value: value
+        if ctype == "float":
+            return "%.17g", lambda value: f"(double)({value})"
+        if ctype in _SIGNED:
+            return "%lld", lambda value: f"(long long)({value})"
+        if ctype in _FIXED:  # the unsigned integers
+            return "%llu", lambda value: f"(unsigned long long)({value})"
         if ctype == "bool":
             return "%s", lambda value: f'(({value}) ? "true" : "false")'
         if ctype == _SCALAR_C["String"]:
@@ -327,6 +401,14 @@ class CTypes:
             "#include <stdint.h>",
             "",
         ]
+        if self._fixed_width_used:
+            lines += [
+                "_Static_assert(sizeof(int) == 4, "
+                '"fixed-width integer rules assume a 32-bit int");',
+                "",
+            ]
+        if self._integer_functions:
+            lines += [*self._integer_functions.values(), ""]
         for name, literals in sorted(self._enums.items()):
             constants = ", ".join(
                 _enum_constant(name, literal) for literal in literals

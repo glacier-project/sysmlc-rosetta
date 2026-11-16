@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, Final, override
 
 import syside
-from sysmlc.codegen.c import LIBRARY_FUNCTIONS, CCodeGen
+from sysmlc.codegen.c import CCodeGen
 from sysmlc.errors import UnsupportedConstructError
 
 from sysmlc_rosetta.c_types import type_name
 from sysmlc_rosetta.codegen import LfActions, PreambleNeeds
+from sysmlc_rosetta.fixed_width import FIXED_WIDTH
 from sysmlc_rosetta.targets.c import CTarget
-from sysmlc_rosetta.targets.uc import MATH_HELPERS
+from sysmlc_rosetta.width import WIDE_COMPARISON, negated_literal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from sysmlc_rosetta.c_types import CTypes
+
+# C gives a bare decimal literal a signed type when this holds it.
+_INT64: Final = FIXED_WIDTH["int64"]
 
 
 class LfCCodeGen(LfActions, CCodeGen):
@@ -26,6 +28,12 @@ class LfCCodeGen(LfActions, CCodeGen):
     literals of the payload's struct and enumeration literals are the
     constants of :class:`~sysmlc_rosetta.c_types.CTypes`. The arguments
     mirror :class:`~sysmlc_rosetta.codegen.LfPythonCodeGen`'s.
+
+    Fixed-width arithmetic is spelled from the width evaluation of the
+    expression being rendered (:class:`~sysmlc_rosetta.width.Evaluation`):
+    store casts on its cast leaves, ``int64_t`` operands for its widened
+    comparisons, integer ``abs``/``min``/``max`` and single-precision real
+    literals. Without fixed-width features the C is unchanged.
 
     Args:
         attribute_names: Simple names of the machine's bound attributes.
@@ -75,6 +83,87 @@ class LfCCodeGen(LfActions, CCodeGen):
         return self._types.enum_literal(literal)
 
     @override
+    def _emit(self, expr: syside.Expression, parent_precedence: int = 0) -> str:
+        """Emit a node; a cast leaf as ``(<its kind>)(<leaf>)``."""
+        source = super()._emit(expr, parent_precedence)
+        kind = self._evaluation.kind(expr)
+        if kind is not None and expr in self._evaluation.cast_leaves:
+            return f"({kind.ctype})({source})"
+        return source
+
+    @override
+    def _emit_binary(
+        self, expr: syside.OperatorExpression, parent_precedence: int
+    ) -> str:
+        """Emit a binary expression; a widened comparison casts both sides."""
+        if expr not in self._evaluation.widened:
+            return super()._emit_binary(expr, parent_precedence)
+        token, precedence = self._binary_operators[expr.operator]
+        lhs, rhs = (
+            f"({WIDE_COMPARISON})({self._emit(operand, 0)})"
+            for operand in expr.operands.collect()
+        )
+        body = f"{lhs} {token} {rhs}"
+        return f"({body})" if precedence < parent_precedence else body
+
+    @override
+    def _emit_unary(
+        self, expr: syside.OperatorExpression, parent_precedence: int
+    ) -> str:
+        """Emit a unary expression; ``-9223372036854775808`` as ``INT64_MIN``.
+
+        Negating ``UINT64_C(9223372036854775808)`` would wrap in
+        ``uint64_t``.
+
+        Raises:
+            UnsupportedConstructError: If a negated literal is below
+                ``INT64_MIN``: no C integer type holds it.
+        """
+        literal = negated_literal(expr)
+        if literal is None or _INT64.holds(literal.value):
+            return super()._emit_unary(expr, parent_precedence)
+        if not _INT64.holds(-literal.value):
+            raise UnsupportedConstructError(
+                f"integer literal -{literal.value} does not fit in 64 bits; "
+                "no C integer type holds it",
+                node=literal,
+            )
+        return "INT64_MIN"
+
+    @override
+    def _emit_literal_integer(self, expr: syside.LiteralInteger) -> str:
+        """Emit an integer literal; above ``INT64_MAX`` as ``UINT64_C``."""
+        source = super()._emit_literal_integer(expr)
+        return source if _INT64.holds(expr.value) else f"UINT64_C({source})"
+
+    @override
+    def _emit_literal_rational(self, expr: syside.LiteralRational) -> str:
+        """Emit a real literal, with ``f`` when it is single precision."""
+        source = super()._emit_literal_rational(expr)
+        return f"{source}f" if expr in self._evaluation.single else source
+
+    @override
+    def _emit_library_invocation(
+        self, expr: syside.InvocationExpression
+    ) -> tuple[str, bool] | None:
+        """Emit a library call; integer ``abs``/``min``/``max`` call helpers.
+
+        The helpers, ``static inline`` functions of the types header,
+        compute in the call's integer kind and evaluate each argument once.
+        """
+        if expr not in self._evaluation.integer_calls:
+            return super()._emit_library_invocation(expr)
+        kind = self._evaluation.kind(expr)
+        function = expr.function
+        assert kind is not None and function is not None
+        assert function.name is not None
+        name = self._types.integer_function(function.name, kind)
+        arguments = ", ".join(
+            self._emit(argument, 0) for argument in expr.arguments.collect()
+        )
+        return f"{name}({arguments})", False
+
+    @override
     def _construct(
         self,
         definition: syside.Definition | None,
@@ -110,32 +199,3 @@ class LfCCodeGen(LfActions, CCodeGen):
             self._emit(argument, 0) for argument in expr.arguments.collect()
         )
         return f"{name}({arguments})"
-
-
-class LfUcCodeGen(LfCCodeGen):
-    """C code generator for reaction bodies of the uC target.
-
-    uC's native build links no math library: ``abs``, ``max`` and
-    ``min`` call the target's :data:`~sysmlc_rosetta.targets.uc.MATH_HELPERS`,
-    and the other library functions are rejected.
-    """
-
-    _library_functions: ClassVar[Mapping[str, str]] = {
-        function: callee for function, (callee, _) in MATH_HELPERS.items()
-    }
-
-    @override
-    def _emit_invocation(self, expr: syside.InvocationExpression) -> str:
-        """Emit a call, rejecting the library functions of ``<math.h>``.
-
-        Raises:
-            UnsupportedConstructError: If the call needs the math library.
-        """
-        function = expr.function
-        name = None if function is None else str(function.qualified_name)
-        if name in LIBRARY_FUNCTIONS and name not in self._library_functions:
-            raise UnsupportedConstructError(
-                f"{name} needs the C math library, which reactor-uc's native "
-                "build does not link"
-            )
-        return super()._emit_invocation(expr)

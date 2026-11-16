@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import pytest
@@ -24,12 +25,11 @@ from sysmlc_rosetta.program import (
 )
 from sysmlc_rosetta.serialize import to_lf
 from sysmlc_rosetta.statements import Stmt, stored
-from sysmlc_rosetta.targets.uc import UcTarget
+from sysmlc_rosetta.targets.uc import UcTarget, cmake_lists
 from tests.conftest import FIXTURES_DIR
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 
 def _uc_program(model_dir: Path, qn: str) -> LfProgram:
@@ -160,7 +160,7 @@ def test_run_option_without_attribute_is_rejected() -> None:
         UcTarget().main_opening(program)
 
 
-def test_uc_build_ships_its_artifacts_and_compiles_their_sources(
+def test_uc_build_ships_its_artifacts_and_cmake_compiles_their_sources(
     tmp_path: Path,
 ) -> None:
     example = SM_EXAMPLES_DIR / "sm15-external-from-metadata"
@@ -178,21 +178,30 @@ def test_uc_build_ships_its_artifacts_and_compiles_their_sources(
     source = output.content(output.paths[0])
 
     assert [str(path) for path in output.paths] == [
-        "Ramp.ulf",
+        "RampMain.ulf",
         "Ramp_types.h",
         "ramp_impl.c",
         "ramp_impl.h",
+        "CMakeLists.txt",
     ]
     assert "files:" not in source
-    assert "cmake" not in source
     assert '#include "ramp_impl.h"' in source
-    assert (
-        'main reactor {\n  preamble {=\n    #include "ramp_impl.c"\n  =}\n'
-        in (source)
+    assert "ramp_impl.c" not in source
+    assert output.content(PurePosixPath("CMakeLists.txt")) == cmake_lists(
+        "RampMain", ["ramp_impl.c", "ramp_impl.h"]
     )
 
 
-def test_math_functions_need_no_math_library() -> None:
+def test_trigonometry_is_accepted_on_uc() -> None:
+    source = to_lf(
+        _uc_program(FIXTURES_DIR / "functions", "Functions::Machine")
+    )
+
+    assert "cos(" in source
+    assert "#include <math.h>" in source
+
+
+def test_uc_math_functions_use_libm() -> None:
     source = to_lf(
         _uc_program(
             model_path("showcase/charging-station"),
@@ -200,19 +209,110 @@ def test_math_functions_need_no_math_library() -> None:
         )
     )
 
-    assert "sysmlc_min(self->" in source
-    assert "sysmlc_max(self->" in source
-    assert "fmin(" not in source
-    assert "fmax(" not in source
+    assert "fmin(self->" in source
+    assert "fmax(self->" in source
+    assert "sysmlc_min" not in source
+    assert "sysmlc_max" not in source
+
+
+def test_uc_build_writes_cmake_lists() -> None:
+    backend = RosettaBackend().configured({"target": "uc"})
+    program = backend.build(
+        load_model(SM_EXAMPLES_DIR / "sm01-helloworld"), "SM01::Machine"
+    )
+
+    output = backend.generate_output(
+        program, OutputOptions(Path(), basename="Main")
+    )
+
+    cmake = output.content(PurePosixPath("CMakeLists.txt"))
+    assert cmake == cmake_lists("Main")
+    assert "$ENV{REACTOR_UC_PATH}" in cmake
+    assert "target_link_libraries(Main PRIVATE m)" in cmake
+
+
+def test_uc_default_basename_differs_from_the_reactor_name() -> None:
+    backend = RosettaBackend().configured({"target": "uc"})
+    program = backend.build(
+        load_model(SM_EXAMPLES_DIR / "sm01-helloworld"), "SM01::Machine"
+    )
+
+    output = backend.generate_output(program, OutputOptions(Path()))
+
+    assert [str(path) for path in output.paths] == [
+        "MachineMain.ulf",
+        "Machine_types.h",
+        "CMakeLists.txt",
+    ]
+    assert output.content(PurePosixPath("CMakeLists.txt")) == cmake_lists(
+        "MachineMain"
+    )
+
+
+def test_uc_reactor_name_as_basename_means_the_default() -> None:
+    backend = RosettaBackend().configured({"target": "uc"})
+    program = backend.build(
+        load_model(SM_EXAMPLES_DIR / "sm01-helloworld"), "SM01::Machine"
+    )
+
+    output = backend.generate_output(
+        program, OutputOptions(Path(), basename="Machine")
+    )
+
+    assert str(output.paths[0]) == "MachineMain.ulf"
+
+
+@pytest.mark.parametrize("basename", ["machine", "MACHINE"])
+def test_uc_basename_clashing_with_a_reactor_is_rejected(
+    basename: str,
+) -> None:
+    backend = RosettaBackend().configured({"target": "uc"})
+    program = backend.build(
+        load_model(SM_EXAMPLES_DIR / "sm01-helloworld"), "SM01::Machine"
+    )
+
+    with pytest.raises(SerializationError, match="up to case"):
+        backend.generate_output(
+            program, OutputOptions(Path(), basename=basename)
+        )
+
+
+@pytest.mark.parametrize("target", ["python", "c"])
+def test_other_targets_write_no_cmake_lists(target: str) -> None:
+    backend = RosettaBackend().configured({"target": target})
+    program = backend.build(
+        load_model(SM_EXAMPLES_DIR / "sm01-helloworld"), "SM01::Machine"
+    )
+
+    output = backend.generate_output(program, OutputOptions(Path()))
+
+    assert "CMakeLists.txt" not in [str(path) for path in output.paths]
+
+
+def test_cmake_lists_wraps_lfc_s_generated_build() -> None:
+    cmake = cmake_lists("Main")
+
     assert (
-        "static inline double sysmlc_min(double x, double y) "
-        "{ return x < y ? x : y; }"
-    ) in source
+        'COMMAND "${SYSMLC_LFC}" -n "${CMAKE_CURRENT_SOURCE_DIR}/Main.ulf"'
+        in cmake
+    )
+    assert (
+        'add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/src-gen/Main" lf)'
+        in cmake
+    )
+    assert "CMAKE_CONFIGURE_DEPENDS" in cmake
+    assert "target_sources" not in cmake
 
 
-def test_trigonometry_is_rejected() -> None:
-    with pytest.raises(UnsupportedConstructError, match="math library"):
-        _uc_program(FIXTURES_DIR / "functions", "Functions::Machine")
+def test_cmake_lists_compiles_external_sources() -> None:
+    cmake = cmake_lists("Main", ["ramp.c", "ramp.h", "lib/more.c"])
+
+    assert (
+        "target_sources(Main PRIVATE\n"
+        '  "${CMAKE_CURRENT_SOURCE_DIR}/ramp.c"\n'
+        '  "${CMAKE_CURRENT_SOURCE_DIR}/lib/more.c"\n'
+        ")"
+    ) in cmake
 
 
 def test_drain_of_a_composite_state_stays_inside_its_mode() -> None:
