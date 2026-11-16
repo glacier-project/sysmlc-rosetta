@@ -172,3 +172,17 @@ def test_write_emits_the_types_module_beside_the_program(
         tmp_path / "MachineChainGuard_types.py",
     ]
     assert "class Point:" in written[1].read_text()
+
+
+def test_log_level_is_a_build_option() -> None:
+    options = {
+        option.name: option for option in RosettaBackend().build_options()
+    }
+    assert options["log-level"].default == "debug"
+    configured = RosettaBackend().configured({"log-level": "warning"})
+    assert configured.log_level == "warning"
+
+
+def test_rejects_unknown_log_level() -> None:
+    with pytest.raises(ValueError, match="unknown log level"):
+        RosettaBackend(log_level="loud")

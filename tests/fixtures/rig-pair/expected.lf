@@ -104,8 +104,8 @@ reactor PlantTest {
     reaction(reset, startup) -> current_state, reset(done) {=
       current_state.set("fail")
       self.verdict = 1
-      done.set()
       assert self.verdict == 0, "SysML constraint violated: {\"reactor\":\"PlantTest\",\"check_id\":0,\"scope\":\"\",\"name\":\"testPassed\",\"behavior\":\"RigPair::PlantTest\"}"
+      done.set()
     =}
   }
   mode done {

@@ -5,7 +5,8 @@ Lingua Franca (LF) programs targeting the Python runtime, the C runtime
 (reactor-c) with `--target c`, or the uC runtime (reactor-uc with micromode
 modal reactors) with `--target uc`.
 Sections 1–13 describe the mapping in Python spelling, Section 14 lists how the
-C target spells it, and section 15 how reactor-uc differs from it. This document
+C target spells it, section 15 how reactor-uc differs from it, and section 16
+covers fixed-width numeric types on all three. This document
 describes supported constructs, their LF counterparts and known limitations.
 Bundled model scenarios and focused tests marked `lf` compile and execute
 generated programs to check selected behaviors, including hierarchy lifecycle
@@ -498,7 +499,14 @@ runtime check `assert <expr>, "SysML constraint <name> violated"`, placed:
 1. in a dedicated `reaction(startup)` — so invalid initial **or
    overridden** values abort the program immediately (exit code 1, the
    constraint name in the traceback), and
-1. at the end of every reaction body that assigns to a machine attribute.
+1. right after every statement that assigns an attribute the constraint's
+   expression mentions, in the same block as the write. A model that
+   updates two related attributes one after the other must order the
+   writes so each step is valid: with `low <= high`, going from `0, 5` to
+   `10, 20` must write `high` first. There is no end-of-reaction check.
+
+An asserted literal bound also narrows the width analysis of fixed-width
+attributes (§16).
 
 Plain (non-asserted) `constraint` usages generate nothing — SysML does not
 require them to hold. Constraints declared inside states are not currently
@@ -768,6 +776,9 @@ mapping in `sysmlc/codegen/python.py`:
 | `TrigFunctions::tan`      | `math.tan(…)`                      |
 
 Unlisted functions are rejected; extend the shared mapping as new cases demand.
+The C targets, reactor-uc included, call `fabs`, `fmax`, `fmin`, `sin`, `cos`
+and `tan` from `<math.h>`; `abs`, `max` and `min` over fixed-width integers
+call integer helpers instead (§16).
 
 ### Assignment-from-call
 
@@ -872,8 +883,8 @@ an *imported* reactor file too, so a harness importing the machine needs no
 `files:` of its own.) The compiled project is therefore self-sufficient:
 `lfc Main.lf && ./bin/Main` works with a clean environment, proven by
 `tests/.../test_run.py::test_part_runs_self_sufficiently_without_pythonpath`.
-The DEBUG-observation `sitecustomize.py` still rides on `PYTHONPATH` (that is
-the run enabling logging, not an import requirement).
+The program also prints its own state trace (§13.3), so it needs no
+`PYTHONPATH` for that either.
 
 ### Inline functions (textual representations)
 
@@ -1065,17 +1076,18 @@ With `RosettaBuilder(observe=True)` (set only by the part assembler), every
 state's mode logs its entry and exit:
 
 ```python
-logging.debug("entered <Reactor>.<state>")   # in the entry reaction
-logging.debug("exited <Reactor>.<state>")     # in each leaving transition
+_sysmlc_log.debug("entered <Reactor>.<state>")   # in the entry reaction
+_sysmlc_log.debug("exited <Reactor>.<state>")     # in each leaving transition
 ```
 
-`PreambleNeeds.uses_logging` adds `import logging`. The program is **silent by
-default** (the root logger is unconfigured at WARNING); the *run* enables
-DEBUG — `run_all.py` and the lf tests drop a `sitecustomize.py` doing
-`logging.basicConfig(level=logging.DEBUG)` on `PYTHONPATH`, so the entry/exit
-lines reach stderr without the generated program forcing them on. The bare
-machine and same-name composition paths leave `observe` off; only the part
-assembler sets it.
+`PreambleNeeds.uses_logging` adds `import logging` and sets up the `sysmlc`
+logger: a stderr handler that prefixes each line with the logical time
+(`[ 4.00 s] entered TrafficLight.showGreen`), not propagated to the root
+logger. Its level comes from the build option `--log-level` (default `debug`,
+which prints the trace; `info` and higher hide it). A level set before the
+preamble runs, e.g. by a hand-written program importing the generated
+reactors, is kept. The bare machine and same-name composition paths leave
+`observe` off; only the part assembler sets it.
 
 ### 13.4 Status and current limitations
 
@@ -1127,7 +1139,7 @@ is fixed-size, and `current_state` is set only from string literals.
 | `S_act.schedule(0, T(...))`                      | `lf_schedule_copy(S_act, 0, &((T){ ... }), 1);`                        |
 | `raise RuntimeError(...)`                        | `lf_print_error_and_exit("%s", ...);`                                  |
 | `assert c, "..."`                                | `if (!(c)) { fprintf(stderr, "AssertionError: %s\n", ...); exit(1); }` |
-| `logging.debug(...)`                             | `LF_PRINT_DEBUG("%s", ...);`                                           |
+| `_sysmlc_log.debug(...)`                         | `LF_PRINT_DEBUG("%s", ...);`                                           |
 | arrival tag `(elapsed, microstep)`, `()`         | `tag_t` from `lf_tag()`, `NEVER_TAG`                                   |
 | busy set `{"c_a", "c_b"}`                        | one `bool` per child: `_<state>_c_a_busy`                              |
 | pending slot `None` / `()` / `(key, v, tag)`     | `sysmlc_pending_t` with `slot` CLOSED / OPEN / HOLDING                 |
@@ -1143,7 +1155,8 @@ definition's qualified name, in lowercase snake case plus `_t`
 `<TYPE>_<LITERAL>` and `<type>_names[]` holds the literals' names. `Integer`
 is `int32_t`, `Real` and scalar quantities `double`, `Boolean` `bool`,
 `String` `const char*` (literals only). A payload type without fields is a
-plain `bool` port.
+plain `bool` port. Fixed-width features use `<stdint.h>` types or `float`
+(§16).
 
 **External functions.** A `calc def` backed by a C artifact (`--c`/`--c_h`,
 `@ForeignArtifact { lang = "C"; ... }` or a `rep ... language "C"` body) is
@@ -1180,10 +1193,10 @@ code.
 
 | C target (reactor-c)                          | reactor-uc target                                                                                               |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `<base>.lf`, `target C { ... }`               | `<base>.ulf`, no `target` declaration                                                                           |
+| `<base>.lf`, `target C { ... }`               | `<base>.ulf` (`<reactor>Main` by default), no `target` declaration, built by the written `CMakeLists.txt`       |
 | `--timeout`, `--fast` in the target header    | `@timeout(...)`, `@fast(...)` on the main reactor                                                               |
 | default platform and logging                  | `@platform("native")` and `@logging("ERROR")` on main                                                           |
-| `files:` and `cmake-include` ship the files   | the files sit beside the program, on the include path; a C source is included by the main reactor's `preamble`  |
+| `files:` and `cmake-include` ship the files   | the files sit beside the program, on the include path; a C source is compiled by `CMakeLists.txt`               |
 | `output current_state: string`                | `output current_state: {= const char* =}`                                                                       |
 | one entry `reaction(reset, startup)` per mode | `reaction(reset)`; an initial mode also gets `reaction(startup)`, both guarded by `reset state _entered: tag_t` |
 | `logical action a`                            | `@max_pending_events(n)` when more than one statement schedules `a`                                             |
@@ -1196,16 +1209,15 @@ entry, so the entry runs once per tag.
 
 **Reaction bodies.**
 
-| C target (reactor-c)                   | reactor-uc target                                                         |
-| -------------------------------------- | ------------------------------------------------------------------------- |
-| `p->is_present`                        | `lf_is_present(p)`                                                        |
-| `lf_tag()`                             | `env->scheduler->current_tag(env->scheduler)`                             |
-| `lf_time_logical_elapsed()`            | `env->get_elapsed_logical_time(env)`                                      |
-| `lf_schedule_copy(S_act, 0, &(v), 1);` | `lf_schedule(S_act, 0, (v));`                                             |
-| `lf_request_stop();`                   | `env->request_shutdown(env, 0);`                                          |
-| `lf_print_error_and_exit("%s", ...);`  | `throw(...);`                                                             |
-| `LF_PRINT_DEBUG("%s", ...);`           | `LF_DEBUG(ENV, "%s", ...);`                                               |
-| `fabs`, `fmax`, `fmin` from `<math.h>` | `sysmlc_abs`, `sysmlc_max`, `sysmlc_min`, `static inline` in the preamble |
+| C target (reactor-c)                   | reactor-uc target                             |
+| -------------------------------------- | --------------------------------------------- |
+| `p->is_present`                        | `lf_is_present(p)`                            |
+| `lf_tag()`                             | `env->scheduler->current_tag(env->scheduler)` |
+| `lf_time_logical_elapsed()`            | `env->get_elapsed_logical_time(env)`          |
+| `lf_schedule_copy(S_act, 0, &(v), 1);` | `lf_schedule(S_act, 0, (v));`                 |
+| `lf_request_stop();`                   | `env->request_shutdown(env, 0);`              |
+| `lf_print_error_and_exit("%s", ...);`  | `throw(...);`                                 |
+| `LF_PRINT_DEBUG("%s", ...);`           | `LF_DEBUG(ENV, "%s", ...);`                   |
 
 **Children of a mode.** micromode lets only a mode's own reactions refer to
 the reactors the mode contains. The reactions that drain a composite state's
@@ -1226,14 +1238,121 @@ tag reach its reactions as one occurrence with the last value, where
 reactor-c delivers them a microstep apart: sending one signal to oneself
 twice at a tag differs between the two targets.
 
-**Building.** The program builds with reactor-uc's compiler (`lfc` of the
-micromode branch, with `REACTOR_UC_PATH` set to the checkout). The native
-build links no math library: generated code needs none, but external C code
-that calls `<math.h>` must be linked with it, for example with
-`LDFLAGS="-Wl,--no-as-needed -lm"` in the compiler's environment.
+**Building.** The generated `CMakeLists.txt` builds the program:
 
-**Rejections specific to reactor-uc.** Each is an `UnsupportedConstructError`:
+```bash
+export REACTOR_UC_PATH=~/reactor-uc   # micromode checkout, compiler built
+cmake -S out -B out/build && cmake --build out/build
+out/bin/<main>
+```
 
-- `sin`, `cos` and `tan`, which need the math library;
-- a scope with several composite states whose children exit with their
-  parent: their drains would each need the last mode.
+At configure time it runs the checkout's `lfc -n` on the `.ulf` (again
+whenever the `.ulf` changes) and adds the `CMakeLists.txt` lfc writes into
+`src-gen/<main>`, which wires the runtime, micromode and the `@logging`
+level. It then compiles the external C sources and links the math library.
+`<main>` is the file's basename: the element's name, or `<reactor>Main` for
+a bare state machine, whose reactor would otherwise clash with the main
+reactor reactor-uc names after the file.
+
+**Rejection specific to reactor-uc.** A scope with several composite
+states whose children exit with their parent is an
+`UnsupportedConstructError`: their drains would each need the last mode.
+
+## 16. Fixed-width numeric types
+
+The `FixedWidthScalarValues` library (package
+[sysmlc-library](https://github.com/glacier-project/sysmlc-library),
+installed with the core and loaded automatically) defines features to
+subset, not datatypes, so literals and arithmetic need no casts:
+
+```sysml
+private import FixedWidthScalarValues::*;
+attribute count :> uint8 := 0;
+item def Reading { attribute raw :> uint16; }
+```
+
+A feature has the width of the library feature it specializes through
+its subsettings and redefinitions, so refinements
+(`attribute percent :> uint8 { … }`) and redefinitions are covered. A
+feature that specializes two kinds is an error, including a redefinition
+that adds one: `attribute :>> count :> uint16` still specializes the
+redefined `count`'s `uint8`, whose range it keeps.
+
+| Library feature                       | Range                      | C and reactor-uc       | Python  |
+| ------------------------------------- | -------------------------- | ---------------------- | ------- |
+| `int8`, `int16`, `int32`, `int64`     | `-2^(n-1)` … `2^(n-1)-1`   | `int8_t` … `int64_t`   | `int`   |
+| `uint8`, `uint16`, `uint32`, `uint64` | `0` … `2^n-1`              | `uint8_t` … `uint64_t` | `int`   |
+| `float32`, `float64`                  | finite IEEE single, double | `float`, `double`      | `float` |
+
+The mapping covers attributes, parameters, ports and payload fields. A
+width on a quantity's `num` (`attribute :>> num :> uint16`) is ignored:
+quantities stay SI `double`s. The library's ranges generate no runtime
+checks. Programs using fixed-width features assert
+`sizeof(int) == 4`, which the rules below assume, and print integers
+through a `long` or `long long` cast, so the text matches Python's.
+
+**Generated C**, only where fixed-width features are involved, so other
+models' C is unchanged:
+
+- a value stored into an `int32`, `uint32`, `int64` or `uint64` feature is
+  computed in the destination type: each integer leaf is cast to it
+  (`(int64_t)(x) * (int64_t)(x)`), when the leaf's range fits it;
+- a comparison of a `uint32` with a signed value casts both to `int64_t`,
+  where C would compare them as unsigned;
+- integer `abs`, `max` and `min` call `static inline` helpers of the types
+  header (`sysmlc_max_int64`); `fabs`, `fmax` and `fmin` would round 64-bit
+  values;
+- an integer literal above `INT64_MAX` is spelled `UINT64_C(…)`,
+  `-9223372036854775808` `INT64_MIN`; a literal above `UINT64_MAX` is a
+  generation error on every target, a negated one below `INT64_MIN` on the
+  C targets;
+- a real literal stored into a `float32` or combined only with `float32`
+  values gets the `f` suffix: `float32` is computed in single precision in
+  C and in double precision in Python, so the last digits can differ.
+
+The three targets behave the same only while every fixed-width value stays
+within its range. Outside it the model is inconsistent, and what rosetta
+promises is a build warning, not identical behaviour.
+
+**Warnings.** A width analysis runs at build time and logs warnings, the
+same on every target, Python included; they never stop generation. Each
+names the element, the expression, the range it needs and the source
+location:
+
+```
+WARNING - sysmlc_rosetta.width - Probe::Counter::count: count + 1 needs 1..256, stored in uint8 (probe.sysml:14:33)
+```
+
+It warns when:
+
+- a value stored into a fixed-width feature (assignment, initial value,
+  `--values` override, payload field, binding) may fall outside its range:
+  a possibly negative value into an unsigned feature, any real into an
+  integer feature, or a `float64` into a `float32`;
+- an arithmetic node may overflow the C type it is computed in, such as
+  `uint16 * uint16`, which C computes in `int`;
+- a `uint64` is compared with a possibly negative signed value, for which
+  C has no wider type.
+
+The ranges come from interval arithmetic over fixed-width features and
+integer literals. Anything involving a plain `Integer` or `Real`, another
+function call or `/` (real division) has an unknown range, so it warns only
+when it is real and stored into an integer feature; storing into a plain
+`Integer` or `Real` never warns. The analysis is a simple aid, not a proof.
+
+**Silencing a warning.** A root-scope asserted constraint of the form
+`attr <op> literal` or `literal <op> attr` (`<`, `<=`, `>`, `>=`), or an
+`and` of such parts, narrows the attribute's range:
+
+```sysml
+attribute count :> uint8 := 0;
+assert constraint { count <= 200 }   // count := count + 1 needs 1..201: no warning
+```
+
+The narrowing is sound for the run because the constraint is checked at
+startup and after every write (§6), and a failed check stops the program.
+Only literal bounds narrow: `count <= maxCount` does not, since `--values`
+can change `maxCount` after generation. Negated constraints, other shapes,
+guards and `if` conditions do not narrow either. External C or Python code
+that writes an attribute directly bypasses the checks and is outside this
+guarantee.

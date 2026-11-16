@@ -9,7 +9,6 @@ from sysmlc_rosetta.statements import (
     If,
     Pass,
     Stmt,
-    assigns,
     insert_after_assignments,
     iter_statements,
     nest,
@@ -45,14 +44,13 @@ def test_walk_visits_nested_statements_in_order() -> None:
     assert [stmt.text for stmt in iter_statements(body)] == ["a", "b", "c", "d"]
 
 
-def test_writes_and_assigns_collect_nested_metadata() -> None:
+def test_writes_collect_nested_metadata() -> None:
     body = (
         nest("c", (Stmt("p.set(1)", writes=frozenset(("p",))), _assign("x"))),
         Stmt("q.set(1)", writes=frozenset(("q",))),
     )
 
     assert writes(body) == {"p", "q"}
-    assert assigns(body) == {"x"}
 
 
 def test_insertion_lands_in_the_assigning_branch() -> None:

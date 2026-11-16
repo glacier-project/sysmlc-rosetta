@@ -15,6 +15,7 @@ from sysmlc_rosetta.parts import (
 )
 from sysmlc_rosetta.program import LfProgram, MainReactor
 from sysmlc_rosetta.serialize import to_lf
+from sysmlc_rosetta.targets import PythonTarget
 
 FIX = SM_EXAMPLES_DIR / "part01-two-parts"
 MUX = SM_EXAMPLES_DIR / "part-mux"
@@ -56,8 +57,20 @@ def test_observation_logs_entry_and_exit() -> None:
     prog = build_part_program(load_model(FIX), "Part01::pingSystem")
     text = to_lf(prog)
     assert "import logging" in text
-    assert 'logging.debug("entered Plant.idle")' in text
-    assert 'logging.debug("exited Plant.idle")' in text
+    assert '_sysmlc_log.debug("entered Plant.idle")' in text
+    assert '_sysmlc_log.debug("exited Plant.idle")' in text
+    assert "_sysmlc_log.setLevel(logging.DEBUG)" in text
+
+
+def test_log_level_sets_the_trace_level() -> None:
+    target = PythonTarget()
+    target.log_level = "warning"
+    prog = build_part_program(
+        load_model(FIX), "Part01::pingSystem", target=target
+    )
+    text = to_lf(prog)
+    assert "_sysmlc_log.setLevel(logging.WARNING)" in text
+    assert "logging.DEBUG" not in text
 
 
 MULTI = SM_EXAMPLES_DIR / "part-multi-exhibit"

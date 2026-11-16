@@ -16,10 +16,11 @@ The program shape differs from reactor-c's in these ways:
   ``const char*`` set only from string literals;
 - each logical action has a fixed event buffer, sized by
   :meth:`UcTarget.declare`;
-- the native build adds no source files and links no math library: an
-  external C source is compiled through the main reactor's preamble, and
-  ``abs``, ``max`` and ``min`` call the :data:`MATH_HELPERS` instead of
-  ``<math.h>`` (see :class:`~sysmlc_rosetta.c_codegen.LfUcCodeGen`).
+- the program is built through the ``CMakeLists.txt`` that
+  :func:`cmake_lists` writes beside it: that file runs reactor-uc's
+  compiler in generate-only mode, links the math library, and compiles
+  external C sources as ordinary sources, so reaction bodies use
+  ``<math.h>`` as the C target's do.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from sysmlc_rosetta.statements import Stmt, iter_statements, nest
 from sysmlc_rosetta.targets.c import CTarget
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
     from sysmlc_rosetta.codegen import PreambleNeeds
     from sysmlc_rosetta.program import (
@@ -50,25 +51,6 @@ if TYPE_CHECKING:
 
 #: The tag at which a reactor last ran a mode's entry.
 ENTERED_VAR: Final = "_entered"
-
-#: SysML library functions spelled without ``<math.h>``: each function's
-#: qualified name, mapped to its C callee and the callee's definition.
-MATH_HELPERS: Final = {
-    "NumericalFunctions::abs": (
-        "sysmlc_abs",
-        "static inline double sysmlc_abs(double x) { return x < 0 ? -x : x; }",
-    ),
-    "NumericalFunctions::max": (
-        "sysmlc_max",
-        "static inline double sysmlc_max(double x, double y) "
-        "{ return x > y ? x : y; }",
-    ),
-    "NumericalFunctions::min": (
-        "sysmlc_min",
-        "static inline double sysmlc_min(double x, double y) "
-        "{ return x < y ? x : y; }",
-    ),
-}
 
 _MAIN_ATTRIBUTES: Final = {"timeout": "@timeout({})", "fast": "@fast({})"}
 
@@ -132,13 +114,6 @@ class UcTarget(CTarget):
         return super().port_type(port)
 
     @override
-    def preamble_lines(self, needs: PreambleNeeds) -> list[str]:
-        lines = super().preamble_lines(needs)
-        if needs.uses_math:
-            lines += [definition for _, definition in MATH_HELPERS.values()]
-        return lines
-
-    @override
     def target_options(
         self, needs: PreambleNeeds
     ) -> tuple[tuple[str, str], ...]:
@@ -176,15 +151,6 @@ class UcTarget(CTarget):
                 )
             lines.append(_MAIN_ATTRIBUTES[key].format(value))
         lines += ['@logging("ERROR")', "main reactor {"]
-        sources = [
-            name for name, _ in program.support_files if name.endswith(".c")
-        ]
-        if sources:
-            lines += [
-                "  preamble {=",
-                *(f'    #include "{name}"' for name in sources),
-                "  =}",
-            ]
         return lines
 
     @override
@@ -267,3 +233,70 @@ class UcTarget(CTarget):
     @override
     def log(self, message: str) -> Stmt:
         return Stmt(f'LF_DEBUG(ENV, "%s", {c_string(message)});')
+
+
+_CMAKE_LISTS: Final = """\
+cmake_minimum_required(VERSION 3.20)
+project({main} LANGUAGES C)
+
+if(NOT DEFINED ENV{{REACTOR_UC_PATH}})
+  message(FATAL_ERROR "set REACTOR_UC_PATH to a reactor-uc checkout")
+endif()
+set(SYSMLC_LFC "$ENV{{REACTOR_UC_PATH}}/ulf/build/install/lf-cli/bin/lfc")
+
+# reactor-uc's compiler writes its own CMakeLists.txt (runtime, micromode and
+# logging wiring) into src-gen/{main}; run it again when the program changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${{CMAKE_CURRENT_SOURCE_DIR}}/{main}.ulf")
+execute_process(
+  COMMAND "${{SYSMLC_LFC}}" -n "${{CMAKE_CURRENT_SOURCE_DIR}}/{main}.ulf"
+  WORKING_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}"
+  RESULT_VARIABLE SYSMLC_LFC_RESULT)
+if(NOT SYSMLC_LFC_RESULT EQUAL 0)
+  message(FATAL_ERROR "lfc -n failed on {main}.ulf (${{SYSMLC_LFC_RESULT}})")
+endif()
+
+add_subdirectory("${{CMAKE_CURRENT_SOURCE_DIR}}/src-gen/{main}" lf)
+target_link_libraries({main} PRIVATE m)
+{sources}set_target_properties({main} PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/bin")
+"""
+
+
+def cmake_lists(main: str, files: Sequence[str] = ()) -> str:
+    """The top-level ``CMakeLists.txt`` for ``<main>.ulf`` beside it.
+
+    The file wraps the build reactor-uc's compiler (``lfc -n``) generates
+    under ``src-gen/<main>``: that build wires the runtime, the micromode
+    extension and the ``@logging`` level, which reactor-uc's own
+    ``lf_build_generated_code`` helper does not for modal programs. The
+    wrapper only adds what rosetta's programs need on top: the math
+    library, and the external C sources. Configure with ``REACTOR_UC_PATH``
+    set to a reactor-uc checkout whose compiler is built; the executable
+    lands in ``bin/<main>`` beside the program, where ``lfc`` itself puts
+    it.
+
+    The external C sources are compiled as ordinary sources of the
+    program's target instead of being ``#include``-d in the main reactor's
+    preamble: their headers stay included by the program's preamble, so no
+    symbol is defined twice, and the sources get the build's own warnings
+    and include path. The caller must then not include them elsewhere.
+
+    Args:
+        main: The main reactor's name, the ``.ulf`` file's stem (also the
+            CMake target lfc defines); a valid C identifier, as lfc
+            requires, and not a reactor's name up to case.
+        files: The program's support and external files, as paths
+            relative to the directory of the ``CMakeLists.txt`` (and the
+            ``.ulf``); its ``.c`` sources are compiled into the program, in
+            this order.
+
+    Returns:
+        The file's text.
+    """
+    sources = [name for name in files if name.endswith(".c")]
+    listed = "".join(
+        f'  "${{CMAKE_CURRENT_SOURCE_DIR}}/{source}"\n' for source in sources
+    )
+    block = f"target_sources({main} PRIVATE\n{listed})\n" if sources else ""
+    return _CMAKE_LISTS.format(main=main, sources=block)

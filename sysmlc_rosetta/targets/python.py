@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from sysmlc_rosetta.statements import Body
 
 _INDENT: Final = "    "
+#: The levels ``--log-level`` accepts for the program's state trace.
+LOG_LEVELS: Final = ("debug", "info", "warning", "error")
 _ARRIVAL: Final = "(lf.time.logical_elapsed(), lf.tag().microstep)"
 
 
@@ -35,6 +37,10 @@ class PythonTarget(LfTarget):
     name = "python"
     lf_name = "Python"
     foreign_languages = ("python",)
+    #: Level of the state trace the program prints (``--log-level``). The
+    #: trace is logged at DEBUG, so ``"debug"`` shows it and higher levels
+    #: hide it.
+    log_level = "debug"
 
     # -- program --
 
@@ -55,7 +61,10 @@ class PythonTarget(LfTarget):
 
     @override
     def preamble_lines(self, needs: PreambleNeeds) -> list[str]:
-        return needs.preamble_lines()
+        lines = needs.preamble_lines()
+        if needs.uses_logging:
+            lines += _trace_setup(self.log_level)
+        return lines
 
     @override
     def target_options(
@@ -213,7 +222,7 @@ class PythonTarget(LfTarget):
 
     @override
     def log(self, message: str) -> Stmt:
-        return Stmt(f'logging.debug("{message}")')
+        return Stmt(f'_sysmlc_log.debug("{message}")')
 
     @override
     def check(self, condition: str, message: str) -> Stmt:
@@ -524,3 +533,26 @@ class PythonTarget(LfTarget):
     @override
     def clear_wait(self, wait: str) -> Stmt:
         return Stmt(f"self.{wait} = None")
+
+
+def _trace_setup(level: str) -> list[str]:
+    """Set up the ``sysmlc`` logger that prints the program's state trace.
+
+    Each line is prefixed with the logical time, e.g.
+    ``[ 4.00 s] entered TrafficLight.showGreen``. A level set before this
+    preamble runs (by a hand-written program importing the generated
+    reactors) is kept.
+    """
+    return [
+        "class _SysmlcTrace(logging.Formatter):",
+        "    def format(self, record):",
+        '        return f"[{lf.time.logical_elapsed() / 1e9:5.2f} s] '
+        '{record.getMessage()}"',
+        '_sysmlc_log = logging.getLogger("sysmlc")',
+        "if not _sysmlc_log.handlers:",
+        "    _sysmlc_log.addHandler(logging.StreamHandler())",
+        "    _sysmlc_log.handlers[0].setFormatter(_SysmlcTrace())",
+        "    _sysmlc_log.propagate = False",
+        "if _sysmlc_log.level == logging.NOTSET:",
+        f"    _sysmlc_log.setLevel(logging.{level.upper()})",
+    ]

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12, <4"
 
 [[package]]
@@ -1264,13 +1264,19 @@ wheels = [
 [[package]]
 name = "sysmlc"
 version = "0.0.0"
-source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#c93c8e610bc42e1f20acc722bff696d664b8c8f1" }
+source = { git = "https://github.com/glacier-project/sysmlc-core?branch=main#69e296f74c163e58395e261742288c12ab4904cf" }
 dependencies = [
     { name = "pyyaml" },
     { name = "syside" },
+    { name = "sysmlc-library" },
     { name = "tree-sitter" },
     { name = "tree-sitter-c" },
 ]
+
+[[package]]
+name = "sysmlc-library"
+version = "0.1.0"
+source = { git = "https://github.com/glacier-project/sysmlc-library?branch=main#bd8a5da8b0794baf11a8c197660e1d794992d5d5" }
 
 [[package]]
 name = "sysmlc-models"

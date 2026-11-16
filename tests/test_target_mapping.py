@@ -122,7 +122,7 @@ def test_nested_mode_forwards_only_child_inputs() -> None:
     ] == [("Advance", "c_work.Advance")]
 
 
-def test_constraints_run_at_startup_and_after_assignments() -> None:
+def test_constraints_run_at_startup_and_after_writes() -> None:
     program = _build("Counter")
     (startup,) = [
         reaction
@@ -136,7 +136,12 @@ def test_constraints_run_at_startup_and_after_assignments() -> None:
         "positiveLimit",
     ]
     run = _mode(program, "run")
-    assert run.reactions[1].body[-2:] == startup.body
+    # Only `value` is written; its check follows the write, and the check on
+    # the never-written `limit` stays at startup.
+    body = run.reactions[1].body
+    write = next(i for i, line in enumerate(body) if "self.value =" in line)
+    assert body[write + 1].strip() == startup.body[0]
+    assert not any(startup.body[1] in line for line in body)
     assert not any(line.startswith("assert ") for line in run.reactions[0].body)
 
 

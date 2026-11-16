@@ -29,7 +29,9 @@ SYSIDE_LICENSE_KEY=your-key-here
 ```
 
 Compiling and running the generated programs additionally needs `lfc` and
-Java; without them the `lf`-marked tests are skipped.
+Java; without them the `lf`-marked tests are skipped. The reactor-uc ones
+also need CMake and `REACTOR_UC_PATH` set to a reactor-uc checkout with its
+compiler built.
 
 ## Installation
 
@@ -75,9 +77,37 @@ whose programs run on reactor-c and never allocate memory themselves, or
 ```bash
 uv run sysmlc rosetta build showcase/microwave --target c -o out/
 uv run sysmlc rosetta build showcase/microwave --target uc -o out/
-REACTOR_UC_PATH=~/reactor-uc ~/reactor-uc/ulf/build/install/lf-cli/bin/lfc \
-  out/microwaveSystem.ulf
+export REACTOR_UC_PATH=~/reactor-uc
+cmake -S out -B out/build && cmake --build out/build
+out/bin/microwaveSystem
 ```
+
+The uC output includes a `CMakeLists.txt` that runs reactor-uc's compiler
+(`lfc -n`) and builds the program into `out/bin/`, compiling external C
+sources and linking the math library, so `sin`, `cos` and `tan` work on
+every target. reactor-uc names the main reactor after the file, so a bare
+state machine's program is written as `<reactor>Main.ulf` and builds
+`bin/<reactor>Main`.
+
+Numeric attributes can state a width by subsetting a feature of the
+`FixedWidthScalarValues` library from
+[sysmlc-library](https://github.com/glacier-project/sysmlc-library),
+installed with the core:
+
+```sysml
+private import FixedWidthScalarValues::*;
+attribute count :> uint8 := 0;
+```
+
+The C targets use the matching `<stdint.h>` type (`uint8_t`) or `float`;
+Python keeps `int` and `float`. Rosetta warns at build time, on every
+target, where a value may not fit where it is stored or computed; an
+asserted literal bound such as `assert constraint { count <= 200 }`
+narrows the range and silences the warning. Asserted constraints are
+checked right after each write to an attribute they mention, so related
+attributes must be written in an order that keeps every step valid.
+[Section 16 of the mapping](docs/rosetta-mapping.md#16-fixed-width-numeric-types)
+has the full rules.
 
 Two flags shape the generated program's `target` header, and apply to
 top-level part usages only:

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,10 @@ class Stmt:
             contained-reactor inputs, logical actions.
         assigns: Bound root attributes the statement assigns directly (a
             chained target such as ``pt.x`` is not recorded).
+        assigns_through: Bound root attributes whose field the statement
+            assigns through a chained target (``pt`` for ``pt.x``). Kept
+            apart from ``assigns``, which drives change notifications;
+            asserted-constraint checks trigger on both.
         local: ``(type, name)`` of the local the statement assigns, for a
             language that declares locals: the first assignment in a block
             and its enclosing blocks becomes the declaration.
@@ -38,6 +42,7 @@ class Stmt:
     text: str
     writes: frozenset[str] = field(default_factory=frozenset)
     assigns: frozenset[str] = field(default_factory=frozenset)
+    assigns_through: frozenset[str] = field(default_factory=frozenset)
     local: tuple[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -91,13 +96,6 @@ def writes(body: Body) -> frozenset[str]:
     )
 
 
-def assigns(body: Body) -> frozenset[str]:
-    """Return every bound attribute some statement in ``body`` assigns."""
-    return frozenset(
-        name for stmt in iter_statements(body) for name in stmt.assigns
-    )
-
-
 def insert_after_assignments(
     body: Body, names: frozenset[str], node: Node
 ) -> tuple[Body, bool]:
@@ -114,27 +112,62 @@ def insert_after_assignments(
     Returns:
         The rewritten body and whether anything was inserted.
     """
+    return _insert_after(
+        body, lambda stmt: (node,) if stmt.assigns & names else ()
+    )
+
+
+def insert_checks_after_writes(
+    body: Body, checks: Sequence[tuple[Node, frozenset[str]]]
+) -> tuple[Body, bool]:
+    """Insert checks right after every write to an attribute they mention.
+
+    After a statement that assigns an attribute, directly or through a
+    chained target, every check mentioning it lands in the same block, in
+    the order of ``checks`` and each once: a statement writing two
+    attributes of one constraint gets that constraint's check once.
+
+    Args:
+        body: The body to rewrite.
+        checks: Each check with the attribute names it mentions.
+
+    Returns:
+        The rewritten body and whether anything was inserted.
+    """
+    return _insert_after(
+        body,
+        lambda stmt: [
+            check
+            for check, names in checks
+            if names & (stmt.assigns | stmt.assigns_through)
+        ],
+    )
+
+
+def _insert_after(
+    body: Body, due: Callable[[Stmt], Sequence[Node]]
+) -> tuple[Body, bool]:
+    """Insert ``due(stmt)`` right after each statement, in its block."""
     out: list[Node] = []
     changed = False
     for item in body:
         if isinstance(item, If):
             branches: list[tuple[str, Body]] = []
             for condition, branch in item.branches:
-                new_branch, inner = insert_after_assignments(
-                    branch, names, node
-                )
+                new_branch, inner = _insert_after(branch, due)
                 branches.append((condition, new_branch))
                 changed |= inner
             orelse = item.orelse
             if orelse is not None:
-                orelse, inner = insert_after_assignments(orelse, names, node)
+                orelse, inner = _insert_after(orelse, due)
                 changed |= inner
             out.append(replace(item, branches=tuple(branches), orelse=orelse))
             continue
         out.append(item)
-        if isinstance(item, Stmt) and item.assigns & names:
-            out.append(node)
-            changed = True
+        if isinstance(item, Stmt):
+            nodes = due(item)
+            out.extend(nodes)
+            changed |= bool(nodes)
     return tuple(out), changed
 
 

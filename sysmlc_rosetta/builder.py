@@ -28,7 +28,7 @@ from sysmlc.semantics.statemachine.facts import (
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
 
-from sysmlc_rosetta.c_codegen import LfCCodeGen, LfUcCodeGen
+from sysmlc_rosetta.c_codegen import LfCCodeGen
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
@@ -70,12 +70,13 @@ from sysmlc_rosetta.serialize import render_duration
 from sysmlc_rosetta.statements import (
     If,
     Pass,
-    assigns,
     insert_after_assignments,
+    insert_checks_after_writes,
     nest,
     stored,
 )
 from sysmlc_rosetta.targets.base import CLEANUP
+from sysmlc_rosetta.width import literal_bounds
 
 if TYPE_CHECKING:
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
@@ -91,8 +92,33 @@ type LfCodeGen = LfPythonCodeGen | LfCCodeGen
 _CODEGENS: dict[str, type[LfCodeGen]] = {
     "python": LfPythonCodeGen,
     "c": LfCCodeGen,
-    "uc": LfUcCodeGen,
+    "uc": LfCCodeGen,
 }
+
+
+def _referenced_names(expr: syside.Expression) -> frozenset[str]:
+    """Return the names of every feature ``expr`` reads, nested ones too.
+
+    A reference whose referent is itself an expression (the lazily
+    evaluated branches of ``if ? :``) is followed. A feature chain
+    (``p.v``) contributes its head operand (``p``), the attribute of the
+    scope that a write to ``p`` or ``p.v`` assigns.
+    """
+    names: set[str] = set()
+    pending: list[syside.Expression] = [expr]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, syside.FeatureReferenceExpression):
+            ref = node.referent
+            if isinstance(ref, syside.Expression):
+                pending.append(ref)
+            elif ref is not None and ref.name is not None:
+                names.add(ref.name)
+            continue
+        operands = getattr(node, "operands", None)
+        if operands is not None:
+            pending.extend(operands.collect())
+    return frozenset(names)
 
 
 def _scope_of(path: str) -> str:
@@ -313,6 +339,8 @@ class RosettaBuilder:
             raise UnsupportedConstructError(
                 "the state definition pushed no root state"
             )
+        # Before anything renders: the bounds narrow the width analysis.
+        self._needs.width.bounds.update(literal_bounds(self._constraints))
         self._attribute_names = frozenset(
             binding.name for binding in self._attributes
         )
@@ -394,11 +422,15 @@ class RosettaBuilder:
 
         Each root-scope ``assert constraint`` renders as the target's check
         placed (1) in a dedicated startup reaction — so a bad initial (or
-        overridden) value aborts immediately — and (2) at the end of every
-        reaction body that assigns to a bound attribute. The negated form
-        ``assert not constraint`` checks the negated expression.
+        overridden) value aborts immediately — and (2) right after every
+        statement that assigns an attribute the constraint's expression
+        mentions, in the same block, so the constraint holds at every point
+        of the run. A statement writing several attributes of one constraint
+        gets its check once, and several checks run in declaration order.
+        The negated form ``assert not constraint`` checks the negated
+        expression.
         """
-        checks: list[Node] = []
+        checks: list[tuple[Node, frozenset[str]]] = []
         for index, fact in enumerate(self._constraints):
             constraint = LfConstraint(
                 self._name, index, fact.scope, fact.name, self._source_qn
@@ -410,17 +442,23 @@ class RosettaBuilder:
             rendered = self._codegen.render_expression(fact.expression)
             if fact.is_negated:
                 rendered = self._target.negate(rendered)
-            checks.append(self._target.check(rendered, message))
+            check = self._target.check(rendered, message)
+            names = _referenced_names(fact.expression) & self._attribute_names
+            checks.append((check, names))
         if not checks:
             return machine
 
         def patched(reaction: Reaction) -> Reaction:
-            if not assigns(reaction.body) & self._attribute_names:
+            new_body, changed = insert_checks_after_writes(
+                reaction.body, checks
+            )
+            if not changed:
                 return reaction
-            return replace(reaction, body=stored((*reaction.body, *checks)))
+            return replace(reaction, body=stored(new_body))
 
         reactions = tuple(patched(r) for r in machine.reactions)
-        reactions += (Reaction(("startup",), (), stored(tuple(checks))),)
+        startup = tuple(check for check, _ in checks)
+        reactions += (Reaction(("startup",), (), stored(startup)),)
         modes = tuple(
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
@@ -2841,6 +2879,7 @@ def finalize(
     """
     companion = needs.companion_module_lines()
     options = program.target_options + needs.target.target_options(needs)
+    needs.width.report()
     for event_name, port in sorted(needs.undeliverable_sends):
         logger.warning(
             "machine %r: send %r via %r has no connected peer; the signal "

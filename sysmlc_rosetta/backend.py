@@ -17,7 +17,9 @@ from sysmlc_rosetta.codegen import PreambleNeeds
 from sysmlc_rosetta.parts import build_part_program, compose_exhibits
 from sysmlc_rosetta.program import LfProgram
 from sysmlc_rosetta.serialize import to_lf
-from sysmlc_rosetta.targets import TARGETS
+from sysmlc_rosetta.targets import TARGETS, PythonTarget
+from sysmlc_rosetta.targets.python import LOG_LEVELS
+from sysmlc_rosetta.targets.uc import cmake_lists
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -42,14 +44,20 @@ class RosettaBackend(Backend):
     Args:
         target: The LF target language of the generated programs, a key of
             :data:`~sysmlc_rosetta.targets.TARGETS`, or None.
+        log_level: Level of the state trace a Python program prints, one of
+            :data:`~sysmlc_rosetta.targets.python.LOG_LEVELS`.
 
     Raises:
         ValueError: If ``target`` is unknown.
     """
 
-    def __init__(self, target: str | None = None) -> None:
+    def __init__(
+        self, target: str | None = None, log_level: str = "debug"
+    ) -> None:
         if target is not None and target not in TARGETS:
             raise ValueError(f"unknown LF target {target!r}")
+        if log_level not in LOG_LEVELS:
+            raise ValueError(f"unknown log level {log_level!r}")
         languages = (
             sorted(
                 {lang for t in TARGETS.values() for lang in t.foreign_languages}
@@ -67,10 +75,11 @@ class RosettaBackend(Backend):
             foreign_artifact_languages=languages,
         )
         self.target = target or "python"
+        self.log_level = log_level
 
     @override
     def build_options(self) -> tuple[BuildOption, ...]:
-        """Rosetta's ``--target``: the LF target language."""
+        """Rosetta's ``--target`` and ``--log-level``."""
         return (
             BuildOption(
                 "target",
@@ -78,16 +87,29 @@ class RosettaBackend(Backend):
                 choices=tuple(TARGETS),
                 default="python",
             ),
+            BuildOption(
+                "log-level",
+                "level of the state trace a Python program prints; "
+                "the trace is at debug",
+                choices=LOG_LEVELS,
+                default="debug",
+            ),
         )
 
     @override
     def configured(self, options: Mapping[str, str | None]) -> RosettaBackend:
-        """Return a backend generating for the selected ``--target``."""
-        return RosettaBackend(options.get("target") or "python")
+        """Return a backend for the selected ``--target`` and ``--log-level``."""
+        return RosettaBackend(
+            options.get("target") or "python",
+            options.get("log-level") or "debug",
+        )
 
     def _new_target(self) -> LfTarget:
         """A fresh target object; one serves one built program."""
-        return TARGETS[self.target]()
+        target = TARGETS[self.target]()
+        if isinstance(target, PythonTarget):
+            target.log_level = self.log_level
+        return target
 
     def _own(
         self, external: list[ForeignArtifact] | None
@@ -238,20 +260,24 @@ class RosettaBackend(Backend):
         The program is ``<basename>.lf`` (``.ulf`` on uC target), followed
         by its companion types file: the Python module
         ``<types_module_name>.py`` when the program has one, or the C
-        targets' header.
+        targets' header. The uC target adds the ``CMakeLists.txt`` that
+        builds it (see :func:`~sysmlc_rosetta.targets.uc.cmake_lists`).
 
         Args:
             artifact: The program returned by :meth:`build`.
             options: The formats and the base filename; the basename
-                defaults to the reactor name. ``output_dir`` is not used.
+                defaults to the reactor name. On uC the reactor name (given or
+                default) becomes ``<reactor>Main``, as reactor-uc names the
+                main reactor after the file. ``output_dir`` is not used.
 
         Returns:
             The generated files, with paths relative to the output directory.
 
         Raises:
             SerializationError: If ``artifact`` is not an
-                :class:`~sysmlc_rosetta.program.LfProgram`, or a format other
-                than ``"lf"`` is requested.
+                :class:`~sysmlc_rosetta.program.LfProgram`, a format other
+                than ``"lf"`` is requested, or a uC basename equals a
+                reactor name up to case.
         """
         if not isinstance(artifact, LfProgram):
             raise SerializationError("expected an LfProgram artifact")
@@ -260,6 +286,19 @@ class RosettaBackend(Backend):
             if fmt != "lf":
                 raise SerializationError(f"unsupported format: {fmt!r}")
         basename = options.basename or artifact.reactor.name
+        if artifact.target == "uc":
+            # The CLI passes the element's name as the basename, which is
+            # the reactor's name: that spelling means "the default".
+            if basename == artifact.reactor.name:
+                basename = f"{basename}Main"
+            clash = {r.name.lower() for r in artifact.reactors}
+            if basename.lower() in clash:
+                raise SerializationError(
+                    f"the basename {basename!r} equals a reactor name up to "
+                    "case: reactor-uc's compiler names the main reactor "
+                    "after the file and rejects the clash; choose another "
+                    "basename"
+                )
         extension = TARGETS[artifact.target].extension
         program = GeneratedFile(
             PurePosixPath(f"{basename}.{extension}"),
@@ -275,6 +314,14 @@ class RosettaBackend(Backend):
                 GeneratedFile(
                     PurePosixPath(f"{artifact.types_module_name}.py"),
                     "\n".join(artifact.types_module_lines) + "\n",
+                )
+            )
+        if artifact.target == "uc":
+            files = [name for name, _ in artifact.support_files]
+            companions.append(
+                GeneratedFile(
+                    PurePosixPath("CMakeLists.txt"),
+                    cmake_lists(basename, files),
                 )
             )
         return GeneratedOutput((program, *companions))
