@@ -4,7 +4,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, override
 
 import syside
-from sysmlc.codegen.expression import ExpressionCodeGen, _target_base_features
+from sysmlc.codegen.expression import ExpressionCodeGen
 from sysmlc.codegen.python import (
     PythonCodeGen,
     payload_fields,
@@ -306,29 +306,14 @@ class LfActions(ExpressionCodeGen):
                 the bound attribute set.
             ValueError: If the assignment target has no resolved feature.
         """
-        if self._attribute_slot is not None:
-            ref = assign.referent
-            if ref is None or ref.name is None:
-                raise ValueError("assignment has no resolved target")
-            if assign.target_argument is not None:
-                features = _target_base_features(assign.target_argument)
-                slot = self._slot(features[0])
-                segments = [slot]
-                for feature in features[1:]:
-                    if feature.name is None:
-                        raise ValueError(
-                            "assignment base has an unnamed feature"
-                        )
-                    segments.append(feature.name)
-                path = ".".join((*segments, ref.name))
-                self._require_attribute(slot, assign)
-                return self._attribute_reference(path)
-            slot = self._slot(ref)
-            self._require_attribute(slot, assign)
-            return self._attribute_reference(slot)
         path = super().render_assignment_target(assign)
         self._require_attribute(path.split(".")[0], assign)
         return self._attribute_reference(path)
+
+    @override
+    def _assignment_base_name(self, feature: syside.Feature) -> str:
+        """Use the declaration's storage slot as the assignment root."""
+        return self._slot(feature)
 
     def render_statements(self, action: syside.ActionUsage) -> Body:
         """Translate an assignment or send to statements.

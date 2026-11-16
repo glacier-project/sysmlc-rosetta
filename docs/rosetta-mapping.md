@@ -526,9 +526,10 @@ re-entry initializes them again while preserving machine attributes. This
 implements the initial feature value's owning-occurrence startShot lifetime
 (KerML 8.4.4.11). Supported initializers are the admitted literal subset below
 and structures materialized from such field defaults. Whole-value replacement
-uses the existing assignment checks. State-local dynamic expressions, missing
-initial values, input/output-directed declarations and references outside the
-active declaring state or its descendants are diagnosed.
+uses the existing assignment checks. Undirected and `inout` locals use this
+activation storage; `in` and `out` locals are diagnosed. State-local dynamic
+expressions, missing initial values and references outside the active declaring
+state or its descendants are also diagnosed.
 
 Structured field defaults support both explicit attribute redefinitions,
 such as `attribute :>> count default 2;`, and shorthand redefinitions such as
