@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from sysmlc.semantics.statemachine.facts import AttributeBinding
 
     from sysmlc_rosetta.codegen import PreambleNeeds
-    from sysmlc_rosetta.program import Reactor
+    from sysmlc_rosetta.program import Parameter, Reactor
     from sysmlc_rosetta.statements import Body, Node
 
 _INDENT: Final = "  "
@@ -101,6 +101,7 @@ class CTarget(LfTarget):
     def __init__(self) -> None:
         self.types = CTypes()
         self._mode_ids: dict[str, int] = {}
+        self._contexts: dict[str, tuple[str, ...]] = {}
 
     # -- program --
 
@@ -144,16 +145,11 @@ class CTarget(LfTarget):
                 f"names {reserved!r} in {reactor.name!r} are C keywords or "
                 "names the generated C uses; rename them for the C target"
             )
+        types = dict(reactor.port_types)
         return replace(
             reactor,
             port_types=tuple(
-                (
-                    port,
-                    "bool"
-                    if port in reactor.boolean_ports
-                    else self.port_type(port),
-                )
-                for port in ports
+                (port, types.get(port, self.port_type(port))) for port in ports
             ),
             actions=self._typed(reactor.actions),
             modes=tuple(
@@ -162,6 +158,7 @@ class CTarget(LfTarget):
             ),
         )
 
+    @override
     def port_type(self, port: str) -> str:
         """The C type of one of rosetta's generated ports, by its name."""
         if port.endswith(OUTPUT_PORT):
@@ -199,7 +196,11 @@ class CTarget(LfTarget):
             for artifact in needs.external
             if artifact.lang == "c_h"
         ]
-        return [*lines, *PROTOCOL_TYPES]
+        return [
+            *lines,
+            *PROTOCOL_TYPES,
+            *(line for context in self._contexts.values() for line in context),
+        ]
 
     @override
     def target_options(
@@ -234,6 +235,32 @@ class CTarget(LfTarget):
         """The types header every program ships: ``(name, text)``."""
         header = self.types.header_lines(f"{needs.types_module}_H".upper())
         return f"{needs.types_module}.h", "\n".join(header) + "\n"
+
+    @override
+    def register_context(
+        self, name: str, attributes: Sequence[Parameter | StateVar]
+    ) -> str:
+        ctype = f"sysmlc_{name}_data_t"
+        self._contexts[ctype] = (
+            "typedef struct {",
+            *(f"  {a.type}* {a.name};" for a in attributes),
+            f"}} {ctype};",
+        )
+        return ctype
+
+    @override
+    def context_value(self, ctype: str | None, names: Sequence[str]) -> str:
+        fields = ", ".join(f".{name} = &self->{name}" for name in names)
+        return f"({ctype}){{ {fields} }}"
+
+    @override
+    def context_reference(self, slot: str, name: str) -> str:
+        base, dot, tail = name.partition(".")
+        return f"(*self->{slot}.{base}){dot}{tail}"
+
+    @override
+    def context_binding(self, slot: str, port: str) -> Stmt:
+        return Stmt(f"self->{slot} = {port}->value;")
 
     # -- declarations --
 

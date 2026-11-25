@@ -289,7 +289,7 @@ def test_generated_port_and_action_roles_ignore_colliding_signal_type() -> None:
     reactor = Reactor(
         name="Machine",
         outputs=("exit_0_01",),
-        boolean_ports=("exit_0_01",),
+        port_types=(("exit_0_01", "bool"),),
         actions=(
             LogicalAction("after_idle_act"),
             LogicalAction("renamed", signal="after_idle"),

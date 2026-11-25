@@ -118,8 +118,6 @@ class Reactor:
     ``port_types`` gives each input and output its C type; empty on the
     Python target, whose ports are untyped. Ports are names elsewhere in the
     program, so their types sit beside them rather than on a port object.
-    ``boolean_ports`` preserves the role of generated escape ports when
-    their assigned names also identify payload types elsewhere.
     """
 
     name: str
@@ -134,7 +132,6 @@ class Reactor:
     modes: tuple[Mode, ...] = ()
     trailing_reactions: tuple[Reaction, ...] = ()
     port_types: tuple[tuple[str, str], ...] = ()
-    boolean_ports: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -65,6 +65,16 @@ class UcTarget(CTarget):
     shared_state_namespace = True
     unqualified_port_references = True
 
+    @override
+    def context_state(self, slot: str, ctype: str | None) -> StateVar:
+        """Use a compound literal for context assignment in uC constructors."""
+        state = super().context_state(slot, ctype)
+        return (
+            replace(state, init=f"({ctype}){{0}}")
+            if ctype is not None
+            else state
+        )
+
     # -- program --
 
     @override
