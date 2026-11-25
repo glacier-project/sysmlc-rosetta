@@ -39,6 +39,29 @@ package StateNames {
         transition first 'Outer.1' accept after 0.005 [s] then 'Finished.1';
     }
 
+    state def LeadingPunctuation {
+        entry; then '.Outer';
+        state '.Outer' {
+            entry; then 'Inner.1';
+            state 'Inner.1';
+            state 'Inner.2';
+            transition first 'Inner.1' accept after 0.001 [s] then 'Inner.2';
+            transition first 'Inner.2' accept after 0.001 [s] then done;
+        }
+        state 'Finished.1';
+        transition first '.Outer' then 'Finished.1';
+        transition first '.Outer' accept after 0.005 [s] then 'Finished.1';
+    }
+
+    state def CKeywords {
+        entry; then idle;
+        state idle;
+        state _Bool;
+        state EOF;
+        transition first idle accept after 0.001 [s] then _Bool;
+        transition first _Bool accept after 0.001 [s] then EOF;
+    }
+
     state def Collision {
         entry; then 'S1.1';
         state 'S1.1';

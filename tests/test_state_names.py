@@ -157,15 +157,15 @@ def test_lifecycle_references_use_assigned_variable_names(
     source = to_lf(program)
     variables = [var.name for var in program.reactor.state_vars]
     assert len(variables) == len(set(variables))
-    assert "_Outer_pending_01" in variables
-    assert "_Outer_sel_01" in variables
+    assert "state_Outer_pending" in variables
+    assert "state_Outer_sel" in variables
     assert (
-        "_Outer_busy_01" in variables
+        "state_Outer_busy" in variables
         if target == "python"
-        else "_Outer_c_Outer_busy_01" in variables
+        else "state_Outer_c_Outer_busy" in variables
     )
-    assert "_Outer_pending_01" in source
-    assert "_Outer_sel_01" in source
+    assert "state_Outer_pending" in source
+    assert "state_Outer_sel" in source
 
 
 @pytest.mark.parametrize("target", ["python", "c", "uc"])

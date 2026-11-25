@@ -52,7 +52,9 @@ C_RESERVED: Final = frozenset(
         "tag_t", "instant_t", "interval_t", "NEVER", "FOREVER", "NEVER_TAG",
         "FOREVER_TAG", "NSEC", "NSECS", "USEC", "USECS", "MSEC", "MSECS",
         "SEC", "SECS", "MINUTE", "MINUTES", "HOUR", "HOURS", "DAY", "DAYS",
-        "WEEK", "WEEKS", "printf", "fprintf", "stderr", "exit",
+        "WEEK", "WEEKS", "printf", "fprintf", "stderr", "exit", "EOF",
+        "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
+        "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
     }
 )  # fmt: skip
 # Prefixes of reactor-c's and rosetta's own generated names.

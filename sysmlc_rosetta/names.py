@@ -26,8 +26,10 @@ _LF_KEYWORDS = frozenset(
 def identifier(name: str) -> str:
     """Return a portable base spelling for a source name."""
     name = re.sub(r"[^a-zA-Z0-9_]", "_", name) or "state"
-    if name[0].isdigit():
-        name = "state_" + name
+    if name == "_":
+        name = "state"
+    if name[0].isdigit() or name.startswith("__") or re.match(r"_[A-Z]", name):
+        name = "state_" + name.lstrip("_")
     if is_reserved(name) and is_reserved(name + "_01"):
         name = "state_" + name
     return name

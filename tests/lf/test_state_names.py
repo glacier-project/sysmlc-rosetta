@@ -9,6 +9,8 @@ from sysmlc.backends.base import OutputOptions
 from sysmlc.sysml.loading import load_model
 
 from sysmlc_rosetta.backend import RosettaBackend
+from sysmlc_rosetta.program import LfProgram
+from sysmlc_rosetta.serialize import to_lf
 from tests.conftest import FIXTURES_DIR
 from tests.test_lf_harness import run_machine
 
@@ -20,6 +22,11 @@ pytestmark = pytest.mark.lf
     ("machine", "expected"),
     [
         ("Flat", ["S1.1", "S1.2"]),
+        ("CKeywords", ["idle", "_Bool", "EOF"]),
+        (
+            "LeadingPunctuation",
+            [".Outer.Inner.1", ".Outer.Inner.2", ".Outer.done", "Finished.1"],
+        ),
         ("PriorityCollision", ["S1.1", "S1_1", "S1_1_01"]),
         ("GeneratedTimerCollision", ["S1.1", "S1", "finished"]),
         ("InternalCollision", ["Outer.Inner", "Outer.done", "Finished"]),
@@ -132,3 +139,28 @@ def test_dotted_states_compile_and_execute(
     # A reactor port exposes the final value at each tag: initial child
     # entry replaces its parent's announcement at the same tag.
     assert states == expected
+
+
+@pytest.mark.parametrize("target", ["python", "c"])
+@pytest.mark.parametrize("machine", ["CKeywords", "LeadingPunctuation"])
+def test_generated_program_validates_directly(
+    tmp_path: Path, target: str, machine: str
+) -> None:
+    backend = RosettaBackend(target=target)
+    program = backend.build(
+        load_model(FIXTURES_DIR / "state-names"), f"StateNames::{machine}"
+    )
+    assert isinstance(program, LfProgram)
+    src = tmp_path / "src"
+    src.mkdir()
+    backend.write(program, OutputOptions(output_dir=src))
+    source = src / "Standalone.lf"
+    source.write_text(to_lf(program))
+    result = subprocess.run(
+        ["lfc", "--no-compile", str(source)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

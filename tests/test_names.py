@@ -31,7 +31,11 @@ def test_fixed_reservations_and_case_insensitive_reactor_classes() -> None:
         ("class", "class_01"),
         ("NONE", "NONE_01"),
         ("True", "True_01"),
-        (".", "__01"),
+        (".", "state_01"),
+        ("_Bool", "state_Bool"),
+        ("_Atomic", "state_Atomic"),
+        ("EOF", "EOF_01"),
+        ("__Outer_pending", "state_Outer_pending"),
         ("1.ready", "state_1_ready"),
     ],
 )

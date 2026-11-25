@@ -84,6 +84,8 @@ from sysmlc_rosetta.targets.base import CLEANUP
 from sysmlc_rosetta.width import literal_bounds
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.statements import Body, Node
@@ -1025,6 +1027,8 @@ class RosettaBuilder:
             CHANGE_ACT,
             "_entered",
             "_sysmlc_types",
+            "_sysmlc_log",
+            "_SysmlcTrace",
             "lf",
             "logging",
             "math",
@@ -1057,15 +1061,8 @@ class RosettaBuilder:
             }
             external_by_scope[scope] = (
                 *signals,
-                *(
-                    f"{sig}_act"
-                    for sig in self._self_sched_by_scope.get(scope, ())
-                ),
-                *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
-                *(
-                    f"{sig}_origin"
-                    for sig in self._accepted.get(scope, {})
-                    if (scope, sig) in self._origin
+                *self._signal_companions(
+                    scope, self._self_sched_by_scope.get(scope, ())
                 ),
             )
         shared_external = {
@@ -1488,6 +1485,20 @@ class RosettaBuilder:
                     )
         return regions
 
+    def _signal_companions(
+        self, scope: str, scheduled: Iterable[str]
+    ) -> tuple[str, ...]:
+        """Return fixed protocol names derived from source signal channels."""
+        return (
+            *(f"{sig}_act" for sig in scheduled),
+            *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
+            *(
+                f"{sig}_origin"
+                for sig in self._accepted.get(scope, {})
+                if (scope, sig) in self._origin
+            ),
+        )
+
     def _check_names(
         self,
         scope: str,
@@ -1514,13 +1525,7 @@ class RosettaBuilder:
             ),
             "_sysmlc_types",
             *((CHANGE_ACT,) if self._has_when else ()),
-            *(f"{sig}_act" for sig in sent),
-            *(f"{sig}_consumed" for sig in self._consumed.get(scope, {})),
-            *(
-                f"{sig}_origin"
-                for sig in self._accepted.get(scope, {})
-                if (scope, sig) in self._origin
-            ),
+            *self._signal_companions(scope, sent),
         }
         conflicts = channels & fixed
         if conflicts:
