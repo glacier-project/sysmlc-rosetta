@@ -11,6 +11,7 @@ from sysmlc.sysml.loading import load_model
 from sysmlc_rosetta.backend import RosettaBackend
 from sysmlc_rosetta.program import LfProgram
 from sysmlc_rosetta.serialize import to_lf
+from sysmlc_rosetta.targets.uc import cmake_lists
 from tests.conftest import FIXTURES_DIR
 from tests.test_lf_harness import run_machine
 
@@ -85,9 +86,9 @@ def test_dotted_states_compile_and_execute(
     else:
         backend = RosettaBackend(target=target)
         program = backend.build(load_model(directory), qn)
-        src = tmp_path / "src"
+        src = tmp_path / ("output" if target == "uc" else "src")
         src.mkdir()
-        backend.write(program, OutputOptions(output_dir=src))
+        written = backend.write(program, OutputOptions(output_dir=src))
         extension = "ulf" if target == "uc" else "lf"
         header = (
             '@platform("native")\n@fast(true)\n@timeout(10 msec)\n'
@@ -100,6 +101,9 @@ def test_dotted_states_compile_and_execute(
             if target == "uc"
             else "m.current_state->value"
         )
+        machine_source = next(
+            path for path in written if path.suffix == f".{extension}"
+        )
         harness = src / f"Harness.{extension}"
         harness.write_text(
             (
@@ -107,7 +111,7 @@ def test_dotted_states_compile_and_execute(
                 if target == "c"
                 else ""
             )
-            + f'import {machine} from "{machine}.{extension}"\n'
+            + f'import {machine} from "{machine_source.name}"\n'
             + header
             + "main reactor {\n"
             f"  m = new {machine}()\n"
@@ -117,15 +121,26 @@ def test_dotted_states_compile_and_execute(
             "  =}\n"
             "}\n"
         )
-        compiled = subprocess.run(
-            [compiler, str(harness)],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+        commands = [[compiler, str(harness)]]
+        binary = tmp_path / "bin" / "Harness"
+        if target == "uc":
+            (src / "CMakeLists.txt").write_text(cmake_lists("Harness"))
+            build = tmp_path / "build"
+            commands = [
+                ["cmake", "-S", str(src), "-B", str(build)],
+                ["cmake", "--build", str(build)],
+            ]
+            binary = src / "bin" / "Harness"
+        for command in commands:
+            compiled = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            assert compiled.returncode == 0, compiled.stdout + compiled.stderr
         process = subprocess.run(
-            [str(tmp_path / "bin" / "Harness")],
+            [str(binary)],
             capture_output=True,
             text=True,
             timeout=120,
