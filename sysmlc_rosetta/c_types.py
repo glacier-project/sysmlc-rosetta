@@ -446,7 +446,7 @@ def _names(enum_type: str) -> str:
     return f"{enum_type.removesuffix('_t')}_names"
 
 
-def _member(name: str, field: syside.AttributeUsage) -> str:
+def _member(name: str, field: syside.Feature) -> str:
     if is_reserved(name):
         raise UnsupportedConstructError(
             f"field name {name!r} is reserved in C; rename it", node=field

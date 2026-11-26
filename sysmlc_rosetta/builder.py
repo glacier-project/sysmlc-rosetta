@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field, replace
+from itertools import pairwise
 from typing import TYPE_CHECKING
 
 import syside
@@ -13,7 +14,12 @@ from sysmlc.codegen.python import (
 from sysmlc.codegen.python import payload_signature
 from sysmlc.codegen.structured import constructed_payload_definition
 from sysmlc.errors import UnsupportedConstructError
-from sysmlc.semantics.statemachine import actions, transitions
+from sysmlc.semantics.statemachine import (
+    actions,
+    attributes,
+    bindings,
+    transitions,
+)
 from sysmlc.semantics.statemachine.driver import StateMachineDriver
 from sysmlc.semantics.statemachine.facts import (
     AfterTrigger,
@@ -31,12 +37,14 @@ from sysmlc.semantics.statemachine.facts import (
 )
 from sysmlc.semantics.statemachine.interface import send_via_port
 from sysmlc.semantics.statemachine.signals import SignalCatalog
+from sysmlc.sysml.queries import is_attribute_feature, is_scalar_quantity
 
 from sysmlc_rosetta.c_codegen import LfCCodeGen
 from sysmlc_rosetta.codegen import (
     LfPythonCodeGen,
     PreambleNeeds,
 )
+from sysmlc_rosetta.data import share_machine_data
 from sysmlc_rosetta.lifecycle import (
     ACTIVE_VAR,
     BUSY_PORT,
@@ -95,6 +103,7 @@ logger = logging.getLogger(__name__)
 
 DONE_MODE = "done"
 CHANGE_ACT = "_change_act"
+PREVIOUS_ENTRY_PORT = "_previous_current_state"
 type LfCodeGen = LfPythonCodeGen | LfCCodeGen
 _CODEGENS: dict[str, type[LfCodeGen]] = {
     "python": LfPythonCodeGen,
@@ -298,24 +307,60 @@ class RosettaBuilder:
         self._reactors: list[Reactor] = []
         self._names = self._needs.names
         self._needs.reserve_reactors(name)
+        self._data_scopes: set[str] = set()
+        self._entry_data_boundaries: set[str] = set()
+        self._parent_only_accesses: dict[str, UnsupportedConstructError] = {}
+        self._slot_bindings: dict[str, AttributeBinding] = {}
+        self._shared_data_boundaries: set[str] = set()
+        self._local_attributes: dict[
+            str, list[tuple[str, AttributeBinding]]
+        ] = {}
+        self._feature_slots: dict[syside.Feature, str] = {}
 
     # -- TargetBuilder protocol --
 
     def bind_attribute(self, binding: AttributeBinding) -> None:
-        """Buffer a root-scope attribute (state-scoped ones are rejected)."""
-        if binding.scope:
+        """Buffer storage, retaining the declaring state's activation scope."""
+        if binding.scope and binding.direction in {
+            AttributeDirection.IN,
+            AttributeDirection.OUT,
+        }:
             raise UnsupportedConstructError(
-                f"attribute {binding.name!r} is scoped to state "
-                f"{binding.scope!r}; rosetta supports root-scope attributes "
-                "only."
+                f"directed state-local attribute {binding.name!r} is not supported"
             )
+        if binding.scope:
+            feature = binding.feature or binding.source_feature
+            if feature is None:
+                raise UnsupportedConstructError(
+                    "state-local attributes require source declaration metadata"
+                )
+            self._require_local_initializer(feature)
         self._attributes.append(binding)
+
+    def _require_local_initializer(self, feature: syside.Feature) -> None:
+        """Admit literal initialization without capturing another activation."""
+        relationship = bindings.effective_value_relationship(feature)
+        if (
+            relationship is not None
+            and relationship.value is not None
+            and not bindings.is_constant(relationship.value)
+        ):
+            raise UnsupportedConstructError(
+                "state-local initializers require literal constants; activation-dependent expressions are not supported",
+                node=feature,
+            )
+        if (
+            is_attribute_feature(feature)
+            or isinstance(feature, syside.ItemUsage)
+        ) and not is_scalar_quantity(feature):
+            for field in attributes.nested_attributes(feature):
+                self._require_local_initializer(field)
 
     def bind_constraint(self, fact: ConstraintFact) -> None:
         """Buffer a root-scope asserted constraint (scoped ones rejected).
 
-        Substate reactors cannot see the machine's attributes, so a
-        constraint scoped to a state has nothing meaningful to check there.
+        State-local assertions require activation-scoped observation rules
+        beyond the root assertion checks generated here.
         """
         if fact.scope:
             raise UnsupportedConstructError(
@@ -346,7 +391,7 @@ class RosettaBuilder:
         # Before anything renders: the bounds narrow the width analysis.
         self._needs.width.bounds.update(literal_bounds(self._constraints))
         self._attribute_names = frozenset(
-            binding.name for binding in self._attributes
+            binding.name for binding in self._attributes if not binding.scope
         )
         self._has_when = any(
             isinstance(t.trigger, WhenTrigger) for t in self._transitions
@@ -388,12 +433,13 @@ class RosettaBuilder:
         self._collect_shared()
         self._collect_sends()
         self._prepare_names()
+        self._allocate_attribute_slots()
         # The port/self signal sets must exist (populated by _collect_sends)
         # before any peer-aware code generator is created.
-        self._codegen = self._make_codegen(self._attribute_names)
+        self._codegen = self._make_codegen()
         # Rendered even without a completion path so an unsupported root
         # exit is still diagnosed.
-        self._root_exit = self._statements(root.exit_action, self._codegen)
+        self._root_exit = self._phase_statements(root, "exit", "")
         if root.kind is StateKind.PARALLEL:
             machine = self._parallel_root_reactor(root)
         elif root.kind is StateKind.COMPOSITE:
@@ -402,11 +448,51 @@ class RosettaBuilder:
             raise UnsupportedConstructError(
                 "the state definition declares no substates."
             )
+        for boundary, error in self._parent_only_accesses.items():
+            if boundary in self._shared_data_boundaries:
+                raise error
         self._reactors.append(
             self._with_constraint_checks(
                 self._with_change_notifications(machine)
             )
         )
+        if self._data_scopes:
+            slots = (
+                *machine.parameters,
+                *(
+                    var
+                    for var in machine.state_vars
+                    if var.name in self._slot_bindings
+                ),
+            )
+            ctype = self._target.register_context(self._name, slots)
+            by_name = {
+                self._reactor_name(scope): scope for scope in self._data_scopes
+            }
+            self._reactors = [
+                self._with_constraint_checks(reactor, by_name[reactor.name])
+                if reactor.name in by_name
+                else reactor
+                for reactor in self._reactors
+            ]
+            self._reactors = share_machine_data(
+                self._reactors,
+                self._target,
+                ctype,
+                tuple(slot.name for slot in slots),
+                {
+                    reactor: (
+                        self._context_slot(scope),
+                        self._symbol(
+                            scope, "port", "data-changed", "_data_changed"
+                        ),
+                    )
+                    for reactor, scope in by_name.items()
+                },
+                observed_attributes=self._attribute_names
+                if self._has_when
+                else frozenset(),
+            )
         program = LfProgram(
             reactors=tuple(
                 render_reactor(self._target.declare(reactor), self._target)
@@ -422,7 +508,9 @@ class RosettaBuilder:
             program = finalize(program, self._needs)
         return program
 
-    def _with_constraint_checks(self, machine: Reactor) -> Reactor:
+    def _with_constraint_checks(
+        self, machine: Reactor, scope: str = ""
+    ) -> Reactor:
         """Weave asserted-constraint checks into the machine reactor.
 
         Each root-scope ``assert constraint`` renders as the target's check
@@ -436,6 +524,7 @@ class RosettaBuilder:
         expression.
         """
         checks: list[tuple[Node, frozenset[str]]] = []
+        gen = self._make_codegen(scope=scope, constraint=True)
         for index, fact in enumerate(self._constraints):
             constraint = LfConstraint(
                 self._name, index, fact.scope, fact.name, self._source_qn
@@ -444,7 +533,7 @@ class RosettaBuilder:
             message = "SysML constraint violated: " + json.dumps(
                 asdict(constraint), separators=(",", ":")
             )
-            rendered = self._codegen.render_expression(fact.expression)
+            rendered = gen.render_expression(fact.expression)
             if fact.is_negated:
                 rendered = self._target.negate(rendered)
             check = self._target.check(rendered, message)
@@ -462,8 +551,9 @@ class RosettaBuilder:
             return replace(reaction, body=stored(new_body))
 
         reactions = tuple(patched(r) for r in machine.reactions)
-        startup = tuple(check for check, _ in checks)
-        reactions += (Reaction(("startup",), (), stored(startup)),)
+        if not scope:
+            startup = tuple(check for check, _ in checks)
+            reactions += (Reaction(("startup",), (), stored(startup)),)
         modes = tuple(
             replace(mode, reactions=tuple(patched(r) for r in mode.reactions))
             for mode in machine.modes
@@ -869,6 +959,52 @@ class RosettaBuilder:
 
     # -- attributes -> parameters and state variables --
 
+    def _allocate_attribute_slots(self) -> None:
+        """Allocate internal storage without renaming source declarations."""
+        for index, binding in enumerate(self._attributes):
+            slot = (
+                self._symbol(
+                    "", "variable", f"local:{index}", f"_sysmlc_local_{index}"
+                )
+                if binding.scope
+                else binding.name
+            )
+            self._slot_bindings[slot] = binding
+            feature = binding.feature or binding.source_feature
+            if feature is not None:
+                self._feature_slots[feature] = slot
+            if binding.scope:
+                self._local_attributes.setdefault(binding.scope, []).append(
+                    (slot, binding)
+                )
+
+    def _feature_slot(self, feature: syside.Feature) -> str:
+        """Associate a resolved declaration with its scope's storage slot."""
+        try:
+            return self._feature_slots[feature]
+        except KeyError:
+            raise UnsupportedConstructError(
+                f"reference {feature.name!r} does not name a bound attribute",
+                node=feature,
+            ) from None
+
+    def _initialize_attributes(self, fact: StateFact, scope: str) -> Body:
+        """Initialize declarations when their semantic owner activates."""
+        body: list[Node] = []
+        if fact.parent is None:
+            return ()
+        if fact.name not in self._local_attributes:
+            return ()
+        gen = self._make_codegen(scope=scope, owner=fact)
+        for slot, binding in self._local_attributes.get(fact.name, ()):
+            value = self._render_value(binding.value)
+            if value is None:
+                raise UnsupportedConstructError(
+                    f"state-local attribute {binding.name!r} requires an initial value"
+                )
+            body.append(gen.initialize_attribute(slot, value))
+        return tuple(body)
+
     def _attribute_split(self) -> tuple[list[Parameter], list[StateVar]]:
         """Split bindings into LF parameters (`in`) and state variables.
 
@@ -879,7 +1015,9 @@ class RosettaBuilder:
         """
         parameters: list[Parameter] = []
         state_vars: list[StateVar] = []
-        for binding in self._attributes:
+        for slot, binding in self._slot_bindings.items():
+            if binding.scope:
+                binding = replace(binding, name=slot)
             rendered = self._render_value(binding.value)
             declared = self._target.attribute_type(binding)
             ctype = None if declared is None else declared[0]
@@ -1112,32 +1250,218 @@ class RosettaBuilder:
 
     def _make_codegen(
         self,
-        attribute_names: frozenset[str],
-        local_names: frozenset[str] = frozenset(),
+        *,
+        scope: str = "",
+        owner: StateFact | None = None,
+        phase: str | None = None,
+        constraint: bool = False,
         payload_bindings: dict[syside.Feature, str] | None = None,
     ) -> LfCodeGen:
         """Build a peer-aware code generator sharing the preamble registry."""
         return self._codegen_type(
-            attribute_names,
+            frozenset(self._slot_bindings),
             needs=self._needs,
             port_signals=self._port_sigs,
-            local_names=local_names,
             payload_bindings=payload_bindings,
+            attribute_reference=lambda name: (
+                self._storage_reference(scope, name)
+                if constraint
+                else self._outer_attribute(scope, name, owner, phase)
+            ),
+            attribute_slot=self._feature_slot,
         )
 
-    def _scope_codegen(self, scope: str) -> LfCodeGen:
-        """The expression codegen for a scope's reaction bodies.
+    def _context_slot(self, scope: str) -> str:
+        return self._symbol(scope, "variable", "data-context", "_data")
 
-        Child scopes see NO attribute names: substate guards/actions
-        referencing root-scope attributes fail loudly in codegen (the
-        documented slice-6 scope limit).
-        """
+    def _storage_reference(self, scope: str, name: str) -> str:
+        if not scope:
+            return self._target.var(name)
+        return self._target.context_reference(self._context_slot(scope), name)
+
+    def _outer_attribute(
+        self, scope: str, name: str, owner: StateFact | None, phase: str | None
+    ) -> str:
+        """Resolve a nested access to the authoritative machine storage."""
+        declaration = self._slot_bindings.get(name.split(".")[0])
+        active = owner.name if owner else scope
+        if (
+            declaration is not None
+            and declaration.scope
+            and not (
+                active == declaration.scope
+                or _is_ancestor(declaration.scope, active)
+            )
+        ):
+            raise UnsupportedConstructError(
+                "state-local attribute access outside its active owner is not supported"
+            )
+        semantic_scope = (
+            _scope_of(owner.name)
+            if phase and owner is not None and owner.parent is not None
+            else scope
+        )
+        levels = (
+            _enclosing(semantic_scope)
+            if scope
+            or (phase and owner is not None and owner.parent is not None)
+            else ()
+        )
+        for level in levels:
+            fact = self._root if not level else self._facts[level]
+            assert fact is not None
+            if fact.kind is StateKind.PARALLEL:
+                if (
+                    declaration is not None
+                    and declaration.scope
+                    and _is_ancestor(level, declaration.scope)
+                ):
+                    continue
+                if scope and (scope == level or _is_ancestor(level, scope)):
+                    self._shared_data_boundaries.add(level)
+                if (
+                    owner is not None
+                    and phase == "exit"
+                    and not self._ordinary_parallel_exit(owner, level)
+                ):
+                    continue
+                if (
+                    owner is not None
+                    and phase in {"entry", "do"}
+                    and self._initial_parallel_entry(owner, level)
+                ):
+                    if scope and (scope == level or _is_ancestor(level, scope)):
+                        self._entry_data_boundaries.add(level)
+                    continue
+                error = UnsupportedConstructError(
+                    f"access to machine attribute {name!r} under a parallel "
+                    "state requires ordered parent cleanup or initial entry; "
+                    "independent regional transitions, target entries and "
+                    "exits are not supported."
+                )
+                if scope == _scope_of(level):
+                    self._parent_only_accesses.setdefault(level, error)
+                    continue
+                raise error
+        if not scope:
+            return self._target.var(name)
+        if (
+            "." in name
+            and (declaration is None or not declaration.scope)
+            and (self._has_when or self._constraints)
+        ):
+            raise UnsupportedConstructError(
+                "nested structured-field assignments with root change "
+                "triggers or assertions are not supported; their writes "
+                "are not tracked by root observations."
+            )
+        self._data_scopes.update(level for level in _enclosing(scope) if level)
+        return self._storage_reference(scope, name)
+
+    def _ordinary_parallel_exit(self, owner: StateFact, boundary: str) -> bool:
+        """Whether regional work can execute an exit outside parent cleanup."""
+        parent_name = _scope_of(owner.name)
+        parent = self._facts[parent_name] if parent_name else self._root
+        is_region = parent is not None and parent.kind is StateKind.PARALLEL
+        for transition in self._transitions:
+            source = transition.source
+            if not _is_ancestor(boundary, source):
+                continue
+            target = transition.target
+            if isinstance(target, str) and not _is_ancestor(boundary, target):
+                return True
+            if source == owner.name or _is_ancestor(source, owner.name):
+                return True
+            if not _is_ancestor(owner.name, source):
+                continue
+            if isinstance(target, str):
+                if not _is_ancestor(owner.name, target):
+                    return True
+            elif is_region and _scope_of(source) == owner.name:
+                return True
+        return False
+
+    def _initial_parallel_entry(self, owner: StateFact, boundary: str) -> bool:
+        """Whether an entry runs only in the boundary's initial configuration."""
+        current = owner
+        while current.name != boundary and current.parent is not None:
+            parent_name = _scope_of(current.name)
+            parent = self._facts[parent_name] if parent_name else self._root
+            assert parent is not None
+            if (
+                parent.kind is StateKind.COMPOSITE
+                and parent.initial_substate != current.name
+            ):
+                return False
+            current = parent
+        return not any(
+            _is_ancestor(boundary, transition.source)
+            and isinstance(transition.target, str)
+            and (
+                transition.target == owner.name
+                or _is_ancestor(transition.target, owner.name)
+            )
+            for transition in self._transitions
+        )
+
+    def _order_parallel_entries(
+        self, boundary: str, regions: list[StateFact]
+    ) -> list[Connection]:
+        """Order recursive initial regional entries through status dependencies."""
+        if boundary not in self._entry_data_boundaries:
+            return []
+        receivers = {
+            self._reactor_name(region.name): self._symbol(
+                region.name, "port", "previous-entry", PREVIOUS_ENTRY_PORT
+            )
+            for region in regions[1:]
+        }
+        self._reactors = [
+            replace(
+                reactor,
+                inputs=(*reactor.inputs, receivers[reactor.name]),
+                port_types=(
+                    *reactor.port_types,
+                    *self._target.port_types_as(
+                        (receivers[reactor.name],), OUTPUT_PORT
+                    ),
+                ),
+                modes=tuple(
+                    replace(
+                        mode,
+                        reactions=(
+                            replace(
+                                mode.reactions[0],
+                                sources=(
+                                    *mode.reactions[0].sources,
+                                    receivers[reactor.name],
+                                ),
+                            ),
+                            *mode.reactions[1:],
+                        ),
+                    )
+                    if mode.initial
+                    else mode
+                    for mode in reactor.modes
+                ),
+            )
+            if reactor.name in receivers
+            else reactor
+            for reactor in self._reactors
+        ]
+        return [
+            Connection(
+                f"{self._instance(previous.name)}.{OUTPUT_PORT}",
+                f"{self._instance(current.name)}.{receivers[self._reactor_name(current.name)]}",
+            )
+            for previous, current in pairwise(regions)
+        ]
+
+    def _scope_codegen(self, scope: str) -> LfCodeGen:
+        """The expression codegen for a scope's reaction bodies."""
         if scope == "":
             return self._codegen
-        return self._make_codegen(frozenset())
-
-    def _scope_attribute_names(self, scope: str) -> frozenset[str]:
-        return self._attribute_names if scope == "" else frozenset()
+        return self._make_codegen(scope=scope)
 
     def _composite_reactor(
         self, scope: str, container: StateFact, *, is_root: bool
@@ -1245,7 +1569,9 @@ class RosettaBuilder:
             reactions=tuple(reactions),
             modes=tuple(modes),
             trailing_reactions=trailing,
-            boolean_ports=() if is_root else exit_ports,
+            port_types=()
+            if is_root
+            else self._target.port_types_as(exit_ports, COMPLETED_PORT),
         )
 
     def _place_trailing(
@@ -1379,6 +1705,7 @@ class RosettaBuilder:
                 self._variable(region.name, "done", f"{region_symbol}_done")
             )
         # Gates precede consumption readers to avoid LF causality cycles.
+        connections += self._order_parallel_entries("", regions)
         reactions[:0] = root_gates
         lang = self._target
         join_body: list[Node] = []
@@ -1387,7 +1714,7 @@ class RosettaBuilder:
         ]
         # Validate exits even when their regions have no completion path.
         for region, flag in zip(regions, flags, strict=True):
-            region_exit = self._statements(region.exit_action, self._codegen)
+            region_exit = self._phase_statements(region, "exit", "")
             if region.name not in self._needs_done:
                 continue
             inst = self._instance(region.name)
@@ -1562,6 +1889,8 @@ class RosettaBuilder:
         output forwarding.
         """
         mode_symbol = self._state_symbol(fact.name)
+        if self._local_attributes:
+            gen = self._make_codegen(scope=scope, owner=fact)
         outgoing = [
             t
             for t in self._scope_transitions.get(scope, [])
@@ -1647,7 +1976,10 @@ class RosettaBuilder:
             if self._observe
             else []
         )
-        exit_stmts: Body = (*exit_log, *self._statements(fact.exit_action, gen))
+        exit_stmts: Body = (
+            *exit_log,
+            *self._phase_statements(fact, "exit", scope),
+        )
         timers: list[Timer] = []
         mode_actions: list[LogicalAction] = []
         reactions: list[Reaction] = []
@@ -1682,10 +2014,11 @@ class RosettaBuilder:
                 )
         if self._reports(scope):
             entry_body.append(lang.set_flag(EXIT_PENDING_VAR, False))
-        entry_body += self._statements(fact.entry_action, gen)
+        entry_body += self._initialize_attributes(fact, scope)
+        entry_body += self._phase_statements(fact, "entry", scope)
         if fact.do_action is not None:
             actions.require_inline_one_shot(fact.do_action)
-            entry_body += self._statements(fact.do_action, gen)
+            entry_body += self._phase_statements(fact, "do", scope)
 
         multi = (
             len(signal_runs)
@@ -1856,6 +2189,12 @@ class RosettaBuilder:
             )
 
         if whens:
+            if scope:
+                raise UnsupportedConstructError(
+                    "change triggers inside nested state reactors are not "
+                    "supported; only root-scope change observations are "
+                    "generated."
+                )
             entry_body.append(lang.schedule(CHANGE_ACT))
             entry_effects.append(CHANGE_ACT)
         for index, transition in enumerate(whens):
@@ -1976,12 +2315,13 @@ class RosettaBuilder:
             bindings = dict.fromkeys(features, value)
             if bindings:
                 group_gen = self._make_codegen(
-                    self._scope_attribute_names(scope),
                     payload_bindings=bindings,
+                    scope=scope,
+                    owner=fact,
                 )
             group_exit: Body = (
                 *exit_log,
-                *self._statements(fact.exit_action, group_gen),
+                *self._phase_statements(fact, "exit", scope, bindings),
             )
             consumed_flag = (
                 f"{signal}_consumed"
@@ -2264,13 +2604,17 @@ class RosettaBuilder:
                 )
                 # The region's own entry/do run on parallel-state entry; its
                 # exit runs in the completion join when the region is ready.
-                entry_body += self._statements(region.entry_action, gen)
+                entry_body += self._initialize_attributes(region, scope)
+                entry_body += self._phase_statements(region, "entry", scope)
                 if region.do_action is not None:
                     actions.require_inline_one_shot(region.do_action)
-                    entry_body += self._statements(region.do_action, gen)
+                    entry_body += self._phase_statements(region, "do", scope)
                 # Render even without a completion path, to validate it.
-                region_exits.append(self._statements(region.exit_action, gen))
+                region_exits.append(
+                    self._phase_statements(region, "exit", scope)
+                )
             # Gates precede consumption readers to avoid LF causality cycles.
+            connections += self._order_parallel_entries(fact.name, regions)
             reactions[:0] = region_gates
             completing_regions = [
                 region for region in regions if region.name in self._needs_done
@@ -2643,8 +2987,9 @@ class RosettaBuilder:
                 else []
             )
             gen = self._make_codegen(
-                self._scope_attribute_names(scope),
                 payload_bindings=dict.fromkeys(features, "_value"),
+                scope=scope,
+                owner=fact,
             )
             exit_log = (
                 [self._observe_log("exited", self._source_name(fact.name))]
@@ -2659,7 +3004,9 @@ class RosettaBuilder:
             lines = [
                 *unpack,
                 *exit_log,
-                *self._statements(fact.exit_action, gen),
+                *self._phase_statements(
+                    fact, "exit", scope, dict.fromkeys(features, "_value")
+                ),
                 *self._statements(transition.effect, gen),
             ]
             late = self._late_port(scope, transition.target)
@@ -3002,13 +3349,13 @@ class RosettaBuilder:
         regions: list[StateFact] | None = None,
     ) -> list[Reaction]:
         """Render the root/region startup entry and ``do`` actions."""
-        gen = self._codegen
         body: list[Node] = []
         for fact in (root, *(regions or ())):
-            body += self._statements(fact.entry_action, gen)
+            body += self._initialize_attributes(fact, "")
+            body += self._phase_statements(fact, "entry", "")
             if fact.do_action is not None:
                 actions.require_inline_one_shot(fact.do_action)
-                body += self._statements(fact.do_action, gen)
+                body += self._phase_statements(fact, "do", "")
         out: list[Reaction] = []
         if body:
             order = tuple(
@@ -3020,10 +3367,28 @@ class RosettaBuilder:
             )
         return out
 
-    def _statements(
+    def _phase_statements(
         self,
-        action: syside.ActionUsage | None,
-        codegen: LfCodeGen,
+        owner: StateFact,
+        phase: str,
+        scope: str,
+        payload_bindings: dict[syside.Feature, str] | None = None,
+    ) -> Body:
+        """Render a state's phase in the reactor that executes it."""
+        action = getattr(owner, f"{phase}_action")
+        if action is None:
+            return ()
+        gen = self._make_codegen(
+            scope=scope,
+            owner=owner,
+            phase=phase,
+            payload_bindings=payload_bindings,
+        )
+        return self._statements(action, gen)
+
+    @staticmethod
+    def _statements(
+        action: syside.ActionUsage | None, codegen: LfCodeGen
     ) -> Body:
         return tuple(
             node

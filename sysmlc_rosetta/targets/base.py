@@ -31,6 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
+from sysmlc_rosetta.program import StateVar
 from sysmlc_rosetta.statements import nest
 
 if TYPE_CHECKING:
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from sysmlc.sysml.foreign_artifact.base import ForeignArtifact
 
     from sysmlc_rosetta.codegen import PreambleNeeds
-    from sysmlc_rosetta.program import LfProgram, Reactor, StateVar
+    from sysmlc_rosetta.program import LfProgram, Parameter, Reactor
     from sysmlc_rosetta.statements import Body, Node, Stmt
 
 #: What a protocol state variable declared by :meth:`LfTarget.state_vars`
@@ -130,6 +131,17 @@ class LfTarget(ABC):
         """
         return None
 
+    def port_type(self, port: str) -> str | None:
+        """Return a port's target type. Python ports are untyped."""
+        return None
+
+    def port_types_as(
+        self, names: Sequence[str], role: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Give allocated ports the target type of the protocol port they carry."""
+        dtype = self.port_type(role)
+        return () if dtype is None else tuple((name, dtype) for name in names)
+
     def declare(self, reactor: Reactor) -> Reactor:
         """Complete a built reactor's declarations for the language."""
         return reactor
@@ -149,6 +161,33 @@ class LfTarget(ABC):
         self, needs: PreambleNeeds
     ) -> tuple[tuple[str, str], ...]:
         """Files the program ships beside its ``.lf``: ``(name, text)``."""
+
+    @abstractmethod
+    def register_context(
+        self, name: str, attributes: Sequence[Parameter | StateVar]
+    ) -> str | None:
+        """Register references to root storage; return the context type."""
+
+    @abstractmethod
+    def context_value(self, ctype: str | None, names: Sequence[str]) -> str:
+        """The root context value sent to a contained reactor."""
+
+    @abstractmethod
+    def context_reference(self, slot: str, name: str) -> str:
+        """An attribute reached through the received root context."""
+
+    @abstractmethod
+    def context_binding(self, slot: str, port: str) -> Stmt:
+        """Retain a context received on the entry-order input."""
+
+    def context_state(self, slot: str, ctype: str | None) -> StateVar:
+        """Retain references to root storage across internal mode changes."""
+        return StateVar(
+            slot,
+            "None" if ctype is None else "{0}",
+            reset=True,
+            type=ctype,
+        )
 
     # -- program text --
 

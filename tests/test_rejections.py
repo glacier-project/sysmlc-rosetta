@@ -113,9 +113,11 @@ def test_payload_referencing_guard_builds_and_binds() -> None:
     assert reading_reaction.body[0] == "if Reading.value.value > 0:"
 
 
-def test_scoped_attribute_is_rejected() -> None:
+def test_scoped_attribute_without_source_is_rejected() -> None:
     builder = RosettaBuilder("Machine")
-    with pytest.raises(UnsupportedConstructError, match="root-scope"):
+    with pytest.raises(
+        UnsupportedConstructError, match="source declaration metadata"
+    ):
         builder.bind_attribute(
             AttributeBinding(scope="idle", name="x", value=None)
         )
