@@ -42,7 +42,7 @@ from sysmlc_rosetta.targets.base import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     import syside
     from sysmlc.semantics.statemachine.facts import AttributeBinding
@@ -146,7 +146,15 @@ class CTarget(LfTarget):
             )
         return replace(
             reactor,
-            port_types=tuple((port, self.port_type(port)) for port in ports),
+            port_types=tuple(
+                (
+                    port,
+                    "bool"
+                    if port in reactor.boolean_ports
+                    else self.port_type(port),
+                )
+                for port in ports
+            ),
             actions=self._typed(reactor.actions),
             modes=tuple(
                 replace(mode, actions=self._typed(mode.actions))
@@ -169,12 +177,12 @@ class CTarget(LfTarget):
     def _typed(
         self, actions: tuple[LogicalAction, ...]
     ) -> tuple[LogicalAction, ...]:
-        """Give each ``<signal>_act`` action its payload type, if any."""
+        """Give source signal actions their payload type, if any."""
         return tuple(
             replace(
                 action,
-                type=self.types.signal_type(action.name.removesuffix("_act"))
-                if action.name.endswith("_act")
+                type=self.types.signal_type(action.signal)
+                if action.signal is not None
                 else None,
             )
             for action in actions
@@ -236,17 +244,11 @@ class CTarget(LfTarget):
         kind: StateKind,
         *,
         reset: bool,
-        insts: Sequence[str] = (),
     ) -> tuple[StateVar, ...]:
         if kind == "flag":
             return (StateVar(name, "false", reset=reset, type="bool"),)
         if kind == "busy":
-            return tuple(
-                StateVar(
-                    self._busy(name, inst), "false", reset=reset, type="bool"
-                )
-                for inst in insts
-            )
+            return (StateVar(name, "false", reset=reset, type="bool"),)
         if kind == "wait":
             return (
                 StateVar(
@@ -254,12 +256,6 @@ class CTarget(LfTarget):
                     "(sysmlc_wait_t){ 0 }",
                     reset=reset,
                     type="sysmlc_wait_t",
-                ),
-                *(
-                    StateVar(
-                        f"{name}_{inst}", "false", reset=reset, type="bool"
-                    )
-                    for inst in insts
                 ),
             )
         init, ctype = {
@@ -495,31 +491,25 @@ class CTarget(LfTarget):
 
     # -- children busy tracking --
 
-    def _busy(self, state: str, inst: str) -> str:
-        return f"_{state}_{inst}_busy"
+    @override
+    def busy_init(self, busy: Mapping[str, str]) -> Body:
+        return tuple(self.set_flag(name, True) for name in busy.values())
 
     @override
-    def busy_init(self, state: str, insts: Sequence[str]) -> Body:
-        return tuple(
-            self.set_flag(self._busy(state, inst), True) for inst in insts
-        )
+    def busy_add(self, name: str, inst: str) -> Stmt:
+        return self.set_flag(name, True)
 
     @override
-    def busy_add(self, state: str, inst: str) -> Stmt:
-        return self.set_flag(self._busy(state, inst), True)
+    def busy_discard(self, name: str, inst: str) -> Stmt:
+        return self.set_flag(name, False)
 
     @override
-    def busy_discard(self, state: str, inst: str) -> Stmt:
-        return self.set_flag(self._busy(state, inst), False)
+    def busy_any(self, names: Sequence[str]) -> str:
+        return self.grouped(self.any_of([self.var(name) for name in names]))
 
     @override
-    def busy_any(self, state: str, insts: Sequence[str]) -> str:
-        flags = " || ".join(self.var(self._busy(state, inst)) for inst in insts)
-        return f"({flags})"
-
-    @override
-    def busy_none(self, state: str, insts: Sequence[str]) -> str:
-        return f"!{self.busy_any(state, insts)}"
+    def busy_none(self, names: Sequence[str]) -> str:
+        return f"!{self.busy_any(names)}"
 
     @override
     def report_busy(self, occurrence: str) -> Stmt:
@@ -767,13 +757,14 @@ class CTarget(LfTarget):
         wait: str,
         inst: str,
         earlier: Sequence[str],
+        flags: Mapping[str, str],
         arrival: str,
         message: str,
     ) -> Body:
         payload = self.types.signal_type(sig)
         value = "" if payload is None else f", .value.{sig} = {sig}->value"
         held = f"self->{wait}"
-        holders = [f"self->{wait}_{child}" for child in earlier]
+        holders = [self.var(flags[child]) for child in earlier]
         start: list[Node] = [
             nest(f"{held}.active", (self.fail(message),)),
             Stmt(

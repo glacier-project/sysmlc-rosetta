@@ -121,12 +121,16 @@ def test_scoped_attribute_is_rejected() -> None:
         )
 
 
-def test_state_named_done_is_rejected() -> None:
+def test_state_named_done_is_disambiguated() -> None:
     builder = RosettaBuilder("Machine")
     builder.add_state(_root(initial="done"))
     builder.add_state(_leaf("done"))
-    with pytest.raises(UnsupportedConstructError, match="collides"):
-        builder.result()
+    program = builder.result()
+    assert program.reactor.modes[0].name == "done_01"
+    assert (
+        'current_state.set("done")'
+        in program.reactor.modes[0].reactions[0].body
+    )
 
 
 def test_unstable_self_loop_is_rejected() -> None:

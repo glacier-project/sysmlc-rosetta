@@ -13,7 +13,7 @@ from sysmlc_rosetta.statements import If, Pass, Stmt, nest
 from sysmlc_rosetta.targets.base import LfTarget, StateKind, files_option
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     import syside
 
@@ -41,6 +41,7 @@ class PythonTarget(LfTarget):
     #: trace is logged at DEBUG, so ``"debug"`` shows it and higher levels
     #: hide it.
     log_level = "debug"
+    per_child_busy_flags = False
 
     # -- program --
 
@@ -94,10 +95,7 @@ class PythonTarget(LfTarget):
         kind: StateKind,
         *,
         reset: bool,
-        insts: Sequence[str] = (),
     ) -> tuple[StateVar, ...]:
-        if kind == "busy":
-            name = f"_{name}_busy"
         init = "False" if kind == "flag" else "None"
         return (StateVar(name, init, reset=reset),)
 
@@ -222,7 +220,7 @@ class PythonTarget(LfTarget):
 
     @override
     def log(self, message: str) -> Stmt:
-        return Stmt(f'_sysmlc_log.debug("{message}")')
+        return Stmt(f"_sysmlc_log.debug({json.dumps(message)})")
 
     @override
     def check(self, condition: str, message: str) -> Stmt:
@@ -237,7 +235,7 @@ class PythonTarget(LfTarget):
     @override
     def reemit(self, inst: str, prefix: str) -> Stmt:
         return self.set_port(
-            OUTPUT_PORT, f'"{prefix}" + {inst}.{OUTPUT_PORT}.value'
+            OUTPUT_PORT, f"{json.dumps(prefix)} + {inst}.{OUTPUT_PORT}.value"
         )
 
     # -- time --
@@ -292,25 +290,26 @@ class PythonTarget(LfTarget):
     # -- children busy tracking --
 
     @override
-    def busy_init(self, state: str, insts: Sequence[str]) -> Body:
-        entering = ", ".join(json.dumps(inst) for inst in insts)
-        return (Stmt(f"self._{state}_busy = {{{entering}}}"),)
+    def busy_init(self, busy: Mapping[str, str]) -> Body:
+        entering = ", ".join(f'"{inst}"' for inst in busy)
+        name = next(iter(busy.values()))
+        return (Stmt(f"self.{name} = {{{entering}}}"),)
 
     @override
-    def busy_add(self, state: str, inst: str) -> Stmt:
-        return Stmt(f'self._{state}_busy.add("{inst}")')
+    def busy_add(self, name: str, inst: str) -> Stmt:
+        return Stmt(f'self.{name}.add("{inst}")')
 
     @override
-    def busy_discard(self, state: str, inst: str) -> Stmt:
-        return Stmt(f'self._{state}_busy.discard("{inst}")')
+    def busy_discard(self, name: str, inst: str) -> Stmt:
+        return Stmt(f'self.{name}.discard("{inst}")')
 
     @override
-    def busy_any(self, state: str, insts: Sequence[str]) -> str:
-        return f"self._{state}_busy"
+    def busy_any(self, names: Sequence[str]) -> str:
+        return f"self.{names[0]}"
 
     @override
-    def busy_none(self, state: str, insts: Sequence[str]) -> str:
-        return f"not self._{state}_busy"
+    def busy_none(self, names: Sequence[str]) -> str:
+        return f"not self.{names[0]}"
 
     @override
     def report_busy(self, occurrence: str) -> Stmt:
@@ -487,6 +486,7 @@ class PythonTarget(LfTarget):
         wait: str,
         inst: str,
         earlier: Sequence[str],
+        flags: Mapping[str, str],
         arrival: str,
         message: str,
     ) -> Body:

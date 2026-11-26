@@ -45,11 +45,14 @@ class LogicalAction:
 
     ``type`` is the C type of the value it carries, if any. ``pending`` is
     how many events it holds at once, for a target with fixed buffers (uC).
+    ``signal`` identifies a source signal channel; None means a payloadless
+    generated action, independently of its assigned identifier.
     """
 
     name: str
     type: str | None = None
     pending: int = 1
+    signal: str | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,8 @@ class Reactor:
     ``port_types`` gives each input and output its C type; empty on the
     Python target, whose ports are untyped. Ports are names elsewhere in the
     program, so their types sit beside them rather than on a port object.
+    ``boolean_ports`` preserves the role of generated escape ports when
+    their assigned names also identify payload types elsewhere.
     """
 
     name: str
@@ -129,6 +134,7 @@ class Reactor:
     modes: tuple[Mode, ...] = ()
     trailing_reactions: tuple[Reaction, ...] = ()
     port_types: tuple[tuple[str, str], ...] = ()
+    boolean_ports: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

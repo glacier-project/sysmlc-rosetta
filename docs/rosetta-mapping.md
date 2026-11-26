@@ -63,6 +63,27 @@ rejected rather than flattened into declaration order. Feature-chain endpoints
 and optional or repeated multiplicities in explicit sequences are also
 unsupported; explicit `[1]` multiplicity is accepted.
 
+State usage names are mapped to portable LF identifiers. For example,
+`'S1.1'` becomes `S1_1`; quotes are not part of the identifier. Existing valid
+names take priority: when `S1_1` already exists, `'S1.1'` becomes `S1_1_01`.
+Further conflicts receive the next available numeric suffix. Reserved words,
+fixed Rosetta symbols and other incompatible characters are handled by the
+same naming table. Mode references, child reactors, instances, timers, actions
+and internal state variables use their assigned names consistently. Reactor
+class uniqueness is checked without regard to case, as required by LF.
+The companion types-module name is reserved alongside reactor names.
+State announcements and diagnostic paths use the source names supplied by
+the parser, including quotes and backslashes within unrestricted names.
+Python and C use separate namespaces for state variables and declarations;
+uC shares them because they become fields of the same generated C struct.
+uC also reserves signal interface names across the machine's reactor scopes:
+its compiler counts references by spelling, so a generated child port must
+not reuse a parent signal name.
+This conversion applies to state usages and their generated symbols; state
+definition names, attributes, signals and external bindings retain their
+existing naming rules. Unrestricted names containing embedded `::` remain
+outside this mapping.
+
 **Leaf states** become modes. Mode entry is announced on the
 `current_state` output by a `reaction(reset, startup)` whose body also runs
 the state's `entry` actions followed by its inline one-shot `do` actions,
@@ -742,21 +763,21 @@ design.
 
 ### Stays rejected
 
-| Construct                                                                                                     | Why                                                                                                |
-| ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `in ref` equipment references                                                                                 | belongs with the parts/ports family: equipment becomes a connected reactor                         |
-| nested-parallel regions (a region that is itself `parallel`)                                                  | wrap it in a composite state                                                                       |
-| long-running / non-inline `do` bodies                                                                         | only inline one-shot bodies fuse into entry                                                        |
-| unstable eventless self-loops                                                                                 | would never stabilize — a model error                                                              |
-| state names colliding with generated names (`done`, `current_state`, `completed`, ports)                      | rename the state; plain generated names keep the LF readable                                       |
-| `in` attribute without a default                                                                              | LF reactor parameters require one                                                                  |
-| a signal sent by **both** machines of a composition (bidirectional same name)                                 | LF port direction clashes; neither side can keep the matching input — split the name per direction |
-| a composing part not exhibiting **two or more named** state defs (anonymous exhibit, or a non-exhibit member) | name every exhibit                                                                                 |
-| the **same state def exhibited twice** in one part                                                            | a composition combines distinct machines                                                           |
-| cross-machine reactor **name collisions** across a composition's machines                                     | reactor names remain keyed by simple name — rename a state or machine                              |
-| a Python **textual representation** outside a package or calc def                                             | its text would execute at import time in the generated module (§12)                                |
-| a rep body that is not valid Python, or whose `def` does not match the calc def's name                        | fails at build naming the calc def, instead of at run time (§12)                                   |
-| **two Python reps** on one calc def, or two rep bodies defining the **same function differently**             | the generated module's namespace is flat; the last definition would silently win (§12)             |
+| Construct                                                                                                                       | Why                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `in ref` equipment references                                                                                                   | belongs with the parts/ports family: equipment becomes a connected reactor                         |
+| nested-parallel regions (a region that is itself `parallel`)                                                                    | wrap it in a composite state                                                                       |
+| long-running / non-inline `do` bodies                                                                                           | only inline one-shot bodies fuse into entry                                                        |
+| unstable eventless self-loops                                                                                                   | would never stabilize — a model error                                                              |
+| signal channels colliding with fixed generated names (`done`, `current_state`, lifecycle ports, signal companion ports/actions) | rename the signal type; state usage collisions are resolved by assigning generated identifiers     |
+| `in` attribute without a default                                                                                                | LF reactor parameters require one                                                                  |
+| a signal sent by **both** machines of a composition (bidirectional same name)                                                   | LF port direction clashes; neither side can keep the matching input — split the name per direction |
+| a composing part not exhibiting **two or more named** state defs (anonymous exhibit, or a non-exhibit member)                   | name every exhibit                                                                                 |
+| the **same state def exhibited twice** in one part                                                                              | a composition combines distinct machines                                                           |
+| fixed reactor **name collisions**, including case differences, across a composition's machines                                  | rename a state definition or part definition; state-derived reactor names are disambiguated        |
+| a Python **textual representation** outside a package or calc def                                                               | its text would execute at import time in the generated module (§12)                                |
+| a rep body that is not valid Python, or whose `def` does not match the calc def's name                                          | fails at build naming the calc def, instead of at run time (§12)                                   |
+| **two Python reps** on one calc def, or two rep bodies defining the **same function differently**                               | the generated module's namespace is flat; the last definition would silently win (§12)             |
 
 ## 12. Function calls
 

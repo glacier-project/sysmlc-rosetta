@@ -154,6 +154,7 @@ def test_literal_check_reaches_every_node_kind(name: str, kind: type) -> None:
         if feature.name == name
     )
     value = feature.feature_value_expression
+    assert value is not None
     assert isinstance(value, kind)
     with pytest.raises(UnsupportedConstructError, match="64 bits"):
         WidthAnalysis().check(value)
